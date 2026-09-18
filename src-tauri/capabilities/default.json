@@ -6,6 +6,9 @@
   "permissions": [
     "core:default",
     "dialog:default",
+    "opener:allow-open-url",
+    "opener:allow-open-path",
+    "opener:allow-reveal-item-in-dir",
     "fs:default",
     "fs:allow-read-file",
     "fs:allow-write-file",
@@ -30,12 +33,12 @@
     {
       "identifier": "http:allow-fetch",
       "allow": [
-        { "url": "https://api.modrinth.com/*" },
-        { "url": "https://api.curseforge.com/*" },
-        { "url": "https://mediafilez.forgecdn.net/*" },
-        { "url": "https://cdn.modrinth.com/*" },
-        { "url": "https://maven.minecraftforge.net/*" },
-        { "url": "https://maven.fabricmc.net/*" }
+        { "url": "https://api.modrinth.com/**" },
+        { "url": "https://api.curseforge.com/**" },
+        { "url": "https://mediafilez.forgecdn.net/**" },
+        { "url": "https://cdn.modrinth.com/**" },
+        { "url": "https://maven.minecraftforge.net/**" },
+        { "url": "https://maven.fabricmc.net/**" }
       ]
     }
   ]

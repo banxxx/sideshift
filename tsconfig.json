@@ -20,7 +20,7 @@
     "noUnusedParameters": true,
     "noFallthroughCasesInSwitch": true,
 
-    "baseUrl": ".",
+    /* 路径别名：TS6 起 paths 相对 tsconfig 解析，无需 baseUrl */
     "paths": {
       "@/*": ["./src/*"]
     }

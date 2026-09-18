@@ -1,146 +1,216 @@
+/* ============================================================
+ * SideShift 设计令牌（来源：SS.pen v17，GetVariables 精确值）
+ * 结构约定：
+ *  - :root / .dark   定义原始 CSS 变量（明暗双主题）
+ *  - @theme inline   把变量映射进 Tailwind 4 + shadcn 组件体系
+ * 命名约定：与 .pen 画板图层同名（bg-app / surface / stroke /
+ *  text-1..3 / accent / emerald / redstone / gold / rail-track ...），
+ *  实现前端时对照设计稿可直接按名取色。
+ * ============================================================ */
 @import "tailwindcss";
 @import "tw-animate-css";
 @import "shadcn/tailwind.css";
 @import "@fontsource-variable/inter";
+@import "@fontsource-variable/space-grotesk";
+@import "@fontsource/jetbrains-mono/400.css";
+@import "@fontsource/jetbrains-mono/600.css";
 
 @custom-variant dark (&:is(.dark *));
 
 :root {
-  font-family: Inter, Avenir, Helvetica, Arial, sans-serif;
-  font-size: 16px;
-  line-height: 24px;
-  font-weight: 400;
-
   font-synthesis: none;
   text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
   -webkit-text-size-adjust: 100%;
 
-  --background: oklch(1 0 0);
-  --foreground: oklch(0.145 0 0);
-  --card: oklch(1 0 0);
-  --card-foreground: oklch(0.145 0 0);
-  --popover: oklch(1 0 0);
-  --popover-foreground: oklch(0.145 0 0);
-  --primary: oklch(0.205 0 0);
-  --primary-foreground: oklch(0.985 0 0);
-  --secondary: oklch(0.97 0 0);
-  --secondary-foreground: oklch(0.205 0 0);
-  --muted: oklch(0.97 0 0);
-  --muted-foreground: oklch(0.556 0 0);
-  --accent: oklch(0.97 0 0);
-  --accent-foreground: oklch(0.205 0 0);
-  --destructive: oklch(0.577 0.245 27.325);
-  --border: oklch(0.922 0 0);
-  --input: oklch(0.922 0 0);
-  --ring: oklch(0.708 0 0);
-  --chart-1: oklch(0.87 0 0);
-  --chart-2: oklch(0.556 0 0);
-  --chart-3: oklch(0.439 0 0);
-  --chart-4: oklch(0.371 0 0);
-  --chart-5: oklch(0.269 0 0);
-  --radius: 0.625rem;
-  --sidebar: oklch(0.985 0 0);
-  --sidebar-foreground: oklch(0.145 0 0);
-  --sidebar-primary: oklch(0.205 0 0);
-  --sidebar-primary-foreground: oklch(0.985 0 0);
-  --sidebar-accent: oklch(0.97 0 0);
-  --sidebar-accent-foreground: oklch(0.205 0 0);
-  --sidebar-border: oklch(0.922 0 0);
-  --sidebar-ring: oklch(0.708 0 0);
+  /* ---- 底色与表面 ---- */
+  --bg-app: #f5f6f8;          /* 应用底色（窗口背景） */
+  --bg-panel: #ffffff;        /* 侧栏面板 */
+  --surface: #ffffff;         /* 卡片 / 弹层 */
+  --surface-2: #eef0f3;       /* 次级底：输入框、图标盒、分段控件轨道 */
+  --stroke: #e0e3e8;          /* 标准 1px 描边 */
+  --stroke-soft: #eaecef;     /* 弱化描边（分隔线） */
+
+  /* ---- 文字三级 ---- */
+  --text-1: #17191e;
+  --text-2: #565e6c;
+  --text-3: #8a92a0;
+
+  /* ---- 品牌：鸢尾钴蓝 ---- */
+  --accent: #4f5de5;
+  --accent-dim: #eceefb;      /* 淡底（选中项背景） */
+  --accent-ink: #ffffff;      /* accent 实心按钮上的文字 */
+
+  /* ---- 状态色（Minecraft 语义命名） ---- */
+  --emerald: #0e9f6e;         /* 成功 / 保留 / 完成 */
+  --emerald-dim: #e2f6ec;
+  --emerald-ink: #ffffff;
+  --gold: #c2760c;            /* 进行中 / 剔除 / 待确认 */
+  --gold-dim: #faeedc;
+  --redstone: #d93036;        /* 失败 / 危险 */
+  --redstone-dim: #fae7e7;
+  --amethyst: #7c4dff;        /* 日志标签 */
+  --diamond: #0e7c94;         /* Fabric 徽章 */
+
+  /* ---- Shift Rail 转换轨道 ---- */
+  --grass-top: #a9b2ff;       /* 信标草皮面 */
+  --grass-dirt: #4f5de5;      /* 信标泥土面 */
+  --rail-track: #dfe2e8;      /* 轨道未达段 */
+
+  /* ---- shadcn 语义变量映射（组件库内部消费） ---- */
+  --background: var(--bg-app);
+  --foreground: var(--text-1);
+  --card: var(--surface);
+  --card-foreground: var(--text-1);
+  --popover: var(--surface);
+  --popover-foreground: var(--text-1);
+  --primary: var(--accent);
+  --primary-foreground: var(--accent-ink);
+  --secondary: var(--surface-2);
+  --secondary-foreground: var(--text-1);
+  --muted: var(--surface-2);
+  --muted-foreground: var(--text-3);
+  --accent-foreground: var(--text-1);
+  --destructive: var(--redstone);
+  --border: var(--stroke);
+  --input: var(--stroke);
+  --ring: var(--accent);
+
+  /* 侧栏 */
+  --sidebar: var(--bg-panel);
+  --sidebar-foreground: var(--text-1);
+  --sidebar-primary: var(--accent);
+  --sidebar-primary-foreground: var(--accent-ink);
+  --sidebar-accent: var(--surface-2);
+  --sidebar-accent-foreground: var(--text-1);
+  --sidebar-border: var(--stroke);
+  --sidebar-ring: var(--accent);
+
+  /* 圆角标尺：--radius = 控件基准 8px
+   * 卡片 12 = radius*1.5，小元素 6 = radius*0.75，徽章 99 用 rounded-full */
+  --radius: 8px;
 }
 
-@theme inline {
-  --font-heading: var(--font-sans);
-  --font-sans: 'Inter Variable', sans-serif;
-  --color-sidebar-ring: var(--sidebar-ring);
-  --color-sidebar-border: var(--sidebar-border);
-  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
-  --color-sidebar-accent: var(--sidebar-accent);
-  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
-  --color-sidebar-primary: var(--sidebar-primary);
-  --color-sidebar-foreground: var(--sidebar-foreground);
-  --color-sidebar: var(--sidebar);
-  --color-chart-5: var(--chart-5);
-  --color-chart-4: var(--chart-4);
-  --color-chart-3: var(--chart-3);
-  --color-chart-2: var(--chart-2);
-  --color-chart-1: var(--chart-1);
-  --color-ring: var(--ring);
-  --color-input: var(--input);
-  --color-border: var(--border);
-  --color-destructive: var(--destructive);
-  --color-accent-foreground: var(--accent-foreground);
-  --color-accent: var(--accent);
-  --color-muted-foreground: var(--muted-foreground);
-  --color-muted: var(--muted);
-  --color-secondary-foreground: var(--secondary-foreground);
-  --color-secondary: var(--secondary);
-  --color-primary-foreground: var(--primary-foreground);
-  --color-primary: var(--primary);
-  --color-popover-foreground: var(--popover-foreground);
-  --color-popover: var(--popover);
-  --color-card-foreground: var(--card-foreground);
-  --color-card: var(--card);
-  --color-foreground: var(--foreground);
-  --color-background: var(--background);
-  --radius-sm: calc(var(--radius) * 0.6);
-  --radius-md: calc(var(--radius) * 0.8);
-  --radius-lg: var(--radius);
-  --radius-xl: calc(var(--radius) * 1.4);
-  --radius-2xl: calc(var(--radius) * 1.8);
-  --radius-3xl: calc(var(--radius) * 2.2);
-  --radius-4xl: calc(var(--radius) * 2.6);
-}
-
+/* ================= 深色主题 ================= */
 .dark {
-  --background: oklch(0.145 0 0);
-  --foreground: oklch(0.985 0 0);
-  --card: oklch(0.205 0 0);
-  --card-foreground: oklch(0.985 0 0);
-  --popover: oklch(0.205 0 0);
-  --popover-foreground: oklch(0.985 0 0);
-  --primary: oklch(0.922 0 0);
-  --primary-foreground: oklch(0.205 0 0);
-  --secondary: oklch(0.269 0 0);
-  --secondary-foreground: oklch(0.985 0 0);
-  --muted: oklch(0.269 0 0);
-  --muted-foreground: oklch(0.708 0 0);
-  --accent: oklch(0.269 0 0);
-  --accent-foreground: oklch(0.985 0 0);
-  --destructive: oklch(0.704 0.191 22.216);
-  --border: oklch(1 0 0 / 10%);
-  --input: oklch(1 0 0 / 15%);
-  --ring: oklch(0.556 0 0);
-  --chart-1: oklch(0.87 0 0);
-  --chart-2: oklch(0.556 0 0);
-  --chart-3: oklch(0.439 0 0);
-  --chart-4: oklch(0.371 0 0);
-  --chart-5: oklch(0.269 0 0);
-  --sidebar: oklch(0.205 0 0);
-  --sidebar-foreground: oklch(0.985 0 0);
-  --sidebar-primary: oklch(0.488 0.243 264.376);
-  --sidebar-primary-foreground: oklch(0.985 0 0);
-  --sidebar-accent: oklch(0.269 0 0);
-  --sidebar-accent-foreground: oklch(0.985 0 0);
-  --sidebar-border: oklch(1 0 0 / 10%);
-  --sidebar-ring: oklch(0.556 0 0);
+  --bg-app: #121317;
+  --bg-panel: #17181d;
+  --surface: #1d1f26;
+  --surface-2: #24262e;
+  --stroke: #2e313a;
+  --stroke-soft: #25272f;
+
+  --text-1: #eceef3;
+  --text-2: #a2a8b5;
+  --text-3: #6b7280;
+
+  --accent: #8b95ff;
+  --accent-dim: #1e2140;
+  --accent-ink: #12142e;      /* 深色下 accent 变亮，文字反转为深色 */
+
+  --emerald: #3dd68c;
+  --emerald-dim: #12352a;
+  --emerald-ink: #07281b;
+  --gold: #f0b441;
+  --gold-dim: #3a2c12;
+  --redstone: #ff6369;
+  --redstone-dim: #3b1e20;
+  --amethyst: #b79cff;
+  --diamond: #5bd3e8;
+
+  --grass-top: #8b95ff;
+  --grass-dirt: #363c77;
+  --rail-track: #2a2d36;
+}
+
+/* ============ Tailwind 4 主题注册 ============ */
+@theme inline {
+  /* 字体：正文 Inter / 标题 Space Grotesk / 数据 JetBrains Mono；中文回退到系统黑体 */
+  --font-sans: "Inter Variable", "PingFang SC", "Microsoft YaHei", sans-serif;
+  --font-heading: "Space Grotesk Variable", "Space Grotesk", "Inter Variable",
+    "PingFang SC", "Microsoft YaHei", sans-serif;
+  --font-mono: "JetBrains Mono", "PingFang SC", "Microsoft YaHei", monospace;
+
+  /* 设计令牌 → tailwind 颜色类（bg-surface / text-text-2 / border-stroke ...） */
+  --color-bg-app: var(--bg-app);
+  --color-bg-panel: var(--bg-panel);
+  --color-surface: var(--surface);
+  --color-surface-2: var(--surface-2);
+  --color-stroke: var(--stroke);
+  --color-stroke-soft: var(--stroke-soft);
+  --color-text-1: var(--text-1);
+  --color-text-2: var(--text-2);
+  --color-text-3: var(--text-3);
+  --color-accent: var(--accent);
+  --color-accent-dim: var(--accent-dim);
+  --color-accent-ink: var(--accent-ink);
+  --color-emerald: var(--emerald);
+  --color-emerald-dim: var(--emerald-dim);
+  --color-emerald-ink: var(--emerald-ink);
+  --color-gold: var(--gold);
+  --color-gold-dim: var(--gold-dim);
+  --color-redstone: var(--redstone);
+  --color-redstone-dim: var(--redstone-dim);
+  --color-amethyst: var(--amethyst);
+  --color-diamond: var(--diamond);
+  --color-grass-top: var(--grass-top);
+  --color-grass-dirt: var(--grass-dirt);
+  --color-rail-track: var(--rail-track);
+
+  /* shadcn 组件消费的颜色 */
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --color-sidebar: var(--sidebar);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar-primary: var(--sidebar-primary);
+  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+  --color-sidebar-accent: var(--sidebar-accent);
+  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-sidebar-ring: var(--sidebar-ring);
+
+  /* 圆角标尺：sm=6(小元素) md=8(控件) lg=12(卡片) */
+  --radius-sm: calc(var(--radius) * 0.75);
+  --radius-md: var(--radius);
+  --radius-lg: calc(var(--radius) * 1.5);
+  --radius-xl: calc(var(--radius) * 2);
+  --radius-2xl: calc(var(--radius) * 2.5);
+  --radius-3xl: calc(var(--radius) * 3);
+  --radius-4xl: calc(var(--radius) * 4);
 }
 
 @layer base {
   * {
     @apply border-border outline-ring/50;
-    user-select: none;           /* 禁用文本选择 */
-    -webkit-user-select: none;  /* 兼容 WebKit (macOS) */
+    user-select: none;           /* 桌面应用惯例：禁用文本选择 */
+    -webkit-user-select: none;
+  }
+  html {
+    font-size: 16px;
+    line-height: 24px;
+    @apply font-sans;
   }
   body {
     @apply bg-background text-foreground;
-    cursor: default;             /* 禁用文本选择时，光标通常也恢复为默认箭头 */
+    cursor: default;
   }
-  html {
-    @apply font-sans;
-  }
+  /* 输入区恢复选择 */
   input,
   textarea,
   [contenteditable] {
