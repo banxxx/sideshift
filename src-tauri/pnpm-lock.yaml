@@ -1,0 +1,49 @@
+lockfileVersion: '9.0'
+
+settings:
+  autoInstallPeers: true
+  excludeLinksFromLockfile: false
+
+importers:
+
+  .:
+    dependencies:
+      '@tauri-apps/plugin-dialog':
+        specifier: ~2.7.3
+        version: 2.7.3
+      '@tauri-apps/plugin-fs':
+        specifier: ~2.5.2
+        version: 2.5.2
+      '@tauri-apps/plugin-http':
+        specifier: ~2.6.1
+        version: 2.6.1
+
+packages:
+
+  '@tauri-apps/api@2.11.1':
+    resolution: {integrity: sha512-M2FPuYND2m+wh5hfW9ZpSdxMPdEJovPBWwoHJmwUpysTYNHaOkVFN419m/K0LIgjb/7KU2vBgsUepJWugQCvAA==}
+
+  '@tauri-apps/plugin-dialog@2.7.3':
+    resolution: {integrity: sha512-CRgE+7TP4tvq9MjBU6f04NLTFIqVMLKHk3hAqlhil00ngK9ACTrXPH3oHpKMProxILodd3YjBoKbMwSI4IEcfA==}
+
+  '@tauri-apps/plugin-fs@2.5.2':
+    resolution: {integrity: sha512-XXvMSnFiob+G1H+YHCDf+bzWVumseQuEIhzpbOJzevUfL4k0U+sTApZWJHpoLiamggnVPJm5dJ5sDsniRyWxlg==}
+
+  '@tauri-apps/plugin-http@2.6.1':
+    resolution: {integrity: sha512-9gtfe6eOaVKofASoMZ4Ph8E6vDYnpUTbMXrLt4FkXPzC5+O+wnGqJ9fz2koSPYcQt10bb3cx5qHkU0AU1l8tcQ==}
+
+snapshots:
+
+  '@tauri-apps/api@2.11.1': {}
+
+  '@tauri-apps/plugin-dialog@2.7.3':
+    dependencies:
+      '@tauri-apps/api': 2.11.1
+
+  '@tauri-apps/plugin-fs@2.5.2':
+    dependencies:
+      '@tauri-apps/api': 2.11.1
+
+  '@tauri-apps/plugin-http@2.6.1':
+    dependencies:
+      '@tauri-apps/api': 2.11.1
