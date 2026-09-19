@@ -2,7 +2,7 @@
  * 自定义窗口标题栏（Tauri decorations:false，对应 SS.pen 各帧 TitleBar）
  *
  * 布局（设计稿 TitleBar）：h40 / $bg-panel / 下描边 $stroke-soft / padding 左右 16 / gap 10
- * 内容：LogoMark 16×16 r3 | 拖拽区（双击最大化） | 窗口控件
+ * 内容：LogoMark 16×16 无圆角 | 拖拽区（双击最大化） | 窗口控件
  * 窗口控件规格（v17 定稿）：gap 2、34×26、圆角 6、ghost 无底色、图标 13px $text-2；
  * 处于二级页面时（canGoBack），最小化左侧出现 undo-2 返回按钮，
  * 并用 1×14 短竖线（$stroke）与最小化隔开。窗口控制逻辑见 @/lib/window-controls。
@@ -26,8 +26,8 @@ export function TitleBar() {
                 data-tauri-drag-region
                 className="flex items-center h-full"
             >
-                <div className="size-4 rounded-[3px] overflow-hidden flex flex-col">
-                    {/* 草方块信标：上草下泥，与 public/logo.svg 同源 */}
+                <div className="size-4 flex flex-col">
+                    {/* 草方块信标：上草下泥，与 public/logo.svg 同源（无圆角，展示原始方块） */}
                     <div className="h-[5px] shrink-0 bg-grass-top" />
                     <div className="flex-1 bg-accent" />
                 </div>

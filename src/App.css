@@ -195,6 +195,20 @@
   --radius-4xl: calc(var(--radius) * 4);
 }
 
+/* ============ 拖放卡（Dropzone）视觉资源 ============ */
+/* 动画本身由 motion 组件驱动（见 components/features/Dropzone.tsx），
+ * 这里只保留主题派生色与蚂蚁线 SVG 矩形的自适应尺寸。 */
+:root {
+  --dz-glow: color-mix(in srgb, var(--accent) 30%, transparent);
+}
+
+/* 蚂蚁线边框（SVG rect 描边，跑动由 motion 位移 stroke-dashoffset 驱动）：
+ * rect 几何走 CSS 以便随卡片尺寸自适应，内缩 1px 让 2px 描边正好压在边缘上 */
+.dz-ants-rect {
+  width: calc(100% - 2px);
+  height: calc(100% - 2px);
+}
+
 @layer base {
   * {
     @apply border-border outline-ring/50;

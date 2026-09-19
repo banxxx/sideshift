@@ -63,22 +63,36 @@ export function usePackSelection() {
     return { manifest, parsing, error, errorName, parse, pickByDialog, reset };
 }
 
-/** Tauri webview 文件拖入 → 回调路径列表；浏览器环境下不注册 */
-export function useTauriFileDrop(onPaths: (paths: string[]) => void) {
+/**
+ * Tauri webview 文件拖入 → 回调路径列表；浏览器环境下不注册。
+ * 返回"OS 文件正拖拽悬停于窗口"标志：Tauri 下 DOM drag 事件收不到文件，
+ * 拖拽高亮只能靠这里的 enter/over/leave 事件驱动（交给 Dropzone 展示）。
+ */
+export function useTauriFileDrop(onPaths: (paths: string[]) => void): boolean {
     const cb = useRef(onPaths);
     cb.current = onPaths;
+    const [dragging, setDragging] = useState(false);
     useEffect(() => {
         if (!isTauri) return;
         let unlisten: (() => void) | undefined;
         getCurrentWebview()
             .onDragDropEvent((event) => {
-                if (event.payload.type === "drop") cb.current(event.payload.paths);
+                const type = event.payload.type;
+                if (type === "drop") {
+                    setDragging(false);
+                    cb.current(event.payload.paths);
+                } else if (type === "enter" || type === "over") {
+                    setDragging(true);
+                } else if (type === "leave") {
+                    setDragging(false);
+                }
             })
             .then((fn) => {
                 unlisten = fn;
             });
         return () => unlisten?.();
     }, []);
+    return dragging;
 }
 
 const ACTIVE: ConversionTask["status"][] = ["queued", "running"];

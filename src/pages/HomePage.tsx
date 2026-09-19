@@ -10,6 +10,7 @@
  * 数据来源全部走 @/lib/api 门面（浏览器 dev 自动落 mock），页面零 invoke。
  */
 import { useNavigation } from "@/lib/navigation";
+import { LineDotRightHorizontal } from "lucide-react";
 import {
     useActiveTask,
     usePackSelection,
@@ -29,8 +30,8 @@ export function HomePage() {
         usePackSelection();
     const { active } = useActiveTask();
 
-    // Tauri 下 OS 拖入 → 直接解析第一个文件
-    useTauriFileDrop((paths) => void parse(paths[0]));
+    // Tauri 下 OS 拖入 → 直接解析第一个文件；拖拽悬停标志用于拖放卡高亮
+    const fileDragging = useTauriFileDrop((paths) => void parse(paths[0]));
 
     const converting = !!active && (active.status === "running" || active.status === "queued");
     // 解析失败也要停留在卡片布局，把错误显式呈现出来（不能闪回 idle 装作无事发生）
@@ -56,14 +57,24 @@ export function HomePage() {
     return (
         <div className="flex flex-col gap-5 min-h-full">
             <PageHeader
-                title="客户端整合包 → 服务端"
+                title={
+                    <span className="inline-flex items-center gap-2">
+                        客户端
+                        <LineDotRightHorizontal
+                            aria-hidden
+                            className="size-[19px] text-accent"
+                            strokeWidth={2.5}
+                        />
+                        服务端
+                    </span>
+                }
                 sub="拖入整合包，SideShift 自动剔除客户端专属内容，补齐服务端依赖，生成可直接运行的服务器包。"
             />
 
             {view === "idle" ? (
                 /* Idle：拖放卡 + 帮助三卡，垂直居中（设计稿 760 栏居中） */
                 <div className="flex-1 flex flex-col items-center justify-center gap-5 py-2">
-                    <Dropzone onPick={pickByDialog} onDropPaths={(p) => void parse(p[0])} />
+                    <Dropzone onPick={pickByDialog} onDropPaths={(p) => void parse(p[0])} fileDragging={fileDragging} />
                     <HelpRow />
                 </div>
             ) : (
@@ -75,6 +86,7 @@ export function HomePage() {
                             busy={parsing}
                             onPick={pickByDialog}
                             onDropPaths={(p) => void parse(p[0])}
+                            fileDragging={fileDragging}
                         />
                         <PackCard
                             manifest={manifest ?? active?.pack ?? null}

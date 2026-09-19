@@ -4,6 +4,7 @@
  */
 import type { ComponentType } from "react";
 import { useEffect } from "react";
+import { MotionConfig } from "motion/react";
 import { Sidebar } from "@/components/layout/Sidebar";
 import { TitleBar } from "@/components/layout/TitleBar";
 import { HomePage } from "@/pages/HomePage";
@@ -68,7 +69,10 @@ function Shell() {
 function App() {
     return (
         <NavigationProvider>
-            <Shell />
+            {/* reducedMotion:"user"：跟随系统"减少动态效果"设置，全局降级 motion 动画 */}
+            <MotionConfig reducedMotion="user">
+                <Shell />
+            </MotionConfig>
         </NavigationProvider>
     );
 }

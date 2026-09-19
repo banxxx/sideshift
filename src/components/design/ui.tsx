@@ -37,7 +37,7 @@ export function PageHeader({
     compact,
     right,
 }: {
-    title: string;
+    title: ReactNode;
     sub?: ReactNode;
     subTone?: "body" | "mono";
     compact?: boolean;
