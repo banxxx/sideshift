@@ -5,10 +5,11 @@
  *  - 遮罩 50% 黑；模态 $surface + $stroke 1px r12 padding20 gap12；页脚 = 1px $stroke + 摘要 + 按钮组
  *  - 网络添加与模组详情是同壳二级视图，尺寸强制一致 800×464（“跳转后弹窗不能变小”）
  *  - 处置清单壳剔除/保留共用（focus 区分）：行勾选语义 = 是否处于该处置；
- *    取消勾选即「反向待办」（金色行 + 描边徽章）
+ *    取消勾选即「反向待办」（金色行 + 描边徽章）；勾选只进弹窗草稿，
+ *    「应用」时才把差异行回写页面（「取消」/关闭按钮放弃草稿）
  */
-import { ChevronDown, ChevronLeft, ChevronRight, Folder, Puzzle, RefreshCw, Square, SquareCheck } from "lucide-react";
-import { useEffect, useId, useMemo, useState } from "react";
+import { ChevronDown, ChevronLeft, ChevronRight, Folder, MinusSquare, Puzzle, RefreshCw, Square, SquareCheck } from "lucide-react";
+import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { motion } from "motion/react";
 import * as api from "@/lib/api";
 import { formatSize, loaderLabel } from "@/lib/format";
@@ -17,7 +18,7 @@ import type {
     ModDisposition,
     ModSearchResult,
     ModVersionEntry,
-    PackDirEntry,
+    PackDirNode,
     PlanMod,
 } from "@/lib/types";
 import {
@@ -42,33 +43,27 @@ const LIST_COPY: Record<
     {
         title: string;
         sub: string;
-        selectAll: string;
         toolbar: (on: number, off: number) => string;
         note: (on: number, off: number) => string;
-        more: (rest: number) => string;
         offBadge: string;
         rowOff: string;
     }
 > = {
     remove: {
         title: "剔除清单",
-        sub: "检测器识别的客户端专属模组 · 可逐项恢复保留",
-        selectAll: "全选剔除",
-        toolbar: (on, off) => `已标记 ${on} · 保留 ${off}`,
+        sub: "已剔除的客户端专属模组 · 可逐项恢复保留",
+        toolbar: (on, off) => `已标记 ${on} · 改为保留 ${off}`,
         note: (on, off) => `${on} 项将剔除 · ${off} 项改为保留`,
-        more: (rest) => `… 其余 ${rest} 项均为客户端专属模组`,
         offBadge: "待恢复",
-        rowOff: "已手动改为保留 · 服务端将不剔除",
+        rowOff: "勾选后改为保留 · 服务端将不剔除",
     },
     keep: {
         title: "保留清单",
         sub: "将随服务端包构建的模组 · 可逐项改回剔除",
-        selectAll: "全选保留",
-        toolbar: (on, off) => `保留 ${on} · 已改剔除 ${off}`,
+        toolbar: (on, off) => `保留 ${on} · 改为剔除 ${off}`,
         note: (on, off) => `${on} 项将保留 · ${off} 项改为剔除`,
-        more: (rest) => `… 其余 ${rest} 项均为服务端可用模组`,
         offBadge: "待剔除",
-        rowOff: "已手动改为剔除 · 不再进入服务端包",
+        rowOff: "勾选后改为剔除 · 不再进入服务端包",
     },
 };
 
@@ -95,26 +90,59 @@ export function PlanListModal({
     onClose: () => void;
     /** 清单视角：remove=剔除态为“开”，keep=保留态为“开” */
     focus: ListFocus;
-    /** 该清单的全部候选，含当前处置 */
+    /** 该清单的全部候选（视角过滤由调用方做好后传入） */
     mods: PlanMod[];
-    /** 勾选态变更：在 focus 与其反方向之间切换 */
+    /** 「应用」时回写：只对最终处置与原值不同的行调用 */
     onDisposition: (id: string, d: ModDisposition) => void;
 }) {
     const copy = LIST_COPY[focus];
     const other: ModDisposition = focus === "remove" ? "keep" : "remove";
     const [query, setQuery] = useState("");
+    /** 弹窗内暂存：勾选只改 draft，「应用」才回写页面 */
+    const [draft, setDraft] = useState<Partial<Record<string, ModDisposition>>>({});
+
+    // 每次打开重建暂存与搜索（上次未应用的草稿不带入）
+    useEffect(() => {
+        if (open) {
+            setDraft({});
+            setQuery("");
+        }
+    }, [open]);
+
     const filtered = useMemo(
         () => mods.filter((m) => !query || m.name.toLowerCase().includes(query.toLowerCase())),
         [mods, query]
     );
 
-    const on = mods.filter((m) => m.disposition === focus).length;
+    const dispOf = (m: PlanMod): ModDisposition => draft[m.id] ?? m.disposition;
+    const on = mods.filter((m) => dispOf(m) === focus).length;
     const off = mods.length - on;
+
+    const setRow = (m: PlanMod, target: ModDisposition) =>
+        setDraft((d) => ({ ...d, [m.id]: target }));
+
+    /** 全选/取消全选（切换式）：作用于当前搜索可见的行，只写草稿 */
+    const allOn = filtered.length > 0 && filtered.every((m) => dispOf(m) === focus);
+    const setAll = (target: ModDisposition) =>
+        setDraft((d) => {
+            const next = { ...d };
+            filtered.forEach((m) => (next[m.id] = target));
+            return next;
+        });
+
+    const apply = () => {
+        mods.forEach((m) => {
+            const fin = dispOf(m);
+            if (fin !== m.disposition) onDisposition(m.id, fin);
+        });
+        onClose();
+    };
 
     return (
         <ModalShell
             open={open}
             onClose={onClose}
+            persistent
             width={640}
             height={480}
             title={`${copy.title} · ${mods.length} 个模组`}
@@ -122,10 +150,10 @@ export function PlanListModal({
             footerNote={copy.note(on, off)}
             footerActions={
                 <>
-                    <Btn size="sm" className="px-3.5" onClick={() => filtered.forEach((m) => onDisposition(m.id, focus))}>
-                        {copy.selectAll}
+                    <Btn size="sm" className="px-3.5" onClick={onClose}>
+                        取消
                     </Btn>
-                    <Btn variant="primary" size="sm" className="px-3.5 font-semibold" onClick={onClose}>
+                    <Btn variant="primary" size="sm" className="px-3.5 font-semibold" onClick={apply}>
                         应用
                     </Btn>
                 </>
@@ -138,29 +166,33 @@ export function PlanListModal({
                 className="border border-stroke"
             />
 
-            {/* toolbar：左全选 + 右计数 */}
+            {/* toolbar：左全选（切换式） + 右计数 */}
             <div className="flex w-full shrink-0 items-center justify-between gap-2">
                 <button
-                    className="flex items-center gap-2 text-[11px] leading-[16px] font-medium text-text-2 hover:text-text-1"
-                    onClick={() => filtered.forEach((m) => onDisposition(m.id, focus))}
+                    className="flex items-center gap-2 text-[11px] leading-[16px] font-medium text-text-2 transition-colors hover:text-text-1"
+                    onClick={() => setAll(allOn ? other : focus)}
                 >
-                    <SquareCheck className="size-3.5 text-accent" />
-                    全选
+                    {allOn ? (
+                        <MinusSquare className="size-3.5 text-accent" />
+                    ) : (
+                        <SquareCheck className="size-3.5 text-accent" />
+                    )}
+                    {allOn ? "取消全选" : "全选"}
                 </button>
-                <span className="font-mono text-[11px] leading-[16px] font-normal text-text-3">
+                <span className="font-mono text-[11px] leading-[16px] font-normal tabular-nums text-text-3">
                     {copy.toolbar(on, off)}
                 </span>
             </div>
 
-            {/* list：gap2；行 padding[8,4] */}
+            {/* list：gap2；行 padding[8,4]；全部展示（滚动） */}
             <div className="-mx-1 flex min-h-0 flex-1 flex-col gap-0.5 overflow-auto px-1">
                 {filtered.map((m) => {
-                    const isOn = m.disposition === focus;
+                    const isOn = dispOf(m) === focus;
                     return (
                         <ListRow
                             key={m.id}
                             className={cn("cursor-pointer", !isOn && "bg-gold-dim")}
-                            onClick={() => onDisposition(m.id, isOn ? other : focus)}
+                            onClick={() => setRow(m, isOn ? other : focus)}
                         >
                             {isOn ? (
                                 <SquareCheck className="size-[15px] shrink-0 text-accent" />
@@ -199,13 +231,6 @@ export function PlanListModal({
                 {filtered.length === 0 && (
                     <span className="py-8 text-center text-[11px] text-text-3">无匹配模组</span>
                 )}
-                {filtered.length > 4 && (
-                    <div className="flex w-full justify-center py-1.5">
-                        <span className="text-[11px] leading-[16px] font-normal text-text-3">
-                            {copy.more(filtered.length - 4)}
-                        </span>
-                    </div>
-                )}
             </div>
         </ModalShell>
     );
@@ -213,9 +238,20 @@ export function PlanListModal({
 
 /* ================= 目录勾选弹窗（客户端保留目录卡「添加目录」） ================= */
 
+/** 树内目录节点总数（标题「共 N 个目录」口径） */
+function countDirNodes(nodes: PackDirNode[]): number {
+    return nodes.reduce((s, n) => s + 1 + countDirNodes(n.children), 0);
+}
+
+/** 父子去重：祖先已勾选的目录是冗余项（整个父目录都会保留） */
+function pruneRedundant(paths: string[]): string[] {
+    const sorted = [...paths].sort();
+    return sorted.filter((p) => !sorted.some((q) => q !== p && p.startsWith(`${q}/`)));
+}
+
 /**
- * 列出包内全部顶层目录供主动勾选：暂存 draft（打开时从已选初始化），
- * 「应用」整体回写——卡片只展示勾选结果，不做默认预选。
+ * 层级目录浏览器：双击进入子目录（含子目录的行），单击勾选（延迟判定避让双击）；
+ * 头部返回键 + 面包屑回退层级。勾选先进 draft，「应用」父子去重后整体回写。
  */
 export function DirPickerModal({
     open,
@@ -226,35 +262,96 @@ export function DirPickerModal({
 }: {
     open: boolean;
     onClose: () => void;
-    dirs: PackDirEntry[];
+    dirs: PackDirNode[];
     selected: string[];
     onApply: (next: string[]) => void;
 }) {
     const [query, setQuery] = useState("");
+    /** 当前浏览层级（从包根起算的目录段，[]=根） */
+    const [path, setPath] = useState<string[]>([]);
     const [draft, setDraft] = useState<string[]>(selected);
+    /** 单击延迟句柄：等待第二次点击判定是否双击，避免双击=勾选两次 */
+    const clickTimer = useRef<number | null>(null);
 
-    // 每次打开都从当前已选重建暂存（卡片行内移除后再开也不会带旧草稿）
+    // 每次打开都从当前已选重建暂存与浏览位置（卡片行内移除后再开不会带旧草稿）
     useEffect(() => {
-        if (open) setDraft(selected.slice());
+        if (open) {
+            setDraft(selected.slice());
+            setPath([]);
+            setQuery("");
+        }
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [open]);
 
+    const levelNodes = useMemo(() => {
+        let nodes = dirs;
+        for (const seg of path) nodes = nodes.find((n) => n.name === seg)?.children ?? [];
+        return nodes;
+    }, [dirs, path]);
+
     const filtered = useMemo(
-        () => dirs.filter((d) => !query || d.name.toLowerCase().includes(query.toLowerCase())),
-        [dirs, query]
+        () =>
+            levelNodes.filter(
+                (n) => !query || n.name.toLowerCase().includes(query.toLowerCase())
+            ),
+        [levelNodes, query]
     );
 
-    const toggle = (name: string) =>
-        setDraft((v) => (v.includes(name) ? v.filter((x) => x !== name) : [...v, name]));
+    /** 行/勾选的唯一键 = 包根起算的相对路径 */
+    const keyOf = (n: PackDirNode) => [...path, n.name].join("/");
+
+    const toggle = (key: string) =>
+        setDraft((v) => (v.includes(key) ? v.filter((x) => x !== key) : [...v, key]));
+
+    const clearTimer = () => {
+        if (clickTimer.current !== null) {
+            clearTimeout(clickTimer.current);
+            clickTimer.current = null;
+        }
+    };
+
+    const handleRowClick = (n: PackDirNode) => {
+        // 第二次 click 交给 dblclick 处理，这里只撤销挂起的单击
+        if (clickTimer.current !== null) {
+            clearTimer();
+            return;
+        }
+        const key = keyOf(n);
+        if (n.children.length === 0) {
+            toggle(key);
+            return;
+        }
+        clickTimer.current = window.setTimeout(() => {
+            clickTimer.current = null;
+            toggle(key);
+        }, 240);
+    };
+
+    const handleRowDblClick = (n: PackDirNode) => {
+        clearTimer();
+        if (n.children.length > 0) setPath((p) => [...p, n.name]);
+    };
+
+    // 全选/全取消（切换式）作用于当前层「可见」（含搜索过滤）的目录
+    const levelKeys = filtered.map(keyOf);
+    const allOn = levelKeys.length > 0 && levelKeys.every((k) => draft.includes(k));
+    const toggleAll = () =>
+        setDraft((v) =>
+            allOn
+                ? v.filter((k) => !levelKeys.includes(k))
+                : [...new Set([...v, ...levelKeys])]
+        );
 
     return (
         <ModalShell
             open={open}
             onClose={onClose}
+            persistent
+            back={path.length > 0 ? () => setPath((p) => p.slice(0, -1)) : undefined}
             width={560}
             height={440}
-            title={`选择保留目录 · ${dirs.length} 个目录`}
-            sub="整合包内 mods 之外的顶层目录 · 勾选后随包复制到服务端"
+            title={`选择保留目录 · ${countDirNodes(dirs)} 个目录`}
+            sub="双击进入子目录 · 单击勾选 · 勾选后随包复制到服务端"
             footerNote={`${draft.length} 个目录将随包保留`}
             footerActions={
                 <>
@@ -266,7 +363,8 @@ export function DirPickerModal({
                         size="sm"
                         className="px-3.5 font-semibold"
                         onClick={() => {
-                            onApply(draft);
+                            clearTimer();
+                            onApply(pruneRedundant(draft));
                             onClose();
                         }}
                     >
@@ -275,47 +373,77 @@ export function DirPickerModal({
                 </>
             }
         >
+            {/* 面包屑：全部 › kubejs › …（末段为当前位置，其余可点回退） */}
+            <div className="flex w-full shrink-0 flex-wrap items-center gap-1 font-mono text-[11px] leading-[16px] text-text-3">
+                <button
+                    className={cn(
+                        "transition-colors",
+                        path.length === 0
+                            ? "font-medium text-text-1"
+                            : "hover:text-text-1"
+                    )}
+                    onClick={() => setPath([])}
+                >
+                    全部
+                </button>
+                {path.map((seg, i) => (
+                    <span key={`${seg}-${i}`} className="flex items-center gap-1">
+                        <ChevronRight className="size-3" />
+                        <button
+                            className={cn(
+                                "transition-colors",
+                                i === path.length - 1
+                                    ? "font-medium text-text-1"
+                                    : "hover:text-text-1"
+                            )}
+                            onClick={() => setPath((p) => p.slice(0, i + 1))}
+                        >
+                            {seg}
+                        </button>
+                    </span>
+                ))}
+            </div>
+
             <SearchBox
                 value={query}
                 onChange={setQuery}
-                placeholder="搜索目录名称…"
+                placeholder="搜索当前层目录名称…"
                 className="border border-stroke"
             />
 
-            {/* toolbar：左全选/清除 + 右计数 */}
+            {/* toolbar：左全选（切换式，含清空语义） + 右计数 */}
             <div className="flex w-full shrink-0 items-center justify-between gap-2">
-                <div className="flex items-center gap-3">
-                    <button
-                        className="flex items-center gap-2 text-[11px] leading-[16px] font-medium text-text-2 hover:text-text-1"
-                        onClick={() => setDraft(filtered.map((d) => d.name))}
-                    >
+                <button
+                    className="flex items-center gap-2 text-[11px] leading-[16px] font-medium text-text-2 transition-colors hover:text-text-1"
+                    onClick={toggleAll}
+                >
+                    {allOn ? (
+                        <MinusSquare className="size-3.5 text-accent" />
+                    ) : (
                         <SquareCheck className="size-3.5 text-accent" />
-                        全选
-                    </button>
-                    <button
-                        className="text-[11px] leading-[16px] font-medium text-text-3 hover:text-text-1"
-                        onClick={() => setDraft([])}
-                    >
-                        清除
-                    </button>
-                </div>
+                    )}
+                    {allOn ? "取消全选" : "全选"}
+                </button>
                 <span className="font-mono text-[11px] leading-[16px] font-normal tabular-nums text-text-3">
-                    已勾选 {draft.length} / {dirs.length}
+                    已勾选 {draft.length} / {countDirNodes(dirs)}
                 </span>
             </div>
 
             <div className="-mx-1 flex min-h-0 flex-1 flex-col gap-0.5 overflow-auto px-1">
-                {filtered.map((d) => {
-                    const on = draft.includes(d.name);
+                {filtered.map((n) => {
+                    const key = keyOf(n);
+                    const on = draft.includes(key);
                     return (
                         <ListRow
-                            key={d.name}
+                            key={key}
                             className="cursor-pointer hover:bg-surface-2"
-                            onClick={() => toggle(d.name)}
+                            title={n.children.length > 0 ? "双击进入子目录" : undefined}
+                            onClick={() => handleRowClick(n)}
+                            onDoubleClick={() => handleRowDblClick(n)}
                         >
-                            {/* 勾选框自带点击，阻止冒泡避免行 onClick 二次翻转 */}
+                            {/* 勾选框即时勾选，不参与双击判定 */}
                             <span onClick={(e) => e.stopPropagation()}>
-                                <CheckBox checked={on} onChange={() => toggle(d.name)} />
+                                <CheckBox checked={on} onChange={() => toggle(key)} />
                             </span>
                             <Folder
                                 className={cn(
@@ -324,7 +452,7 @@ export function DirPickerModal({
                                 )}
                             />
                             <span className="min-w-0 flex-1 truncate font-mono text-[12px] leading-[18px] font-medium text-text-1">
-                                {d.name}/
+                                {n.name}/
                             </span>
                             <span
                                 className={cn(
@@ -332,7 +460,7 @@ export function DirPickerModal({
                                     on ? "text-emerald" : "text-text-3"
                                 )}
                             >
-                                {d.fileCount} 文件
+                                {n.fileCount} 文件
                             </span>
                         </ListRow>
                     );
@@ -407,6 +535,7 @@ export function OnlineAddModal({
             <ModalShell
                 open={open}
                 onClose={close}
+                persistent
                 back={() => setView("list")}
                 width={800}
                 height={464}
@@ -470,6 +599,7 @@ export function OnlineAddModal({
         <ModalShell
             open={open}
             onClose={close}
+            persistent
             width={800}
             height={464}
             title="从网络添加模组"

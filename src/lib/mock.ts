@@ -10,7 +10,7 @@ import type {
     ModSearchPage,
     ModSearchQuery,
     ModVersionEntry,
-    PackDirEntry,
+    PackDirNode,
     PackManifest,
     PlanMod,
     TaskLogLine,
@@ -222,14 +222,32 @@ export const mockDefaultOptions: ConversionOptions = {
     keepDirs: [],
 };
 
-/** 包内可保留目录（客户端保留目录卡演示数据） */
-export const mockPackDirs: PackDirEntry[] = [
-    { name: "config", fileCount: 138 },
-    { name: "kubejs", fileCount: 24 },
-    { name: "ct_output", fileCount: 9 },
-    { name: "shaderpacks", fileCount: 6 },
-    { name: "journeymap", fileCount: 5 },
-    { name: "maps", fileCount: 3 },
+/** 包内可保留目录树（客户端保留目录弹窗演示数据；fileCount 递归统计） */
+export const mockPackDirs: PackDirNode[] = [
+    {
+        name: "config",
+        fileCount: 138,
+        children: [
+            { name: "jei", fileCount: 6, children: [] },
+            { name: "sombreros", fileCount: 84, children: [] },
+        ],
+    },
+    {
+        name: "kubejs",
+        fileCount: 24,
+        children: [
+            { name: "client_scripts", fileCount: 5, children: [] },
+            { name: "server_scripts", fileCount: 8, children: [] },
+        ],
+    },
+    { name: "shaderpacks", fileCount: 6, children: [] },
+    {
+        name: "maps",
+        fileCount: 3,
+        children: [
+            { name: "journey_map", fileCount: 2, children: [] },
+        ],
+    },
 ];
 
 /* ---------------- 任务引擎：定时器模拟四阶段流水线 ---------------- */

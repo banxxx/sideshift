@@ -20,7 +20,7 @@ import type {
     ModSearchPage,
     ModSearchQuery,
     ModVersionEntry,
-    PackDirEntry,
+    PackDirNode,
     PackManifest,
     PlanMod,
     ProgressEvent,
@@ -119,8 +119,8 @@ export async function defaultOptions(
     );
 }
 
-/** 包内可保留的顶层目录（Rust: list_pack_dirs） */
-export async function listPackDirs(): Promise<PackDirEntry[]> {
+/** 包内可保留目录树（Rust: list_pack_dirs） */
+export async function listPackDirs(): Promise<PackDirNode[]> {
     if (!isTauri) return mock.mockPackDirs;
     return invokeOrMock("list_pack_dirs", undefined, () => mock.mockPackDirs);
 }

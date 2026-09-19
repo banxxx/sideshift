@@ -21,7 +21,7 @@ import type {
     ModDisposition,
     ModSearchResult,
     ModVersionEntry,
-    PackDirEntry,
+    PackDirNode,
     PackManifest,
     PlanMod,
     VersionOption,
@@ -57,9 +57,18 @@ const toOption = (v: VersionOption): SelectOption => ({
     group: v.group,
 });
 
-/** 卡片内直接展示的行数：设计稿画 3 行，但卡高定到 280 后行区放得下 4 行，
- *  再多就会被行区 overflow 裁切；其余走「查看全部」弹窗 */
-const PREVIEW_ROWS = 4;
+/** 按相对路径（kubejs/client_scripts）在目录树中定位节点，取递归文件数；查不到返回 undefined */
+function findDirNode(nodes: PackDirNode[], path: string): PackDirNode | undefined {
+    const [head, ...rest] = path.split("/");
+    const n = nodes.find((x) => x.name.toLowerCase() === head.toLowerCase());
+    if (!n || rest.length === 0) return n;
+    return n.children.length ? findDirNode(n.children, rest.join("/")) : undefined;
+}
+
+/** 卡片内直接展示的行数：卡高 280 下头部+gap+底部出口外，行区（行 20 + 距 14）
+ *  在新增态（出口 36px 最高）恰好放得下 5 行；第 6 行需 190px 会被 overflow 裁切。
+ *  撤销条/依赖警告出现时行区压缩，超出部分同样裁掉，其余走「查看全部」弹窗 */
+const PREVIEW_ROWS = 5;
 
 /** 页面入场：容器管节奏，各卡依次上浮（与 Home idle 分支同一支弹簧手感） */
 const PAGE_RISE: Variants = {
@@ -106,8 +115,8 @@ export function ConvertPage() {
     const [starting, setStarting] = useState(false);
     /** 全局设置：摘要卡展示默认输出目录（本次覆写为空时回落它） */
     const [settings, setSettings] = useState<AppSettings | null>(null);
-    /** 包内可保留的顶层目录（目录勾选弹窗数据源） */
-    const [packDirs, setPackDirs] = useState<PackDirEntry[]>([]);
+    /** 包内可保留目录树（目录勾选弹窗数据源） */
+    const [packDirs, setPackDirs] = useState<PackDirNode[]>([]);
     const [dirModalOpen, setDirModalOpen] = useState(false);
 
     // 进入页面：默认选项（以包的 MC 版本为准）+ 模组方案 + 版本下拉数据
@@ -344,7 +353,7 @@ export function ConvertPage() {
                                 }
                             />
 
-                            {/* 行区：切 Tab 时旧列表上滑退场、新列表下方升入，垂直居中消化行数差异 */}
+                            {/* 行区：切 Tab 时旧列表上滑退场、新列表下方升入；行从顶部铺开，行数差异由底部空白吸收 */}
                             <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
                                 <AnimatePresence mode="wait" initial={false}>
                                     <motion.div
@@ -353,7 +362,7 @@ export function ConvertPage() {
                                         animate={{ opacity: 1, y: 0 }}
                                         exit={{ opacity: 0, y: -10 }}
                                         transition={{ duration: 0.18, ease: "easeOut" }}
-                                        className="flex h-full flex-col justify-center gap-3.5"
+                                        className="flex h-full flex-col justify-start gap-3.5"
                                     >
                                         {rows.length === 0 ? (
                                             <p className="text-center text-[11px] text-text-3">
@@ -545,13 +554,11 @@ export function ConvertPage() {
                             ) : (
                                 <div className="flex w-full flex-col gap-1">
                                     <AnimatePresence initial={false} mode="popLayout">
-                                        {(options?.keepDirs ?? []).map((name) => {
-                                            const dir = packDirs.find(
-                                                (d) => d.name.toLowerCase() === name.toLowerCase()
-                                            );
+                                        {(options?.keepDirs ?? []).map((p) => {
+                                            const dir = findDirNode(packDirs, p);
                                             return (
                                                 <motion.div
-                                                    key={name}
+                                                    key={p}
                                                     layout
                                                     initial={{ opacity: 0, y: -6 }}
                                                     animate={{ opacity: 1, y: 0 }}
@@ -565,7 +572,7 @@ export function ConvertPage() {
                                                 >
                                                     <Folder className="size-3.5 shrink-0 text-accent" />
                                                     <span className="min-w-0 flex-1 truncate font-mono text-[12px] leading-[18px] font-medium text-text-1">
-                                                        {dir?.name ?? name}/
+                                                        {p}/
                                                     </span>
                                                     {dir && (
                                                         <span className="shrink-0 font-mono text-[11px] leading-[16px] tabular-nums text-emerald">
@@ -573,7 +580,7 @@ export function ConvertPage() {
                                                         </span>
                                                     )}
                                                     <button
-                                                        onClick={() => removeDir(name)}
+                                                        onClick={() => removeDir(p)}
                                                         title="移除"
                                                         className="flex size-6 shrink-0 items-center justify-center rounded-md text-text-3 transition-colors hover:bg-redstone-dim hover:text-redstone"
                                                     >
@@ -586,7 +593,7 @@ export function ConvertPage() {
                                 </div>
                             )}
                             <NoteRow icon={Info}>
-                                勾选的目录从源包原样复制到服务端根目录；模组配置在 config 目录，不勾选则不带入
+                                勾选的目录按原层级从源包复制到服务端（支持子目录）；模组配置在 config 目录，不勾选则不带入
                             </NoteRow>
                         </Panel>
                     </motion.div>
@@ -753,11 +760,11 @@ export function ConvertPage() {
                 open={listFocus !== null}
                 onClose={() => setListFocus(null)}
                 focus={listFocus ?? "remove"}
-                // 剔除视角喂剔除候选（客户端专属 + 已剔除）；保留视角喂保留中 + 被手动改剔除的（可反悔）
+                // 剔除窗只展示已剔除的模组，保留窗只展示已保留的（弹窗内全部列出，滚动）
                 mods={
                     (listFocus ?? "remove") === "remove"
-                        ? mods.filter((m) => m.clientOnly || m.disposition === "remove")
-                        : mods.filter((m) => m.disposition === "keep" || overrides[m.id] === "remove")
+                        ? mods.filter((m) => m.disposition === "remove")
+                        : mods.filter((m) => m.disposition === "keep")
                 }
                 onDisposition={setDisposition}
             />

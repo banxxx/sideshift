@@ -94,7 +94,7 @@ pub struct ConversionOptions {
     /// 本次转换输出目录；空 = 用全局设置
     pub output_override: String,
     /* ---- 客户端保留目录 ---- */
-    /// 需要原样带入服务端的包内顶层目录（config/kubejs/地图等）
+    /// 需要原样带入服务端的包内目录：相对路径（任意层级，如 kubejs/client_scripts），按前缀匹配
     pub keep_dirs: Vec<String>,
 }
 
@@ -123,14 +123,17 @@ impl Default for ConversionOptions {
     }
 }
 
-/// 包内可保留的顶层目录（客户端保留目录卡数据源）
+/// 包内可保留目录树节点（客户端保留目录弹窗数据源）；
+/// keep_dirs 条目 = 从包根起算的相对路径（如 kubejs/client_scripts），按前缀匹配拷贝
 #[derive(Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
-pub struct PackDirEntry {
-    /// 顶层目录名，如 kubejs
+pub struct PackDirNode {
+    /// 目录名（不含路径），如 client_scripts
     pub name: String,
-    /// 目录内文件数（含子目录）
+    /// 该目录内文件数（递归，含子目录）
     pub file_count: u32,
+    /// 子目录节点，名字升序
+    pub children: Vec<PackDirNode>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]

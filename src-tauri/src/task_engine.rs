@@ -410,20 +410,20 @@ async fn run_pipeline(app: AppHandle, state: Arc<AppState>, id: String) {
         }
     }
 
-    // 3.2 用户在「客户端保留目录」卡勾选的顶层目录（config/kubejs/地图等），mods/ 之外原样带入
+    // 3.2 用户在「客户端保留目录」卡勾选的目录（逻辑相对路径，任意层级），命中前缀的文件原样带入；
+    // overrides/ 壳前缀剥离后匹配与落位（CF 格式内容映射到服务端根）
     for f in &parsed.extra_files {
         let rel = f.path.replace('\\', "/");
-        let keep = match rel.find('/') {
-            Some(i) => options
-                .keep_dirs
-                .iter()
-                .any(|d| d.eq_ignore_ascii_case(&rel[..i])),
-            None => false, // 根文件（pack.png 等）不随目录保留
-        };
+        let logical = parser::logical_rel(&rel);
+        let lower = logical.to_lowercase();
+        let keep = options
+            .keep_dirs
+            .iter()
+            .any(|d| lower.starts_with(&format!("{}/", d.to_lowercase())));
         if !keep {
             continue;
         }
-        let dest = staging.join(&rel);
+        let dest = staging.join(logical);
         let fetch = if f.url.is_empty() {
             Fetch::ZipEntry {
                 archive: source_path.clone(),

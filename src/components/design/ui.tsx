@@ -989,6 +989,7 @@ export function ModalShell({
     children,
     footerNote,
     footerActions,
+    persistent,
 }: {
     open: boolean;
     onClose: () => void;
@@ -1001,9 +1002,16 @@ export function ModalShell({
     children: ReactNode;
     footerNote?: string;
     footerActions?: ReactNode;
+    /** 防误触：点遮罩/按 Esc 不关闭，只能走按钮（目录勾选弹窗用） */
+    persistent?: boolean;
 }) {
     return (
-        <DialogPrimitive.Root open={open} onOpenChange={(o) => !o && onClose()}>
+        <DialogPrimitive.Root
+            open={open}
+            onOpenChange={(o) => {
+                if (!o && !persistent) onClose();
+            }}
+        >
             <DialogPrimitive.Portal>
                 {/* base-ui 在出入场过渡期挂 data-starting/ending-style，配 CSS 过渡做淡入+微缩放 */}
                 <DialogPrimitive.Backdrop
@@ -1042,7 +1050,7 @@ export function ModalShell({
                                 <button
                                     onClick={back}
                                     title="返回"
-                                    className="flex size-7 items-center justify-center rounded-lg bg-surface text-text-2 transition-colors hover:bg-surface-2"
+                                    className="flex size-7 items-center justify-center rounded-lg border border-stroke bg-surface text-text-2 transition-colors hover:bg-surface-2"
                                 >
                                     <ArrowLeft className="size-3.5" />
                                 </button>
@@ -1102,6 +1110,15 @@ export function SearchBox({
                 placeholder={placeholder}
                 className="min-w-0 flex-1 bg-transparent text-[12px] leading-[18px] text-text-1 outline-none placeholder:text-text-3"
             />
+            {value && (
+                <button
+                    title="清空搜索"
+                    onClick={() => onChange("")}
+                    className="flex size-4 shrink-0 items-center justify-center rounded text-text-3 transition-colors hover:bg-surface-2 hover:text-text-1"
+                >
+                    <X className="size-3" />
+                </button>
+            )}
         </div>
     );
 }

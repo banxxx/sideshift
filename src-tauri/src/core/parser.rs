@@ -43,6 +43,18 @@ pub struct ParsedPack {
 
 pub const MRPACK_ENTRY: &str = "modrinth.index.json";
 
+/// CurseForge 惯例逻辑路径：`overrides/`（或 `override/`）只是格式外壳，其内容映射到包根。
+/// 保留目录树与拷贝都按逻辑路径匹配，避免同一目录以「壳内/壳外」两种路径重复出现。
+pub fn logical_rel(rel: &str) -> &str {
+    let lower = rel.to_lowercase();
+    for shell in ["overrides/", "override/"] {
+        if lower.starts_with(shell) {
+            return &rel[shell.len()..];
+        }
+    }
+    rel
+}
+
 /// 解析入口：按扩展名分派；任何失败都返回 parsed:false 的 manifest（不 panic）
 pub fn parse(path: &Path) -> ParsedPack {
     let file_name = path

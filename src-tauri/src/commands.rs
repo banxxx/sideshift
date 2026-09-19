@@ -126,26 +126,45 @@ pub fn default_options(state: S<'_>, manifest: PackManifest) -> ConversionOption
     }
 }
 
-/// 最近一次解析包内可保留的顶层目录（mods 之外，按文件数降序）
+/// 最近一次解析包内可保留的目录树（mods 之外；文件数递归统计，同层按名升序）
 #[tauri::command]
-pub fn list_pack_dirs(state: S<'_>) -> Vec<PackDirEntry> {
+pub fn list_pack_dirs(state: S<'_>) -> Vec<PackDirNode> {
     let Some(p) = last_parsed(&state) else {
         return Vec::new();
     };
-    let mut counts: std::collections::BTreeMap<String, u32> = Default::default();
-    for f in &p.extra_files {
-        let rel = f.path.replace('\\', "/");
-        if let Some(i) = rel.find('/') {
-            // mrpack 里 config 之外还有 pack.png 等根文件；只统计有顶层目录的
-            *counts.entry(rel[..i].to_lowercase()).or_default() += 1;
+
+    #[derive(Default)]
+    struct Node {
+        counts: u32,
+        children: std::collections::BTreeMap<String, Node>,
+    }
+    fn build(name: &str, node: &Node) -> PackDirNode {
+        PackDirNode {
+            name: name.to_string(),
+            file_count: node.counts,
+            // BTreeMap 迭代天然按 key 升序
+            children: node.children.iter().map(|(n, c)| build(n, c)).collect(),
         }
     }
-    let mut v: Vec<PackDirEntry> = counts
-        .into_iter()
-        .map(|(name, file_count)| PackDirEntry { name, file_count })
-        .collect();
-    v.sort_by(|a, b| b.file_count.cmp(&a.file_count).then(a.name.cmp(&b.name)));
-    v
+
+    let mut root = Node::default();
+    // mods 由「模组方案」卡管理；resourcepacks 是客户端资源，服务端不消费——都不进保留树；
+    // overrides/ 壳前缀剥离后再入树（CF 格式内容映射到包根，与拷贝口径一致）
+    const TREE_SKIP_TOP: &[&str] = &["mods", "resourcepacks"];
+    for f in &p.extra_files {
+        let rel = parser::logical_rel(&f.path.replace('\\', "/")).to_lowercase();
+        let segs: Vec<&str> = rel.split('/').collect();
+        // 末段是文件名；根文件（pack.png 等）无目录段，不入树
+        if segs.len() < 2 || TREE_SKIP_TOP.contains(&segs[0]) {
+            continue;
+        }
+        let mut cur = &mut root;
+        for seg in &segs[..segs.len() - 1] {
+            cur.counts += 1;
+            cur = cur.children.entry((*seg).to_string()).or_default();
+        }
+    }
+    root.children.iter().map(|(n, c)| build(n, c)).collect()
 }
 
 /* ---------------- 转换方案 ---------------- */

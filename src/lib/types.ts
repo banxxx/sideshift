@@ -89,16 +89,18 @@ export interface ConversionOptions {
     extraJvmArgs: string;
     /** 本次输出目录覆写（空=用全局设置） */
     outputOverride: string;
-    /** 原样带入服务端的包内顶层目录（config/kubejs/地图等） */
+    /** 原样带入服务端的包内目录：相对路径（任意层级），按前缀匹配拷贝 */
     keepDirs: string[];
 }
 
-/** 包内可保留的顶层目录（客户端保留目录卡行） */
-export interface PackDirEntry {
-    /** 目录名，如 kubejs */
+/** 包内可保留目录树节点（客户端保留目录弹窗数据源） */
+export interface PackDirNode {
+    /** 目录名（不含路径），如 client_scripts */
     name: string;
-    /** 目录内文件数（含子目录） */
+    /** 该目录内文件数（递归，含子目录） */
     fileCount: number;
+    /** 子目录节点，同层按名升序 */
+    children: PackDirNode[];
 }
 
 /** 流水线四阶段（Shift Rail 站点，对应 Rust core 四模块） */
