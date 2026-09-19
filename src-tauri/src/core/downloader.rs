@@ -147,7 +147,9 @@ impl Downloader {
 
     async fn download_one(&self, item: &ItemSpec) -> Result<(), DownloadError> {
         let cache = self.cache_path(item);
-        if !cache.exists() {
+        // 缓存复用前提：声明了 sha1 就必须与内容一致（不一致视作缓存损坏，重新获取）
+        let cache_hit = cache.exists() && self.verify_cache(item, &cache);
+        if !cache_hit {
             let bytes = match &item.fetch {
                 Fetch::ZipEntry { archive, entry } => read_zip_entry(archive, entry)?,
                 Fetch::Local(p) => std::fs::read(p).map_err(|e| DownloadError::Failed {
@@ -183,6 +185,16 @@ impl Downloader {
                     })?
                 }
             };
+            if let Some(expect) = &item.sha1 {
+                let got = sha1_hex(&bytes);
+                if !got.eq_ignore_ascii_case(expect) {
+                    return Err(DownloadError::Failed {
+                        file_name: item.file_name.clone(),
+                        attempts: 0,
+                        cause: format!("sha1 校验不一致（期望 {expect} · 实际 {got}）"),
+                    });
+                }
+            }
             if let Some(parent) = cache.parent() {
                 std::fs::create_dir_all(parent)?;
             }
@@ -198,6 +210,31 @@ impl Downloader {
             cause: format!("{e}（dest={}）", item.dest.display()),
         })?;
         Ok(())
+    }
+
+    /// 缓存文件与声明 sha1 是否一致（未声明视为可用；读取失败按不一致处理，触发重取）
+    fn verify_cache(&self, item: &ItemSpec, cache: &Path) -> bool {
+        let Some(expect) = &item.sha1 else {
+            return true;
+        };
+        let bytes = std::fs::read(cache).unwrap_or_default();
+        sha1_hex(&bytes).eq_ignore_ascii_case(expect)
+    }
+
+    /// Maven 系 URL 带伴生 `<jar>.sha1` 文本：为无校验值的条目 best-effort 补上
+    /// （Fabric meta 的 server/jar 端点无伴生文件，取不到则保持不校验）
+    pub async fn attach_side_sha1(&self, spec: &mut ItemSpec) {
+        if spec.sha1.is_some() {
+            return;
+        }
+        let Fetch::Url(url) = &spec.fetch else { return };
+        let Ok(bytes) = self.fetch_bytes(&format!("{url}.sha1")).await else {
+            return;
+        };
+        let text = String::from_utf8_lossy(&bytes).trim().to_ascii_lowercase();
+        if text.len() == 40 && text.chars().all(|c| c.is_ascii_hexdigit()) {
+            spec.sha1 = Some(text);
+        }
     }
 
     async fn fetch_bytes(&self, url: &str) -> Result<Vec<u8>, DownloadError> {
@@ -619,6 +656,14 @@ fn urlencoding(s: &str) -> String {
         }
     }
     out
+}
+
+/// sha1 → 小写 hex（mrpack/Modrinth/maven 的校验值口径均为 hex）
+fn sha1_hex(bytes: &[u8]) -> String {
+    use sha1::{Digest, Sha1};
+    let mut h = Sha1::new();
+    h.update(bytes);
+    h.finalize().iter().map(|b| format!("{b:02x}")).collect()
 }
 
 /// 简易 FNV-1a 哈希（无 sha1 时的缓存键；仅防碰撞用，非安全场景）

@@ -344,6 +344,8 @@ async fn run_pipeline(app: AppHandle, state: Arc<AppState>, id: String) {
 
     let mut items: Vec<ItemSpec> = Vec::new();
     let mut used_files: HashSet<usize> = HashSet::new();
+    // mods/ 落位文件名（大小写口径）：防不同目录同名 jar 静默互相覆盖
+    let mut used_names: HashSet<String> = HashSet::new();
     let mut server_jar_name: Option<String> = None;
     let mut installer_jar_name: Option<String> = None;
 
@@ -364,11 +366,12 @@ async fn run_pipeline(app: AppHandle, state: Arc<AppState>, id: String) {
             } else {
                 Fetch::Url(f.url.clone())
             };
+            let file_name = unique_mod_name(&mut used_names, &f.file_name, &row.id);
             items.push(ItemSpec {
                 fetch,
-                file_name: f.file_name.clone(),
                 sha1: f.sha1.clone(),
-                dest: mods_dir.join(&f.file_name),
+                dest: mods_dir.join(&file_name),
+                file_name,
             });
         } else if let Some(lp) = &row.local_path {
             // 本地 .jar：直接取本地文件
@@ -377,6 +380,7 @@ async fn run_pipeline(app: AppHandle, state: Arc<AppState>, id: String) {
                 .file_name()
                 .map(|s| s.to_string_lossy().to_string())
                 .unwrap_or_else(|| format!("{}.jar", sanitize(&row.id)));
+            let name = unique_mod_name(&mut used_names, &name, &row.id);
             items.push(ItemSpec {
                 fetch: Fetch::Local(lp),
                 file_name: name.clone(),
@@ -390,6 +394,7 @@ async fn run_pipeline(app: AppHandle, state: Arc<AppState>, id: String) {
                 .await
             {
                 Ok(mut spec) => {
+                    spec.file_name = unique_mod_name(&mut used_names, &spec.file_name, &row.id);
                     spec.dest = mods_dir.join(&spec.file_name);
                     items.push(spec);
                 }
@@ -440,7 +445,19 @@ async fn run_pipeline(app: AppHandle, state: Arc<AppState>, id: String) {
         });
     }
 
-    // 3.3 服务端加载器本体
+    // 3.3 服务端加载器本体（loader_version 为空会拼出无效坐标——前端已拦截，这里兜底）
+    if options.loader_version.trim().is_empty() {
+        fail(&app, &state, &id, TaskError {
+            stage: PipelineStage::Downloader,
+            title: "未选择加载器版本".into(),
+            detail: "裸 zip 包无法自动确定 Loader 版本，请在转换配置中选择后重试".into(),
+            retryable: false,
+            attempts: None,
+            log_tail: None,
+            exit_code: None,
+        });
+        return;
+    }
     match parsed.manifest.loader {
         LoaderKind::Fabric => {
             match dl.fabric_server_jar(&options.mc_version, &options.loader_version).await {
@@ -465,12 +482,15 @@ async fn run_pipeline(app: AppHandle, state: Arc<AppState>, id: String) {
         }
         LoaderKind::Forge => {
             let mut spec = dl.forge_installer(&options.mc_version, &options.loader_version);
+            // maven 伴生 .sha1：补上后走统一校验与 sha1 键缓存
+            dl.attach_side_sha1(&mut spec).await;
             installer_jar_name = Some(spec.file_name.clone());
             spec.dest = staging.join(&spec.file_name);
             items.push(spec);
         }
         LoaderKind::NeoForge => {
             let mut spec = dl.neoforge_installer(&options.loader_version);
+            dl.attach_side_sha1(&mut spec).await;
             installer_jar_name = Some(spec.file_name.clone());
             spec.dest = staging.join(&spec.file_name);
             items.push(spec);
@@ -538,7 +558,7 @@ async fn run_pipeline(app: AppHandle, state: Arc<AppState>, id: String) {
         .filter(|m| m.needs_review)
         .map(|m| m.name.clone())
         .collect();
-    let readme = build_readme(&plan, &counts, &review, parsed.manifest.loader, &options.keep_dirs);
+    let readme = build_readme(&plan, &counts, &review, parsed.manifest.loader, &options.keep_dirs, options.agree_eula);
     let build_state = state.clone();
     let build_app = app.clone();
     // 本次包的输出目录覆写：空则回落全局设置
@@ -551,6 +571,7 @@ async fn run_pipeline(app: AppHandle, state: Arc<AppState>, id: String) {
     let build_loader = parsed.manifest.loader;
     let build_id = id.clone();
     let build_output_name = output_name.clone();
+    let staging_path = staging.clone();
     let build_result = tokio::task::spawn_blocking(move || {
         update(&build_app, &build_state, &build_id, |t| t.progress = 90, false);
         builder::build(&BuildInput {
@@ -594,6 +615,8 @@ async fn run_pipeline(app: AppHandle, state: Arc<AppState>, id: String) {
         }
     };
     /* ---- 成功收尾 ---- */
+    // zip 已在输出目录生成，暂存目录即刻回收（文件本体留在 cache/files 供跨任务复用）
+    let _ = std::fs::remove_dir_all(&staging_path);
     let finished = now_ms();
     {
         let mut inner = state.inner.lock().unwrap();
@@ -669,12 +692,32 @@ fn sanitize(s: &str) -> String {
         .collect()
 }
 
+/// mods/ 唯一落位名：同名 jar（来自不同目录）第二份起追加方案 id，防静默覆盖
+fn unique_mod_name(used: &mut HashSet<String>, name: &str, id: &str) -> String {
+    if used.insert(name.to_lowercase()) {
+        return name.to_string();
+    }
+    let (stem, ext) = match name.rsplit_once('.') {
+        Some((s, e)) if !s.is_empty() => (s.to_string(), e.to_string()),
+        _ => (name.to_string(), "jar".to_string()),
+    };
+    let sid = sanitize(id);
+    let mut candidate = format!("{stem}-{sid}.{ext}");
+    let mut n = 2;
+    while !used.insert(candidate.to_lowercase()) {
+        candidate = format!("{stem}-{sid}-{n}.{ext}");
+        n += 1;
+    }
+    candidate
+}
+
 fn build_readme(
     plan: &[PlanMod],
     counts: &PlanCounts,
     review: &[String],
     loader: LoaderKind,
     keep_dirs: &[String],
+    agree_eula: bool,
 ) -> Vec<String> {
     let mut lines = vec![
         "SideShift 转换报告".to_string(),
@@ -682,10 +725,13 @@ fn build_readme(
         match loader {
             LoaderKind::Fabric => "Fabric 服务端：直接运行 start.bat / start.sh".to_string(),
             LoaderKind::Forge | LoaderKind::NeoForge => {
-                "Forge/NeoForge：start 脚本首次运行会自动执行 installServer（需要本机 Java），之后以 run 脚本启动".to_string()
+                "Forge/NeoForge：start 脚本首次运行会自动执行 installServer（需要本机 Java 与网络），届时生成 run.bat/run.sh 与服务器本体，之后以 run 脚本启动".to_string()
             }
         },
     ];
+    if !agree_eula {
+        lines.push("eula.txt 已生成但为 eula=false：首次启动前请改为 eula=true，否则服务端会拒绝启动".to_string());
+    }
     if !keep_dirs.is_empty() {
         lines.push(format!("已随包保留客户端目录：{}", keep_dirs.join("、")));
     }

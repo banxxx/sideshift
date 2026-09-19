@@ -78,15 +78,16 @@ fn one_line(s: &str) -> String {
 fn write_root_files(input: &BuildInput) -> Result<(), BuilderError> {
     let jvm = jvm_args(input.options);
     if input.options.generate_scripts {
+        // 脚本先锚定自身目录：从任意 cwd 调用（终端/计划任务）相对 jar 路径仍然有效
         let (bat, sh) = match input.loader {
             LoaderKind::Fabric => {
                 let jar = input.server_jar_name.as_deref().unwrap_or("server.jar");
                 let nogui = if input.options.nogui { " nogui" } else { "" };
                 (
                     format!(
-                        "@echo off\r\njava {jvm} -jar {jar}{nogui}\r\npause\r\n"
+                        "@echo off\r\ncd /d \"%~dp0\"\r\njava {jvm} -jar {jar}{nogui}\r\npause\r\n"
                     ),
-                    format!("#!/usr/bin/env bash\njava {jvm} -jar {jar}{nogui}\n"),
+                    format!("#!/usr/bin/env bash\ncd \"$(dirname \"$0\")\"\njava {jvm} -jar {jar}{nogui}\n"),
                 )
             }
             LoaderKind::Forge | LoaderKind::NeoForge => {
@@ -99,10 +100,10 @@ fn write_root_files(input: &BuildInput) -> Result<(), BuilderError> {
                 // 首次运行自动执行 installServer，之后用 installer 生成的 run 脚本启动
                 (
                     format!(
-                        "@echo off\r\nif not exist run.bat java -Xmx1G -jar {installer} --installServer\r\nif exist run.bat (call run.bat) else (echo 安装失败，请手动运行: java -jar {installer} --installServer & pause)\r\n"
+                        "@echo off\r\ncd /d \"%~dp0\"\r\nif not exist run.bat java -Xmx1G -jar {installer} --installServer\r\nif exist run.bat (call run.bat) else (echo 安装失败，请手动运行: java -jar {installer} --installServer & pause)\r\n"
                     ),
                     format!(
-                        "#!/usr/bin/env bash\n[ -f run.sh ] || java -Xmx1G -jar {installer} --installServer\nbash run.sh\n"
+                        "#!/usr/bin/env bash\ncd \"$(dirname \"$0\")\"\n[ -f run.sh ] || java -Xmx1G -jar {installer} --installServer\nbash run.sh\n"
                     ),
                 )
             }
@@ -110,12 +111,14 @@ fn write_root_files(input: &BuildInput) -> Result<(), BuilderError> {
         std::fs::write(input.staging.join("start.bat"), bat)?;
         std::fs::write(input.staging.join("start.sh"), sh)?;
     }
-    if input.options.agree_eula {
-        std::fs::write(
-            input.staging.join("eula.txt"),
-            "# 由 SideShift 按用户设置写入（eula=同意 Mojang 服务端最终用户协议）\neula=true\n",
-        )?;
-    }
+    // eula.txt 恒生成：开关只决定值（false 时服务端拒启，用户按 README 手改 true）
+    std::fs::write(
+        input.staging.join("eula.txt"),
+        format!(
+            "# eula=true 表示同意 Mojang 服务端最终用户协议（由 SideShift 按开关写入）\neula={}\n",
+            if input.options.agree_eula { "true" } else { "false" }
+        ),
+    )?;
     if !input.staging.join("server.properties").exists() {
         let o = input.options;
         // 枚举字段白名单收口，防脏值写入属性文件
@@ -128,6 +131,7 @@ fn write_root_files(input: &BuildInput) -> Result<(), BuilderError> {
             _ => "easy",
         };
         let mut props = String::from("# 由 SideShift 按转换配置生成，可按需修改\n");
+        // UI 开关/下拉驱动的高频字段
         props.push_str(&format!("online-mode={}\n", o.online_mode));
         props.push_str(&format!("server-port={}\n", o.server_port));
         props.push_str(&format!("motd={}\n", one_line(&o.motd)));
@@ -137,7 +141,56 @@ fn write_root_files(input: &BuildInput) -> Result<(), BuilderError> {
         if !o.level_seed.trim().is_empty() {
             props.push_str(&format!("level-seed={}\n", one_line(o.level_seed.trim())));
         }
-        props.push_str("view-distance=10\nsimulation-distance=10\n");
+        // 其余按 vanilla 常用默认值给全（缺失键服务端首启也会自动补齐，这里给的是可读的完整模板）
+        props.push_str(&format!(
+            "\
+level-name=world
+server-ip=
+pvp=true
+allow-flight=false
+allow-nether=true
+white-list=false
+enforce-whitelist=false
+hardcore=false
+force-gamemode=false
+level-type=default
+generate-structures=true
+spawn-npcs=true
+spawn-animals=true
+spawn-monsters=true
+spawn-protection=16
+enable-command-block=false
+function-permission-level=2
+op-permission-level=4
+network-compression-threshold=256
+player-idle-timeout=0
+max-tick-time=60000
+entity-broadcast-range-percentage=100
+sync-chunk-writes=true
+use-native-transport=true
+prevent-proxy-connections=false
+enable-status=true
+broadcast-console-to-ops=true
+broadcast-rcon-to-ops=true
+enable-jmx-monitoring=false
+log-ips=true
+snooper-enabled=true
+enable-query=false
+query.port={}
+enable-rcon=false
+rcon.port=25575
+rcon.password=
+resource-pack=
+resource-pack-sha1=
+require-resource-pack=false
+initial-enabled-packs=vanilla
+initial-disabled-packs=
+text-filtering-config=
+view-distance=10
+simulation-distance=10
+",
+            o.server_port
+        ));
         std::fs::write(input.staging.join("server.properties"), props)?;
     }
     if !input.readme_lines.is_empty() {
@@ -165,7 +218,13 @@ fn zip_dir(
         if path.is_dir() {
             zip_dir(zip, root, &path, opts)?;
         } else {
-            zip.start_file(&rel, *opts)?;
+            // zip 默认不携带 unix 权限（解压后 644），shell 脚本需补执行位
+            let file_opts = if rel.to_lowercase().ends_with(".sh") {
+                opts.unix_permissions(0o755)
+            } else {
+                *opts
+            };
+            zip.start_file(&rel, file_opts)?;
             let mut f = File::open(&path)?;
             std::io::copy(&mut f, zip)?;
         }

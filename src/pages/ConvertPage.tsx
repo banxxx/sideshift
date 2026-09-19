@@ -49,6 +49,9 @@ import {
 import { DirPickerModal, OnlineAddModal, PlanListModal, type ListFocus } from "@/components/features/convert-modals";
 import { cn } from "@/lib/utils";
 
+/** 服务端推荐保留目录：包树顶层探测到即预勾选（小写比对） */
+const KEEP_DIR_PRESETS = ["config", "defaultconfigs", "kubejs"];
+
 /** VersionOption → 下拉项（group/recommended 透传，供分组与「推荐」标记） */
 const toOption = (v: VersionOption): SelectOption => ({
     value: v.value,
@@ -120,16 +123,24 @@ export function ConvertPage() {
     const [dirModalOpen, setDirModalOpen] = useState(false);
 
     // 进入页面：默认选项（以包的 MC 版本为准）+ 模组方案 + 版本下拉数据
+    // keepDirs 预勾选：与目录树一并加载后探测包内存在的推荐目录；用户已有选择则不覆盖
     useEffect(() => {
         if (!manifest) return;
-        void api
-            .defaultOptions(manifest)
-            .then((o) => setOptions({ ...o, mcVersion: manifest.mcVersion }));
+        void Promise.all([api.defaultOptions(manifest), api.listPackDirs()]).then(([o, nodes]) => {
+            setPackDirs(nodes);
+            const present = KEEP_DIR_PRESETS.filter((name) =>
+                nodes.some((n) => n.name.toLowerCase() === name)
+            );
+            setOptions({
+                ...o,
+                mcVersion: manifest.mcVersion,
+                keepDirs: o.keepDirs.length ? o.keepDirs : present,
+            });
+        });
         void api.getPlan().then(setPlan);
         void api.listMcVersions().then((l) => setMcOptions(l.map(toOption)));
         void api.listJavaVersions().then((l) => setJavaOptions(l.map(toOption)));
         void api.getSettings().then(setSettings);
-        void api.listPackDirs().then(setPackDirs);
     }, [manifest]);
 
     // MC 版本变更 → 重新拉取该版本可用的加载器版本
@@ -138,6 +149,14 @@ export function ConvertPage() {
         if (!mcVersion) return;
         void api.listLoaderVersions(mcVersion).then((l) => setLoaderOptions(l.map(toOption)));
     }, [mcVersion]);
+
+    // 裸 zip 无 dependencies 段 → loaderVersion 为空；列表到位后回落推荐项（无推荐取首项），用户可再改
+    const loaderVersion = options?.loaderVersion;
+    useEffect(() => {
+        if (loaderVersion || loaderOptions.length === 0) return;
+        const rec = loaderOptions.find((o) => o.recommended) ?? loaderOptions[0];
+        setOptions((o) => (o && !o.loaderVersion ? { ...o, loaderVersion: rec.value } : o));
+    }, [loaderVersion, loaderOptions]);
 
     /** 当前生效方案：原始方案 + 本页新增，套用用户改动，剔除被取消的新增项 */
     const mods = useMemo(() => {
@@ -740,7 +759,7 @@ export function ConvertPage() {
                         <Btn
                             variant="primary"
                             full
-                            disabled={!options || starting}
+                            disabled={!options || starting || !options.loaderVersion.trim()}
                             onClick={() => void start()}
                         >
                             {starting ? "创建任务中…" : "开始转换"}
@@ -750,7 +769,9 @@ export function ConvertPage() {
                             返回首页
                         </Btn>
                         <p className="w-full text-center text-[10px] leading-[14px] font-normal text-text-3">
-                            转换过程可随时取消，已下载依赖自动缓存复用
+                            {options && !options.loaderVersion.trim()
+                                ? "正在获取 Loader 版本列表，选定后方可开始转换"
+                                : "转换过程可随时取消，已下载依赖自动缓存复用"}
                         </p>
                     </Panel>
                 </motion.aside>

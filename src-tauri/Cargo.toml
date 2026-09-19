@@ -32,6 +32,7 @@ futures = "0.3"
 chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
 uuid = { version = "1", features = ["v4"] }
 thiserror = "2"
+sha1 = "0.10"
 
 
 # Read the optimization guideline for more details: https://tauri.app/concept/size/#cargo-configuration
