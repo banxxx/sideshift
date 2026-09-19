@@ -30,6 +30,7 @@ pub fn run() {
             commands::search_mods,
             commands::list_mod_versions,
             commands::list_mod_categories,
+            commands::estimate_download,
             commands::start_conversion,
             commands::list_tasks,
             commands::get_task,

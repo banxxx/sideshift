@@ -58,6 +58,8 @@ pub struct ItemSpec {
     pub sha1: Option<String>,
     /// 最终落盘绝对路径（含文件名）
     pub dest: PathBuf,
+    /// 源文件大小（字节）；0 = 未知。构建不消费此字段，仅供下载量预估聚合
+    pub size_bytes: u64,
 }
 
 impl ItemSpec {
@@ -221,20 +223,58 @@ impl Downloader {
         sha1_hex(&bytes).eq_ignore_ascii_case(expect)
     }
 
+    /// 该条目是否已在下载缓存（仅存在性判断，不重算哈希——预估宁可少扣不误报）
+    pub fn is_cached(&self, item: &ItemSpec) -> bool {
+        self.cache_path(item).exists()
+    }
+
+    /// HEAD 取 Content-Length（下载量预估的兜底大小来源）；进程级缓存，
+    /// 预估随方案编辑高频触发，同一坐标的大小不会变
+    pub async fn head_size(&self, url: &str) -> Option<u64> {
+        use std::collections::HashMap;
+        use std::sync::{Mutex, OnceLock};
+        static SIZES: OnceLock<Mutex<HashMap<String, u64>>> = OnceLock::new();
+        let cache = SIZES.get_or_init(Default::default);
+        if let Some(s) = cache.lock().unwrap().get(url) {
+            return Some(*s);
+        }
+        let resp = self.client.head(url).send().await.ok()?;
+        let len = resp.content_length()?;
+        if len > 0 {
+            cache.lock().unwrap().insert(url.to_string(), len);
+        }
+        Some(len)
+    }
+
     /// Maven 系 URL 带伴生 `<jar>.sha1` 文本：为无校验值的条目 best-effort 补上
-    /// （Fabric meta 的 server/jar 端点无伴生文件，取不到则保持不校验）
+    /// （Fabric meta 的 server/jar 端点无伴生文件，取不到则保持不校验）。
+    /// 结果（含未命中）进进程级缓存：预估命令随方案编辑高频调用，同坐标伴生值不变。
     pub async fn attach_side_sha1(&self, spec: &mut ItemSpec) {
+        use std::collections::HashMap;
+        use std::sync::{Mutex, OnceLock};
+        static SIDES: OnceLock<Mutex<HashMap<String, Option<String>>>> = OnceLock::new();
         if spec.sha1.is_some() {
             return;
         }
         let Fetch::Url(url) = &spec.fetch else { return };
-        let Ok(bytes) = self.fetch_bytes(&format!("{url}.sha1")).await else {
+        let cache = SIDES.get_or_init(Default::default);
+        if let Some(hit) = cache.lock().unwrap().get(url.as_str()) {
+            spec.sha1 = hit.clone();
             return;
-        };
-        let text = String::from_utf8_lossy(&bytes).trim().to_ascii_lowercase();
-        if text.len() == 40 && text.chars().all(|c| c.is_ascii_hexdigit()) {
-            spec.sha1 = Some(text);
         }
+        let found = match self.fetch_bytes(&format!("{url}.sha1")).await {
+            Ok(bytes) => {
+                let text = String::from_utf8_lossy(&bytes).trim().to_ascii_lowercase();
+                if text.len() == 40 && text.chars().all(|c| c.is_ascii_hexdigit()) {
+                    Some(text)
+                } else {
+                    None
+                }
+            }
+            Err(_) => None,
+        };
+        cache.lock().unwrap().insert(url.clone(), found.clone());
+        spec.sha1 = found;
     }
 
     async fn fetch_bytes(&self, url: &str) -> Result<Vec<u8>, DownloadError> {
@@ -451,6 +491,7 @@ impl Downloader {
                     file_name: file["filename"].as_str().unwrap_or("mod.jar").to_string(),
                     sha1: file["hashes"]["sha1"].as_str().map(String::from),
                     dest: PathBuf::new(), // 由调用方补目标路径
+                    size_bytes: file["size"].as_u64().unwrap_or(0),
                 });
             }
         }
@@ -633,6 +674,7 @@ impl Downloader {
             file_name: format!("fabric-server-mc.{game}.{loader}.{installer}.jar"),
             sha1: None,
             dest: PathBuf::new(),
+            size_bytes: 0,
         })
     }
 
@@ -646,6 +688,7 @@ impl Downloader {
             file_name: format!("forge-{full}-installer.jar"),
             sha1: None,
             dest: PathBuf::new(),
+            size_bytes: 0,
         }
     }
 
@@ -658,6 +701,7 @@ impl Downloader {
             file_name: format!("neoforge-{neoforge_version}-installer.jar"),
             sha1: None,
             dest: PathBuf::new(),
+            size_bytes: 0,
         }
     }
 }

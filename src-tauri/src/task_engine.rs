@@ -359,6 +359,7 @@ async fn run_pipeline(app: AppHandle, state: Arc<AppState>, id: String) {
                 sha1: p.sha1.clone(),
                 dest: mods_dir.join(&file_name),
                 file_name,
+                size_bytes: row.size_bytes,
             });
             continue;
         }
@@ -369,7 +370,9 @@ async fn run_pipeline(app: AppHandle, state: Arc<AppState>, id: String) {
             .find(|(i, f)| !used_files.contains(i) && split_mod_file(&f.file_name).0 == row.id);
         if let Some((i, f)) = matched {
             used_files.insert(i);
-            let fetch = if f.url.is_empty() {
+            // 物理在包内一律 ZipEntry 直取（mrpack index 几乎总带 URL，不能以 URL 定夺）；
+            // 仅「index 声明但包内缺字节」的残缺条目回落 URL 补下
+            let fetch = if f.in_pack || f.url.is_empty() {
                 Fetch::ZipEntry {
                     archive: source_path.clone(),
                     entry: f.path.clone(),
@@ -383,6 +386,7 @@ async fn run_pipeline(app: AppHandle, state: Arc<AppState>, id: String) {
                 sha1: f.sha1.clone(),
                 dest: mods_dir.join(&file_name),
                 file_name,
+                size_bytes: f.size_bytes,
             });
         } else if let Some(lp) = &row.local_path {
             // 本地 .jar：直接取本地文件
@@ -392,11 +396,13 @@ async fn run_pipeline(app: AppHandle, state: Arc<AppState>, id: String) {
                 .map(|s| s.to_string_lossy().to_string())
                 .unwrap_or_else(|| format!("{}.jar", sanitize(&row.id)));
             let name = unique_mod_name(&mut used_names, &name, &row.id);
+            let lp_size = std::fs::metadata(&lp).map(|m| m.len()).unwrap_or(0);
             items.push(ItemSpec {
                 fetch: Fetch::Local(lp),
                 file_name: name.clone(),
                 sha1: None,
                 dest: mods_dir.join(name),
+                size_bytes: lp_size,
             });
         } else {
             // 外部新增：Modrinth 解析最新兼容构建
@@ -440,7 +446,7 @@ async fn run_pipeline(app: AppHandle, state: Arc<AppState>, id: String) {
             continue;
         }
         let dest = staging.join(logical);
-        let fetch = if f.url.is_empty() {
+        let fetch = if f.in_pack || f.url.is_empty() {
             Fetch::ZipEntry {
                 archive: source_path.clone(),
                 entry: f.path.clone(),
@@ -453,6 +459,7 @@ async fn run_pipeline(app: AppHandle, state: Arc<AppState>, id: String) {
             file_name: f.file_name.clone(),
             sha1: f.sha1.clone(),
             dest,
+            size_bytes: f.size_bytes,
         });
     }
 

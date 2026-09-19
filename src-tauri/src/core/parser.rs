@@ -1,7 +1,7 @@
 //! 整合包解析：.mrpack 精确解析（modrinth.index.json）；裸 .zip 启发式扫描 mods/ 目录。
 //!
 //! mrpack 规范口径：顶层 `game` 恒为游戏 ID（"minecraft"），MC 版本在 `dependencies.minecraft`；
-//! `files[]` 中 downloads 为空的条目是"包内自带"（local）文件，同样计入模组。
+//! `files[]` 条目应全部物理内嵌于 zip——以 zip 条目实测判定 `in_pack`，缺字节的残缺条目才回落 URL 下载。
 
 use std::collections::BTreeMap;
 use std::fs::File;
@@ -22,8 +22,11 @@ pub struct PackFile {
     pub url: String,
     /// files[].hashes.sha1，用作缓存键
     pub sha1: Option<String>,
-    /// 原始文件大小（字节）：index.fileSize 或 zip 条目大小；0 = 未知
+    /// 原始文件大小（字节）：zip 条目实测大小优先，缺失时 index.fileSize；0 = 未知
     pub size_bytes: u64,
+    /// 物理条目是否在源 zip 内（mrpack 规范要求 index 文件全部内嵌）。
+    /// true = 构建时 ZipEntry 直取、不产生网络流量；false = index 声明了但包里没有，需按 URL 补下
+    pub in_pack: bool,
     /// env.server != unsupported
     pub server_required: bool,
     /// 条目是否声明了 env 段（声明则按 env 精确判定，否则走名称启发式）
@@ -187,22 +190,36 @@ fn parse_mrpack(path: &Path) -> Result<ParsedPack, String> {
         .cloned()
         .unwrap_or_default();
 
+    // 物理条目表（条目名 → 解压后大小）：判 index 行 in_pack，兼作未声明文件的补收遍历
+    let mut entry_sizes: BTreeMap<String, u64> = BTreeMap::new();
+    for i in 0..archive.len() {
+        if let Ok(ent) = archive.by_index(i) {
+            if !ent.is_dir() {
+                entry_sizes.insert(ent.name().to_string(), ent.size());
+            }
+        }
+    }
+
     let mut mod_files = Vec::new();
     let mut extra_files = Vec::new();
     for f in &index.files {
-        let file_name = Path::new(&f.path)
+        let norm_path = f.path.replace('\\', "/");
+        let file_name = Path::new(&norm_path)
             .file_name()
             .map(|s| s.to_string_lossy().to_string())
-            .unwrap_or_else(|| f.path.clone());
+            .unwrap_or_else(|| norm_path.clone());
         let server_side = f.env.as_ref().and_then(|e| e.server.as_deref());
+        // index 声明但物理缺失（残缺包）→ in_pack=false，构建时按 URL 补下载
+        let entry_size = entry_sizes.get(&norm_path).copied();
         // downloads 为空 = 包内自带（local）文件：同样计入模组与方案，
         // 构建时由流水线经 Fetch::ZipEntry 直接从源包抽取，不联网
         let pf = PackFile {
-            path: f.path.clone(),
+            path: norm_path,
             file_name,
             url: f.downloads.first().cloned().unwrap_or_default(),
             sha1: f.hashes.get("sha1").cloned(),
-            size_bytes: f.file_size.unwrap_or(0),
+            size_bytes: entry_size.or(f.file_size).unwrap_or(0),
+            in_pack: entry_size.is_some(),
             server_required: server_side != Some("unsupported"),
             env_declared: f.env.as_ref().and_then(|e| e.server.clone()).is_some(),
             depends: f
@@ -226,12 +243,7 @@ fn parse_mrpack(path: &Path) -> Result<ParsedPack, String> {
         .iter()
         .map(|f| f.path.replace('\\', "/"))
         .collect();
-    for i in 0..archive.len() {
-        let ent = archive.by_index(i).map_err(|e| e.to_string())?;
-        if ent.is_dir() {
-            continue;
-        }
-        let name = ent.name().to_string();
+    for (name, size) in entry_sizes {
         let lower = name.to_lowercase();
         if lower == MRPACK_ENTRY || declared.contains(&name) {
             continue;
@@ -252,7 +264,8 @@ fn parse_mrpack(path: &Path) -> Result<ParsedPack, String> {
                     file_name,
                     url: String::new(),
                     sha1: None,
-                    size_bytes: ent.size(),
+                    size_bytes: size,
+                    in_pack: true,
                     server_required: true,
                     env_declared: false,
                     depends: Vec::new(),
@@ -268,7 +281,8 @@ fn parse_mrpack(path: &Path) -> Result<ParsedPack, String> {
             file_name,
             url: String::new(), // 物理存在于源包：构建时 Fetch::ZipEntry 直接抽取
             sha1: None,
-            size_bytes: ent.size(),
+            size_bytes: size,
+            in_pack: true,
             server_required: true,
             env_declared: false,
             depends: Vec::new(),
@@ -357,6 +371,7 @@ fn parse_plain_zip(path: &Path) -> Result<ParsedPack, String> {
                 url: String::new(), // 裸包无下载源：downloader 将按名称在 Modrinth 反查
                 sha1: None,
                 size_bytes: *size,
+                in_pack: true, // 裸 zip 的 jar 全部物理在包内
                 server_required: true,
                 env_declared: false,
                 depends: Vec::new(),
@@ -372,6 +387,7 @@ fn parse_plain_zip(path: &Path) -> Result<ParsedPack, String> {
                     url: String::new(),
                     sha1: None,
                     size_bytes: *size,
+                    in_pack: true,
                     server_required: true,
                     env_declared: false,
                     depends: Vec::new(),

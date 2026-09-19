@@ -7,6 +7,7 @@ import type {
     ConversionOptions,
     ConversionReport,
     ConversionTask,
+    DownloadEstimate,
     ModSearchPage,
     ModSearchQuery,
     ModVersionEntry,
@@ -142,6 +143,23 @@ export const mockPlanCounts = {
     keep: mockPlanMods.filter((m) => m.disposition === "keep").length,
     add: mockPlanMods.filter((m) => m.disposition === "add").length,
 };
+
+/** 下载量预估（浏览器 dev 兜底）：行聚合 + 加载器经验值；真实缓存扣减/HEAD 实测只在 Rust 侧 */
+export async function mockEstimateDownload(
+    plan: PlanMod[],
+    options: ConversionOptions
+): Promise<DownloadEstimate> {
+    await new Promise((r) => setTimeout(r, 120));
+    let downloadBytes = 0;
+    let fromPackBytes = 0;
+    for (const m of plan) {
+        if (m.disposition === "remove") continue;
+        if (m.needsDownload) downloadBytes += m.sizeBytes ?? 0;
+        else fromPackBytes += m.sizeBytes ?? 0;
+    }
+    downloadBytes += options.loaderVersion ? (options.mcVersion === "1.20.1" ? 12_000_000 : 25_000_000) : 0;
+    return { downloadBytes, fromPackBytes, complete: true };
+}
 
 /** MC 版本下拉 */
 export const mockMcVersions: VersionOption[] = [

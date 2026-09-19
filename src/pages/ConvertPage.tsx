@@ -6,18 +6,20 @@
  *
  * 模组方案的处置编辑模型：
  *  - plan（后端/mock 给的原始方案）+ extras（本页新增的模组）为数据源
- *  - overrides 记录用户对 remove/keep 的改动，removedAdds 记录被取消勾选的新增项
- *  - 计数与摘要卡一律由这三者派生，保证「Tab 计数 = 摘要计数 = 实际方案」不漂移
+ *  - overrides 记录用户对 remove/keep 的改动；disabledIds 记录被停用的新增行（行保留、不构建）
+ *  - 计数/摘要/下发后端的方案一律由 plan+extras+overrides+disabledIds 派生，保证口径不漂移
  */
 import { AlertTriangle, Archive, ChevronRight, Download, File, Folder, Globe, Info, Layers, Plus, X } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { AnimatePresence, motion, type Variants } from "motion/react";
 import * as api from "@/lib/api";
 import { useNavigation } from "@/lib/navigation";
+import { notify } from "@/lib/notify";
 import { formatSize, loaderLabel, outputNameOf, truncateMiddle } from "@/lib/format";
 import type {
     AppSettings,
     ConversionOptions,
+    DownloadEstimate,
     ModDisposition,
     ModSearchResult,
     ModVersionEntry,
@@ -68,9 +70,10 @@ function findDirNode(nodes: PackDirNode[], path: string): PackDirNode | undefine
     return n.children.length ? findDirNode(n.children, rest.join("/")) : undefined;
 }
 
-/** 卡片内直接展示的行数：卡高 280 下头部+gap+底部出口外，行区（行 20 + 距 14）
- *  在新增态（出口 36px 最高）恰好放得下 5 行；第 6 行需 190px 会被 overflow 裁切。
- *  撤销条/依赖警告出现时行区压缩，超出部分同样裁掉，其余走「查看全部」弹窗 */
+/** 卡片内直接展示的行数：卡高 280（内容 240 = p-5 后）− 头 36 − 距 14 = 190 给行区。
+ *  行区内部按「行 5×20 + 距 4×10 + 间 10 + 出口（18~32）」≤ 182 排布，出口钉在行区底，
+ *  余量只落在列表与出口之间；依赖警告出现时压缩行区（仅行可收缩裁切），
+ *  其余走「查看全部」弹窗 */
 const PREVIEW_ROWS = 5;
 
 /** 页面入场：容器管节奏，各卡依次上浮（与 Home idle 分支同一支弹簧手感） */
@@ -105,9 +108,8 @@ export function ConvertPage() {
     const [plan, setPlan] = useState<PlanMod[]>([]);
     const [extras, setExtras] = useState<PlanMod[]>([]);
     const [overrides, setOverrides] = useState<Record<string, ModDisposition>>({});
-    const [removedAdds, setRemovedAdds] = useState<string[]>([]);
-    /** 最近被取消勾选的新增项：给依赖警告 + 撤销出口（自动补齐项文案更重） */
-    const [dropped, setDropped] = useState<PlanMod | null>(null);
+    /** 被停用的新增行 id：取消勾选=停用（行保留在清单，不参与构建），替代旧的「移除+撤销」链路 */
+    const [disabledIds, setDisabledIds] = useState<Set<string>>(() => new Set());
     const [tab, setTab] = useState<ModDisposition>("remove");
     const [mcOptions, setMcOptions] = useState<SelectOption[]>([]);
     const [loaderOptions, setLoaderOptions] = useState<SelectOption[]>([]);
@@ -158,45 +160,90 @@ export function ConvertPage() {
         setOptions((o) => (o && !o.loaderVersion ? { ...o, loaderVersion: rec.value } : o));
     }, [loaderVersion, loaderOptions]);
 
-    /** 当前生效方案：原始方案 + 本页新增，套用用户改动，剔除被取消的新增项 */
+    /** 当前展示方案：原始方案 + 本页新增（同 id 以新增行为准，避免双行），套用处置与停用标记 */
     const mods = useMemo(() => {
-        return [...plan, ...extras]
-            .filter((m) => !removedAdds.includes(m.id))
-            .map((m) => ({ ...m, disposition: overrides[m.id] ?? m.disposition }));
-    }, [plan, extras, overrides, removedAdds]);
+        const extraIds = new Set(extras.map((m) => m.id));
+        return [...plan.filter((m) => !extraIds.has(m.id)), ...extras].map((m) => {
+            const disposition = overrides[m.id] ?? m.disposition;
+            const disabled = disposition === "add" && disabledIds.has(m.id);
+            return { ...m, disposition, ...(disabled ? { disabled: true } : {}) };
+        });
+    }, [plan, extras, overrides, disabledIds]);
+
+    /** 参与构建的行（停用行除外）：计数、预下载聚合、下发后端的方案都用它 */
+    const activeMods = useMemo(() => mods.filter((m) => !m.disabled), [mods]);
 
     const counts = useMemo(
         () => ({
-            remove: mods.filter((m) => m.disposition === "remove").length,
-            keep: mods.filter((m) => m.disposition === "keep").length,
-            add: mods.filter((m) => m.disposition === "add").length,
+            remove: activeMods.filter((m) => m.disposition === "remove").length,
+            keep: activeMods.filter((m) => m.disposition === "keep").length,
+            // add = 生效新增数（停用不计）；addTotal = 清单行数（弹窗「查看全部」口径）
+            add: activeMods.filter((m) => m.disposition === "add").length,
+            addTotal: mods.filter((m) => m.disposition === "add").length,
         }),
-        [mods]
+        [activeMods, mods]
     );
 
-    /** 预下载真实聚合：联网行按源 fileSize 求和，包内直取行单列；加载器按固定经验值计入下载 */
-    const downloadEstimate = useMemo(() => {
-        let download = 0;
-        let fromPack = 0;
-        for (const m of mods) {
+    /** 本地兜底聚合（后端答不上来时展示）：联网行按源 fileSize 求和 */
+    const localEstimate = useMemo<DownloadEstimate>(() => {
+        let downloadBytes = 0;
+        let fromPackBytes = 0;
+        for (const m of activeMods) {
             if (m.disposition === "remove") continue;
-            if (m.needsDownload) download += m.sizeBytes ?? 0;
-            else fromPack += m.sizeBytes ?? 0;
+            if (m.needsDownload) downloadBytes += m.sizeBytes ?? 0;
+            else fromPackBytes += m.sizeBytes ?? 0;
         }
         // 加载器本体：Fabric 一体化 server jar 约 25MB，Forge/NeoForge installer 约 12MB
-        download += manifest?.loader === "fabric" ? 25_000_000 : 12_000_000;
-        return { download, fromPack };
-    }, [mods, manifest]);
+        downloadBytes += manifest?.loader === "fabric" ? 25_000_000 : 12_000_000;
+        return { downloadBytes, fromPackBytes, complete: false };
+    }, [activeMods, manifest]);
 
-    /** 反向依赖警告：保留/新增项依赖了被剔除的行（mrpack depends 元数据，按缺失项聚合） */
+    /** 后端预估（estimate_download，与构建同源：缓存扣减 + HEAD 实测），到位前用 localEstimate */
+    const [remoteEstimate, setRemoteEstimate] = useState<DownloadEstimate | null>(null);
+
+    /** 预估指纹：影响下载分类/大小的字段全列入，任一变化即重新防抖请求 */
+    const estimateKey = useMemo(() => {
+        const rows = activeMods
+            .filter((m) => m.disposition !== "remove")
+            .map(
+                (m) =>
+                    `${m.id}|${m.disposition}|${m.sizeBytes ?? 0}|${m.needsDownload ? 1 : 0}|${m.localPath ?? ""}|${m.pinned?.url ?? ""}`
+            )
+            .join(";");
+        return `${rows}#${options?.mcVersion}#${options?.loaderVersion}#${(options?.keepDirs ?? []).join(",")}`;
+    }, [activeMods, options?.mcVersion, options?.loaderVersion, options?.keepDirs]);
+
+    // 350ms 防抖向后端要真实预估；加载器版本未定时不发请求（构建期必失败，数字无意义）
+    useEffect(() => {
+        if (!options || !options.loaderVersion.trim()) {
+            setRemoteEstimate(null);
+            return;
+        }
+        let stale = false;
+        const timer = setTimeout(() => {
+            void api
+                .estimateDownload(activeMods, options)
+                .then((e) => !stale && setRemoteEstimate(e))
+                .catch(() => {}); // 失败保留前值，回落不闪烁
+        }, 350);
+        return () => {
+            stale = true;
+            clearTimeout(timer);
+        };
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [estimateKey]);
+
+    const estimate = remoteEstimate ?? localEstimate;
+
+    /** 反向依赖警告：生效行依赖了被剔除或被停用的行（mrpack depends 元数据，按缺失项聚合） */
     const depWarnings = useMemo(() => {
         const byId = new Map(mods.map((m) => [m.id, m]));
         const groups = new Map<string, { missing: PlanMod; hosts: PlanMod[] }>();
-        for (const m of mods) {
+        for (const m of activeMods) {
             if (m.disposition === "remove") continue;
             for (const d of m.depends ?? []) {
                 const t = byId.get(d);
-                if (t && t.disposition === "remove") {
+                if (t && (t.disposition === "remove" || t.disabled)) {
                     const g = groups.get(d) ?? { missing: t, hosts: [] };
                     g.hosts.push(m);
                     groups.set(d, g);
@@ -204,7 +251,7 @@ export function ConvertPage() {
             }
         }
         return [...groups.values()];
-    }, [mods]);
+    }, [mods, activeMods]);
 
     /** 本地 .jar 添加的模组 id（徽章显示「本地」而非「推荐」） */
     const localIds = useMemo(
@@ -220,65 +267,114 @@ export function ConvertPage() {
         patch({ keepDirs: (options?.keepDirs ?? []).filter((d) => d !== name) });
     };
 
-    /** 新增项取消勾选 = 从方案移除，并留下可撤销的提示条 */
-    const dropAdded = (m: PlanMod) => {
-        setRemovedAdds((ids) => [...ids, m.id]);
-        setDropped(m);
+    /** 新增行勾选 = 是否生效：取消勾选只停用（行保留在清单），自动补齐项停用另给全局警告 */
+    const toggleAddActive = (m: PlanMod) => {
+        const disable = !m.disabled;
+        setDisabledIds((s) => {
+            const next = new Set(s);
+            if (disable) next.add(m.id);
+            else next.delete(m.id);
+            return next;
+        });
+        if (disable && m.autoSupplement) {
+            notify(
+                `已停用 ${m.name}：服务端必需前置，缺失可能导致依赖它的模组失效`,
+                "warn"
+            );
+        }
     };
 
-    const undoDrop = (m: PlanMod) => {
-        setRemovedAdds((ids) => ids.filter((id) => id !== m.id));
-        setDropped(null);
+    /** 显式删除仅限用户自行添加的行（extras）；系统补行只能停用不能抹掉。
+     *  删除刻意不发全局提示：高频操作会刷屏，行消失本身就是反馈 */
+    const removeRow = (m: PlanMod) => {
+        setExtras((e) => e.filter((x) => x.id !== m.id));
+        setDisabledIds((s) => {
+            if (!s.has(m.id)) return s;
+            const next = new Set(s);
+            next.delete(m.id);
+            return next;
+        });
     };
+
+    /** 本页新增行的 id 集合（区分用户添加行与系统补行，决定 × 是否出现） */
+    const extrasIds = useMemo(() => new Set(extras.map((m) => m.id)), [extras]);
 
     const addLocal = async () => {
         const path = await api.pickJarFile();
         if (!path) return;
         const fileName = path.split(/[\\/]/).pop() ?? path;
-        setExtras((e) => [
-            ...e,
-            {
-                id: `local-${fileName}`,
-                name: fileName.replace(/\.jar$/i, ""),
-                version: fileName,
-                disposition: "add",
-                clientOnly: false,
-                needsReview: false,
-                autoSupplement: false,
-                needsDownload: false,
-                localPath: path,
-            },
-        ]);
+        const id = `local-${fileName}`;
+        const row: PlanMod = {
+            id,
+            name: fileName.replace(/\.jar$/i, ""),
+            version: fileName,
+            disposition: "add",
+            clientOnly: false,
+            needsReview: false,
+            autoSupplement: false,
+            needsDownload: false,
+            localPath: path,
+        };
+        // 同一 jar 再次添加 = 就地覆盖并复活（停用行重新生效）
+        setExtras((e) => {
+            const i = e.findIndex((m) => m.id === id);
+            if (i === -1) return [...e, row];
+            const next = [...e];
+            next[i] = row;
+            return next;
+        });
+        setDisabledIds((s) => {
+            if (!s.has(id)) return s;
+            const next = new Set(s);
+            next.delete(id);
+            return next;
+        });
         setTab("add");
     };
 
-    /** 在线添加：选中某个构建版本后回写新增列表 */
+    /** 在线添加：选中某个构建版本后回写新增列表；同模组再次添加 = 就地换版本（mods/ 不允许双版本并存） */
     const addOnline = (mod: ModSearchResult, version: ModVersionEntry) => {
-        setExtras((e) =>
-            e.some((m) => m.id === mod.id)
-                ? e
-                : [
-                      ...e,
-                      {
-                          id: mod.id,
-                          name: mod.name,
-                          version: version.versionNumber,
-                          loader: loaderLabel(version.loader),
-                          disposition: "add",
-                          clientOnly: false,
-                          needsReview: false,
-                          autoSupplement: false,
-                          sizeBytes: version.sizeBytes,
-                          needsDownload: true,
-                          // 钉住用户此刻所选构建：构建时按此下载，版本与所选严格一致
-                          pinned: {
-                              url: version.url,
-                              sha1: version.sha1,
-                              fileName: version.fileName,
-                          },
-                      },
-                  ]
-        );
+        // 钉住用户此刻所选构建：构建时按此下载，版本与所选严格一致
+        const row: PlanMod = {
+            id: mod.id,
+            name: mod.name,
+            version: version.versionNumber,
+            loader: loaderLabel(version.loader),
+            disposition: "add",
+            clientOnly: false,
+            needsReview: false,
+            autoSupplement: false,
+            sizeBytes: version.sizeBytes,
+            needsDownload: true,
+            pinned: {
+                url: version.url,
+                sha1: version.sha1,
+                fileName: version.fileName,
+            },
+        };
+        const replaced = extras.find((m) => m.id === mod.id);
+        if (replaced) {
+            setExtras((e) => e.map((m) => (m.id === mod.id ? row : m)));
+            // 版本确有变化才提示；覆盖发生在弹窗内，反馈走侧栏底部全局提示区
+            if (replaced.version !== version.versionNumber) {
+                notify(`已将 ${mod.name} 的构建换为 ${version.versionNumber}`, "success");
+            }
+        } else {
+            setExtras((e) => [...e, row]);
+        }
+        // 再次添加视为重新启用：清掉该行的停用标记与处置覆写（包内同名行被剔除过也能复活）
+        setDisabledIds((s) => {
+            if (!s.has(mod.id)) return s;
+            const next = new Set(s);
+            next.delete(mod.id);
+            return next;
+        });
+        setOverrides((o) => {
+            if (!(mod.id in o)) return o;
+            const next = { ...o };
+            delete next[mod.id];
+            return next;
+        });
         setTab("add");
     };
 
@@ -286,7 +382,8 @@ export function ConvertPage() {
         if (!manifest || !options || starting) return;
         setStarting(true);
         try {
-            const taskId = await api.startConversion(options, manifest, mods);
+            // 停用行不下发：后端方案里根本没有它，无需感知停用概念
+            const taskId = await api.startConversion(options, manifest, activeMods);
             navigate("task", { taskId });
         } catch {
             setStarting(false);
@@ -379,7 +476,7 @@ export function ConvertPage() {
                         卡高固定：切 Tab / 行数变化 / 底部出口块高低不同时，差值全部由
                         行区（flex-1）吸收，卡片外形不再随内容抖动 */}
                     <motion.div variants={CARD_RISE} className="min-w-0">
-                        <Panel gap={14} className="h-[280px]">
+                        <Panel gap={14} className="h-[260px]">
                             <PanelHead
                                 title="模组方案"
                                 right={
@@ -395,8 +492,9 @@ export function ConvertPage() {
                                 }
                             />
 
-                            {/* 行区：切 Tab 时旧列表上滑退场、新列表下方升入；行从顶部铺开，行数差异由底部空白吸收 */}
-                            <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
+                            {/* 行区：行区顶部铺开、出口 mt-auto 钉在卡底（下方只剩 p-5 的 20 内边距）；
+                                内容高低差产生的余量全部落在「列表 ↔ 出口」之间，切页签/出警告时出口不跳位 */}
+                            <div className="flex min-h-0 flex-1 flex-col gap-2.5 overflow-hidden">
                                 <AnimatePresence mode="wait" initial={false}>
                                     <motion.div
                                         key={tab}
@@ -404,10 +502,10 @@ export function ConvertPage() {
                                         animate={{ opacity: 1, y: 0 }}
                                         exit={{ opacity: 0, y: -10 }}
                                         transition={{ duration: 0.18, ease: "easeOut" }}
-                                        className="flex h-full flex-col justify-start gap-3.5"
+                                        className="flex min-h-0 shrink flex-col gap-2.5 overflow-hidden"
                                     >
                                         {rows.length === 0 ? (
-                                            <p className="text-center text-[11px] text-text-3">
+                                            <p className="flex h-[140px] w-full items-center justify-center text-[11px] text-text-3">
                                                 该分类下暂无模组
                                             </p>
                                         ) : (
@@ -418,7 +516,7 @@ export function ConvertPage() {
                                                     badge={badgeFor(m, localIds.has(m.id))}
                                                     onToggle={() =>
                                                         m.disposition === "add"
-                                                            ? dropAdded(m)
+                                                            ? toggleAddActive(m)
                                                             : setDisposition(
                                                                   m.id,
                                                                   m.disposition === "remove"
@@ -426,51 +524,19 @@ export function ConvertPage() {
                                                                       : "remove"
                                                               )
                                                     }
+                                                    onRemove={
+                                                        m.disposition === "add" &&
+                                                        extrasIds.has(m.id)
+                                                            ? () => removeRow(m)
+                                                            : undefined
+                                                    }
                                                 />
                                             ))
                                         )}
                                     </motion.div>
                                 </AnimatePresence>
-                            </div>
 
-                            {/* 移除撤销条：出现/消失做淡入下滑，切新的移除项时整体重放 */}
-                            <AnimatePresence initial={false}>
-                                {dropped && (
-                                    <motion.div
-                                        key={dropped.id}
-                                        initial={{ opacity: 0, y: -8 }}
-                                        animate={{ opacity: 1, y: 0 }}
-                                        exit={{ opacity: 0, y: -8 }}
-                                        transition={{ duration: 0.18, ease: "easeOut" }}
-                                        className={cn(
-                                            "flex shrink-0 items-center gap-2 rounded-lg px-3 py-2",
-                                            dropped.autoSupplement ? "bg-gold-dim" : "bg-surface-2"
-                                        )}
-                                    >
-                                        <AlertTriangle
-                                            className={cn(
-                                                "size-3.5 shrink-0",
-                                                dropped.autoSupplement ? "text-gold" : "text-text-3"
-                                            )}
-                                        />
-                                        <span
-                                            className={cn(
-                                                "min-w-0 flex-1 text-[11px] leading-[16px]",
-                                                dropped.autoSupplement ? "text-gold" : "text-text-2"
-                                            )}
-                                        >
-                                            {dropped.autoSupplement
-                                                ? `已移除 ${dropped.name}：它是服务端必需前置，缺失可能导致启动失败`
-                                                : `已移除 ${dropped.name}：不再加入服务端包`}
-                                        </span>
-                                        <LinkBtn size="sm" onClick={() => undoDrop(dropped)}>
-                                            撤销
-                                        </LinkBtn>
-                                    </motion.div>
-                                )}
-                            </AnimatePresence>
-
-                            {/* 反向依赖警告：保留项依赖了被剔除模组，一键恢复缺失项即消警 */}
+                            {/* 反向依赖警告：保留/生效新增行依赖了被剔除或被停用的模组，一键恢复即消警 */}
                             <AnimatePresence initial={false}>
                                 {depWarnings.length > 0 && (
                                     <motion.div
@@ -489,12 +555,16 @@ export function ConvertPage() {
                                                         .slice(0, 2)
                                                         .map((h) => h.name)
                                                         .join("、")}
-                                                    {hosts.length > 2 ? ` 等 ${hosts.length} 项` : ""} 依赖被剔除的{" "}
-                                                    {missing.name}
+                                                    {hosts.length > 2 ? ` 等 ${hosts.length} 项` : ""} 依赖被
+                                                    {missing.disabled ? "停用" : "剔除"}的 {missing.name}
                                                 </span>
                                                 <LinkBtn
                                                     size="sm"
-                                                    onClick={() => setDisposition(missing.id, "keep")}
+                                                    onClick={() =>
+                                                        missing.disabled
+                                                            ? toggleAddActive(missing)
+                                                            : setDisposition(missing.id, "keep")
+                                                    }
                                                 >
                                                     恢复
                                                 </LinkBtn>
@@ -509,8 +579,9 @@ export function ConvertPage() {
                                 )}
                             </AnimatePresence>
 
-                            {/* 底部出口区：剔除/保留 → 查看清单链接；新增 → 两枚添加按钮 */}
-                            <div className="flex shrink-0 flex-col">
+                            {/* 出口区（行区内、钉在卡底）：剔除/保留态取链接自然高（~18），
+                                新增态=查看链接居左、两枚 h32 添加按钮居右；上下不虚占固定高 */}
+                            <div className="mt-auto flex shrink-0 flex-col">
                                 <AnimatePresence mode="wait" initial={false}>
                                     <motion.div
                                         key={tab}
@@ -518,30 +589,33 @@ export function ConvertPage() {
                                         animate={{ opacity: 1, y: 0 }}
                                         exit={{ opacity: 0, y: -6 }}
                                         transition={{ duration: 0.18, ease: "easeOut" }}
-                                        className="flex w-full flex-col"
+                                        className="flex w-full items-center justify-between"
                                     >
                                         {tab === "remove" && (
-                                            <LinkBtn
-                                                chevron
-                                                className="self-start"
-                                                onClick={() => setListFocus("remove")}
-                                            >
+                                            <LinkBtn chevron onClick={() => setListFocus("remove")}>
                                                 查看全部 {counts.remove} 项剔除清单
                                             </LinkBtn>
                                         )}
                                         {tab === "keep" && (
-                                            <LinkBtn
-                                                chevron
-                                                className="self-start"
-                                                onClick={() => setListFocus("keep")}
-                                            >
+                                            <LinkBtn chevron onClick={() => setListFocus("keep")}>
                                                 查看全部 {counts.keep} 项保留清单
                                             </LinkBtn>
                                         )}
                                         {tab === "add" && (
                                             <>
-                                                {/* add-btns：整行居中，两枚 h32 padding[0,18] 按钮 */}
-                                                <div className="flex h-9 w-full items-center justify-center gap-2.5">
+                                                {counts.addTotal > 0 && (
+                                                    <LinkBtn chevron onClick={() => setListFocus("add")}>
+                                                        查看全部 {counts.addTotal} 项新增清单
+                                                    </LinkBtn>
+                                                )}
+                                                {/* 两枚 h32 添加按钮：有清单时居右，空方案时整行居中 */}
+                                                <div
+                                                    className={cn(
+                                                        "flex items-center gap-2.5",
+                                                        counts.addTotal === 0 &&
+                                                            "w-full justify-center"
+                                                    )}
+                                                >
                                                     <Btn
                                                         size="sm"
                                                         icon={File}
@@ -560,13 +634,11 @@ export function ConvertPage() {
                                                         从网络添加
                                                     </Btn>
                                                 </div>
-                                                <p className="mt-3.5 w-full text-center text-[10px] leading-[14px] font-normal text-text-3">
-                                                    移除「自动补齐」模组会导致依赖它的客户端模组失效
-                                                </p>
                                             </>
                                         )}
                                     </motion.div>
                                 </AnimatePresence>
+                            </div>
                             </div>
                         </Panel>
                     </motion.div>
@@ -635,7 +707,7 @@ export function ConvertPage() {
                                 </div>
                             )}
                             <NoteRow icon={Info}>
-                                勾选的目录按原层级从源包复制到服务端（支持子目录）；模组配置在 config 目录，不勾选则不带入
+                                勾选的目录按原层级从源包复制到服务端（支持子目录）
                             </NoteRow>
                         </Panel>
                     </motion.div>
@@ -763,10 +835,8 @@ export function ConvertPage() {
                         <CountRow label="新增服务端模组" count={counts.add} tone="accent" />
                         <Divider />
                         <NoteRow icon={Download}>
-                            预计下载 {formatSize(downloadEstimate.download)}
-                            {downloadEstimate.fromPack > 0 &&
-                                ` · 包内直取 ${formatSize(downloadEstimate.fromPack)}`}
-                            （估算，已缓存部分会跳过）
+                            预计下载 {formatSize(estimate.downloadBytes)}
+                            {!estimate.complete && "（估算）"}
                         </NoteRow>
                         <NoteRow icon={Archive}>输出 {outputNameOf(manifest.fileName)}</NoteRow>
                         <NoteRow icon={Folder}>
@@ -807,13 +877,14 @@ export function ConvertPage() {
                 open={listFocus !== null}
                 onClose={() => setListFocus(null)}
                 focus={listFocus ?? "remove"}
-                // 剔除窗只展示已剔除的模组，保留窗只展示已保留的（弹窗内全部列出，滚动）
-                mods={
-                    (listFocus ?? "remove") === "remove"
-                        ? mods.filter((m) => m.disposition === "remove")
-                        : mods.filter((m) => m.disposition === "keep")
-                }
-                onDisposition={setDisposition}
+                // 三窗各列本处置的行（窗内全部展示，滚动）
+                mods={mods.filter((m) => m.disposition === (listFocus ?? "remove"))}
+                onDisposition={(id, d) => {
+                    // 新增清单里取消勾选 = 停用该行（与卡片行内取消同语义；勾选回来即恢复）
+                    const row = mods.find((m) => m.id === id);
+                    if (row && row.disposition === "add") toggleAddActive(row);
+                    else setDisposition(id, d);
+                }}
             />
             <OnlineAddModal
                 open={onlineOpen}
@@ -833,25 +904,33 @@ export function ConvertPage() {
     );
 }
 
-/* ---------------- 方案行（mod-row）：勾选框 16 + 名称/版本横排 + 右侧徽章 ---------------- */
+/* ---------------- 方案行（mod-row）：勾选框 16 + 名称/版本横排 + 右侧徽章（可删行悬停露出 ×） ---------------- */
 
 function PlanModRow({
     mod,
     badge,
     onToggle,
+    onRemove,
 }: {
     mod: PlanMod;
     badge?: React.ReactNode;
     onToggle: () => void;
+    /** 仅用户自行添加的新增行提供显式删除；缺省 = 不渲染 × */
+    onRemove?: () => void;
 }) {
-    // 勾选语义 = 进入服务端包；剔除项未勾选，需人工确认项给金色描边
-    const included = mod.disposition !== "remove";
+    // 勾选语义：剔除项未勾选；新增行取消勾选 = 停用（行保留），整行压暗表意不参与构建
+    const included = mod.disposition !== "remove" && !mod.disabled;
 
     return (
-        <div className="flex w-full items-center gap-2.5">
+        <div className={cn("group flex w-full items-center gap-2.5", mod.disabled && "opacity-55")}>
             <CheckBox checked={included} review={!included && mod.needsReview} onChange={onToggle} />
             <div className="flex min-w-0 flex-1 items-center gap-2">
-                <span className="truncate font-mono text-[12px] leading-[18px] font-medium text-text-1">
+                <span
+                    className={cn(
+                        "truncate font-mono text-[12px] leading-[18px] font-medium",
+                        mod.disabled ? "text-text-3" : "text-text-1"
+                    )}
+                >
                     {mod.name}
                 </span>
                 <span className="truncate font-mono text-[11px] leading-[16px] font-normal text-text-3">
@@ -860,6 +939,19 @@ function PlanModRow({
                 </span>
             </div>
             {badge}
+            {onRemove && (
+                <button
+                    onClick={onRemove}
+                    title="从方案移除"
+                    className={cn(
+                        "flex size-6 shrink-0 items-center justify-center rounded-md text-text-3",
+                        "opacity-0 transition-[opacity,color,background-color] duration-150",
+                        "hover:bg-redstone-dim hover:text-redstone group-hover:opacity-100 focus-visible:opacity-100"
+                    )}
+                >
+                    <X className="size-3" />
+                </button>
+            )}
         </div>
     );
 }

@@ -193,6 +193,24 @@ pub fn list_excluded_mods(state: S<'_>) -> Vec<PlanMod> {
         .collect()
 }
 
+/// 下载量预估：与构建取件同源分类 + 缓存扣减（core::estimate）；前端随方案/选项变化防抖调用
+#[tauri::command]
+pub async fn estimate_download(
+    state: S<'_>,
+    plan: Vec<PlanMod>,
+    options: ConversionOptions,
+) -> Result<DownloadEstimate, String> {
+    let Some(parsed) = last_parsed(&state) else {
+        return Ok(DownloadEstimate {
+            download_bytes: 0,
+            from_pack_bytes: 0,
+            complete: false,
+        });
+    };
+    let dl = downloader_of(&state);
+    Ok(crate::core::estimate::estimate(&parsed, &plan, &options, &dl).await)
+}
+
 #[tauri::command]
 pub async fn search_mods(
     state: S<'_>,

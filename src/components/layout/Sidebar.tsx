@@ -5,6 +5,7 @@
  * 高亮样式按设计稿：accent-dim 底 + accent 图标文字（不是实心 accent 底）。
  */
 import { Home, ListChecks, Settings, Moon, Sun } from "lucide-react";
+import { NotificationStack } from "./NotificationStack";
 import { cn } from "@/lib/utils";
 import { isDark, useTheme } from "@/lib/theme";
 import {
@@ -68,6 +69,9 @@ export function Sidebar() {
             </nav>
 
             <div className="flex-1" />
+
+            {/* 提示区：版本号/主题行上方的预留槽位，全局 notify() 统一在此渲染 */}
+            <NotificationStack />
 
             {/* 底部：版本号 + 主题切换（32×32 surface-2 r8） */}
             <div className="flex items-center justify-between pt-3 pr-2 pb-3 pl-3">

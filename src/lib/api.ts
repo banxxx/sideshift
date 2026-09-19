@@ -17,6 +17,7 @@ import type {
     ConversionOptions,
     ConversionReport,
     ConversionTask,
+    DownloadEstimate,
     ModSearchPage,
     ModSearchQuery,
     ModVersionEntry,
@@ -137,6 +138,17 @@ export async function getPlan(): Promise<PlanMod[]> {
 export async function listExcludedMods(): Promise<PlanMod[]> {
     if (!isTauri) return mock.mockExcludedMods;
     return invokeOrMock("list_excluded_mods", undefined, () => mock.mockExcludedMods);
+}
+
+/** 下载量预估（Rust: estimate_download(plan, options)）：与构建分类同源，含缓存扣减与 HEAD 实测 */
+export async function estimateDownload(
+    plan: PlanMod[],
+    options: ConversionOptions
+): Promise<DownloadEstimate> {
+    if (!isTauri) return mock.mockEstimateDownload(plan, options);
+    return invokeOrMock("estimate_download", { plan, options }, () =>
+        mock.mockEstimateDownload(plan, options)
+    );
 }
 
 /* ---------------- 在线添加 ---------------- */

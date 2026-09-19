@@ -67,7 +67,9 @@ pub fn build_plan(parsed: &ParsedPack, strip_client_only: bool) -> Vec<PlanMod> 
                 needs_review,
                 auto_supplement: false,
                 size_bytes: f.size_bytes,
-                needs_download: !f.url.is_empty(),
+                // 只有「有 URL 可下且物理不在包内」才是真联网下载；
+                // mrpack 正常条目全部内嵌 → 包内直取
+                needs_download: !f.in_pack && !f.url.is_empty(),
                 local_path: None,
                 pinned: None,
                 depends: Vec::new(),
@@ -223,6 +225,7 @@ mod tests {
             url: String::new(),
             sha1: None,
             size_bytes: 0,
+            in_pack: true,
             server_required: true,
             env_declared: true,
             depends: depends.iter().map(|s| s.to_string()).collect(),

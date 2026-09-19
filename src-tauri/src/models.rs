@@ -60,7 +60,7 @@ pub struct PlanMod {
     /// 源文件大小（字节）：mrpack fileSize / zip 条目大小；0 = 未知（外部新增构建期才解析）
     #[serde(default)]
     pub size_bytes: u64,
-    /// 需真联网下载（源声明带 URL）；false = 包内直取（本地 jar 抽取/本地文件）
+    /// 需真联网下载（有 URL 且物理不在源包内）；false = 包内/本地直取
     #[serde(default)]
     pub needs_download: bool,
     /// 本地添加的 .jar 绝对路径（「从本地添加」项专用，downloader 直接取本地文件）
@@ -82,6 +82,18 @@ pub struct PinnedVersion {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sha1: Option<String>,
     pub file_name: String,
+}
+
+/// 下载量预估（core::estimate，与构建取件分类同源）：转换摘要卡「预计下载」数据源
+#[derive(Serialize, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct DownloadEstimate {
+    /// 本次构建将新产生的网络字节（缓存命中已扣除，含加载器本体）
+    pub download_bytes: u64,
+    /// 包内 / 本地直取字节（不产生网络流量）
+    pub from_pack_bytes: u64,
+    /// false = 有源不可达（离线等），数字可能偏小，前端保留「估算」标注
+    pub complete: bool,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]

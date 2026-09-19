@@ -4,7 +4,7 @@
  * 定稿规则：
  *  - 遮罩 50% 黑；模态 $surface + $stroke 1px r12 padding20 gap12；页脚 = 1px $stroke + 摘要 + 按钮组
  *  - 网络添加与模组详情是同壳二级视图，尺寸强制一致 800×464（“跳转后弹窗不能变小”）
- *  - 处置清单壳剔除/保留共用（focus 区分）：行勾选语义 = 是否处于该处置；
+ *  - 处置清单壳剔除/保留/新增共用（focus 区分）：行勾选语义 = 是否处于该处置；
  *    取消勾选即「反向待办」（金色行 + 描边徽章）；勾选只进弹窗草稿，
  *    「应用」时才把差异行回写页面（「取消」/关闭按钮放弃草稿）
  */
@@ -36,9 +36,9 @@ import { cn } from "@/lib/utils";
 
 /* ================= 处置清单弹窗（640 宽，PCRJi 剔除态；保留态共用同壳） ================= */
 
-export type ListFocus = Extract<ModDisposition, "remove" | "keep">;
+export type ListFocus = ModDisposition;
 
-/** 同壳双清单的文案与语义表 */
+/** 三清单共壳（focus 区分）：行勾选语义 = 是否处于该处置；add 视角取消勾选 = 停用（行保留在清单，不参与构建） */
 const LIST_COPY: Record<
     ListFocus,
     {
@@ -66,6 +66,14 @@ const LIST_COPY: Record<
         offBadge: "待剔除",
         rowOff: "勾选后改为剔除 · 不再进入服务端包",
     },
+    add: {
+        title: "新增清单",
+        sub: "本次转换新增的模组 · 取消勾选即停用，行保留可随时勾回",
+        toolbar: (on, off) => `生效 ${on} · 已停用 ${off}`,
+        note: (on, off) => `${on} 项将新增 · ${off} 项停用`,
+        offBadge: "已停用",
+        rowOff: "停用中 · 不进入服务端包，勾选即恢复",
+    },
 };
 
 /** 处于该清单处置下的行说明（剔除态沿用设计稿口径） */
@@ -74,6 +82,13 @@ function rowOnSub(m: PlanMod, focus: ListFocus): string {
         return m.needsReview
             ? "剔除原因：客户端/服务端两可用，默认按客户端处理"
             : "剔除原因：客户端专属（env=client）";
+    }
+    if (focus === "add") {
+        return m.autoSupplement
+            ? "自动补齐的服务端基础库 · 停用可能导致依赖它的模组失效"
+            : m.localPath
+              ? "本地 jar · 构建时直接复制"
+              : "在线添加 · 已钉住所选构建";
     }
     return m.autoSupplement
         ? "自动补齐的服务端依赖 · 剔除可能导致启动失败"
@@ -115,7 +130,9 @@ export function PlanListModal({
         [mods, query]
     );
 
-    const dispOf = (m: PlanMod): ModDisposition => draft[m.id] ?? m.disposition;
+    /** 行当前处置草稿：停用行未编辑时的基线视为「关」（add 视角 = 停用即 off） */
+    const dispOf = (m: PlanMod): ModDisposition =>
+        draft[m.id] ?? (focus === "add" && m.disabled ? "remove" : m.disposition);
     const on = mods.filter((m) => dispOf(m) === focus).length;
     const off = mods.length - on;
 
@@ -134,7 +151,13 @@ export function PlanListModal({
     const apply = () => {
         mods.forEach((m) => {
             const fin = dispOf(m);
-            if (fin !== m.disposition) onDisposition(m.id, fin);
+            if (focus === "add") {
+                // add 视角只对「生效↔停用」真实翻转的行回写（停用不是处置变更）
+                const nowOn = fin === "add";
+                if (nowOn === !!m.disabled) onDisposition(m.id, nowOn ? "add" : "remove");
+            } else if (fin !== m.disposition) {
+                onDisposition(m.id, fin);
+            }
         });
         onClose();
     };
@@ -218,9 +241,11 @@ export function PlanListModal({
                                     <TagChip square>客户端专属</TagChip>
                                 ) : m.autoSupplement ? (
                                     <TagChip square>自动补齐</TagChip>
-                                ) : (
+                                ) : focus === "keep" ? (
                                     <TagChip square>服务端保留</TagChip>
-                                )
+                                ) : m.localPath ? (
+                                    <TagChip square>本地</TagChip>
+                                ) : undefined
                             ) : (
                                 <TagChip square outline className="text-gold">
                                     {copy.offBadge}
@@ -881,7 +906,8 @@ function SourceSeg({ value, onChange }: { value: Source; onChange: (s: Source) =
                         key={it.key}
                         onClick={() => onChange(it.key)}
                         className={cn(
-                            "relative flex h-[26px] w-[86px] items-center justify-center rounded-md text-[11px] leading-[16px] transition-colors",
+                            // 宽度用 flex-1 均分：固定 86px 会超出轨道净宽（176-4-2）挤压圆角
+                            "relative flex h-[26px] min-w-0 flex-1 items-center justify-center rounded-md text-[11px] leading-[16px] transition-colors",
                             active
                                 ? "font-semibold text-accent-ink"
                                 : "font-medium text-text-3 hover:text-text-2"

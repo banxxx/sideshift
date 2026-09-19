@@ -62,6 +62,8 @@ export interface PlanMod {
     localPath?: string;
     /** 在线添加时钉住的构建；缺省 = 构建期解析最新兼容版（自动补行） */
     pinned?: PinnedVersion;
+    /** 仅前端展示态：新增行被停用（行保留在清单、不参与构建与计数），下发前整行过滤 */
+    disabled?: boolean;
     /** 依赖的其他方案行 id（mrpack depends 元数据；反向依赖警告用） */
     depends?: string[];
 }
@@ -114,6 +116,16 @@ export interface PackDirNode {
     fileCount: number;
     /** 子目录节点，同层按名升序 */
     children: PackDirNode[];
+}
+
+/** 下载量预估（Rust: estimate_download，与构建 3.1–3.3 分类同源） */
+export interface DownloadEstimate {
+    /** 需联网下载的总字节（已剔除本地缓存命中与包内直取） */
+    downloadBytes: number;
+    /** 从源包/本地文件直取的总字节 */
+    fromPackBytes: number;
+    /** 是否全部有源可达；false = 有依赖拿不到大小或版本未解析，数字仅供参考 */
+    complete: boolean;
 }
 
 /** 流水线四阶段（Shift Rail 站点，对应 Rust core 四模块） */
