@@ -4,10 +4,12 @@
  * 定稿规则：
  *  - 遮罩 50% 黑；模态 $surface + $stroke 1px r12 padding20 gap12；页脚 = 1px $stroke + 摘要 + 按钮组
  *  - 网络添加与模组详情是同壳二级视图，尺寸强制一致 800×464（“跳转后弹窗不能变小”）
- *  - 剔除清单行的勾选语义 = 是否剔除；取消勾选即「待恢复」（金色行 + 金色描边徽章）
+ *  - 处置清单壳剔除/保留共用（focus 区分）：行勾选语义 = 是否处于该处置；
+ *    取消勾选即「反向待办」（金色行 + 描边徽章）
  */
 import { ChevronDown, ChevronLeft, ChevronRight, Puzzle, RefreshCw, Square, SquareCheck } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useId, useMemo, useState } from "react";
+import { motion } from "motion/react";
 import * as api from "@/lib/api";
 import { formatSize, loaderLabel } from "@/lib/format";
 import type {
@@ -21,35 +23,91 @@ import {
     Btn,
     ListRow,
     ModalShell,
+    SEG_PILL_SPRING,
     SearchBox,
     TagChip,
     ToneChip,
 } from "@/components/design/ui";
 import { cn } from "@/lib/utils";
 
-/* ================= 剔除清单弹窗（640 宽，PCRJi） ================= */
+/* ================= 处置清单弹窗（640 宽，PCRJi 剔除态；保留态共用同壳） ================= */
 
-export function ExclusionModal({
+export type ListFocus = Extract<ModDisposition, "remove" | "keep">;
+
+/** 同壳双清单的文案与语义表 */
+const LIST_COPY: Record<
+    ListFocus,
+    {
+        title: string;
+        sub: string;
+        selectAll: string;
+        toolbar: (on: number, off: number) => string;
+        note: (on: number, off: number) => string;
+        more: (rest: number) => string;
+        offBadge: string;
+        rowOff: string;
+    }
+> = {
+    remove: {
+        title: "剔除清单",
+        sub: "检测器识别的客户端专属模组 · 可逐项恢复保留",
+        selectAll: "全选剔除",
+        toolbar: (on, off) => `已标记 ${on} · 保留 ${off}`,
+        note: (on, off) => `${on} 项将剔除 · ${off} 项改为保留`,
+        more: (rest) => `… 其余 ${rest} 项均为客户端专属模组`,
+        offBadge: "待恢复",
+        rowOff: "已手动改为保留 · 服务端将不剔除",
+    },
+    keep: {
+        title: "保留清单",
+        sub: "将随服务端包构建的模组 · 可逐项改回剔除",
+        selectAll: "全选保留",
+        toolbar: (on, off) => `保留 ${on} · 已改剔除 ${off}`,
+        note: (on, off) => `${on} 项将保留 · ${off} 项改为剔除`,
+        more: (rest) => `… 其余 ${rest} 项均为服务端可用模组`,
+        offBadge: "待剔除",
+        rowOff: "已手动改为剔除 · 不再进入服务端包",
+    },
+};
+
+/** 处于该清单处置下的行说明（剔除态沿用设计稿口径） */
+function rowOnSub(m: PlanMod, focus: ListFocus): string {
+    if (focus === "remove") {
+        return m.needsReview
+            ? "剔除原因：客户端/服务端两可用，默认按客户端处理"
+            : "剔除原因：客户端专属（env=client）";
+    }
+    return m.autoSupplement
+        ? "自动补齐的服务端依赖 · 剔除可能导致启动失败"
+        : "服务端可用 · 随包构建";
+}
+
+export function PlanListModal({
     open,
     onClose,
+    focus,
     mods,
     onDisposition,
 }: {
     open: boolean;
     onClose: () => void;
-    /** 全部剔除候选（客户端专属 + 需人工确认），含当前处置 */
+    /** 清单视角：remove=剔除态为“开”，keep=保留态为“开” */
+    focus: ListFocus;
+    /** 该清单的全部候选，含当前处置 */
     mods: PlanMod[];
-    /** 勾选态变更：remove=剔除，keep=恢复保留 */
+    /** 勾选态变更：在 focus 与其反方向之间切换 */
     onDisposition: (id: string, d: ModDisposition) => void;
 }) {
+    const copy = LIST_COPY[focus];
+    const other: ModDisposition = focus === "remove" ? "keep" : "remove";
     const [query, setQuery] = useState("");
     const filtered = useMemo(
         () => mods.filter((m) => !query || m.name.toLowerCase().includes(query.toLowerCase())),
         [mods, query]
     );
 
-    const marked = mods.filter((m) => m.disposition === "remove").length;
-    const kept = mods.length - marked;
+    const on = mods.filter((m) => m.disposition === focus).length;
+    const off = mods.length - on;
 
     return (
         <ModalShell
@@ -57,13 +115,13 @@ export function ExclusionModal({
             onClose={onClose}
             width={640}
             height={480}
-            title={`剔除清单 · ${mods.length} 个模组`}
-            sub="检测器识别的客户端专属模组 · 可逐项恢复保留"
-            footerNote={`${marked} 项将剔除 · ${kept} 项改为保留`}
+            title={`${copy.title} · ${mods.length} 个模组`}
+            sub={copy.sub}
+            footerNote={copy.note(on, off)}
             footerActions={
                 <>
-                    <Btn size="sm" className="px-3.5" onClick={() => filtered.forEach((m) => onDisposition(m.id, "remove"))}>
-                        全选剔除
+                    <Btn size="sm" className="px-3.5" onClick={() => filtered.forEach((m) => onDisposition(m.id, focus))}>
+                        {copy.selectAll}
                     </Btn>
                     <Btn variant="primary" size="sm" className="px-3.5 font-semibold" onClick={onClose}>
                         应用
@@ -82,27 +140,27 @@ export function ExclusionModal({
             <div className="flex w-full shrink-0 items-center justify-between gap-2">
                 <button
                     className="flex items-center gap-2 text-[11px] leading-[16px] font-medium text-text-2 hover:text-text-1"
-                    onClick={() => filtered.forEach((m) => onDisposition(m.id, "remove"))}
+                    onClick={() => filtered.forEach((m) => onDisposition(m.id, focus))}
                 >
                     <SquareCheck className="size-3.5 text-accent" />
                     全选
                 </button>
                 <span className="font-mono text-[11px] leading-[16px] font-normal text-text-3">
-                    已标记 {marked} · 保留 {kept}
+                    {copy.toolbar(on, off)}
                 </span>
             </div>
 
             {/* list：gap2；行 padding[8,4] */}
             <div className="-mx-1 flex min-h-0 flex-1 flex-col gap-0.5 overflow-auto px-1">
                 {filtered.map((m) => {
-                    const removed = m.disposition === "remove";
+                    const isOn = m.disposition === focus;
                     return (
                         <ListRow
                             key={m.id}
-                            className={cn("cursor-pointer", !removed && "bg-gold-dim")}
-                            onClick={() => onDisposition(m.id, removed ? "keep" : "remove")}
+                            className={cn("cursor-pointer", !isOn && "bg-gold-dim")}
+                            onClick={() => onDisposition(m.id, isOn ? other : focus)}
                         >
-                            {removed ? (
+                            {isOn ? (
                                 <SquareCheck className="size-[15px] shrink-0 text-accent" />
                             ) : (
                                 <Square className="size-[15px] shrink-0 text-gold" />
@@ -114,21 +172,23 @@ export function ExclusionModal({
                                 <span
                                     className={cn(
                                         "truncate text-[10px] leading-[14px] font-normal",
-                                        removed ? "text-text-3" : "text-gold"
+                                        isOn ? "text-text-3" : "text-gold"
                                     )}
                                 >
-                                    {removed
-                                        ? m.needsReview
-                                          ? "剔除原因：客户端/服务端两可用，默认按客户端处理"
-                                          : "剔除原因：客户端专属（env=client）"
-                                        : "已手动改为保留 · 服务端将不剔除"}
+                                    {isOn ? rowOnSub(m, focus) : copy.rowOff}
                                 </span>
                             </span>
-                            {removed ? (
-                                <TagChip square>客户端专属</TagChip>
+                            {isOn ? (
+                                focus === "remove" ? (
+                                    <TagChip square>客户端专属</TagChip>
+                                ) : m.autoSupplement ? (
+                                    <TagChip square>自动补齐</TagChip>
+                                ) : (
+                                    <TagChip square>服务端保留</TagChip>
+                                )
                             ) : (
                                 <TagChip square outline className="text-gold">
-                                    待恢复
+                                    {copy.offBadge}
                                 </TagChip>
                             )}
                         </ListRow>
@@ -140,7 +200,7 @@ export function ExclusionModal({
                 {filtered.length > 4 && (
                     <div className="flex w-full justify-center py-1.5">
                         <span className="text-[11px] leading-[16px] font-normal text-text-3">
-                            … 其余 {filtered.length - 4} 项均为客户端专属模组
+                            {copy.more(filtered.length - 4)}
                         </span>
                     </div>
                 )}
@@ -367,6 +427,7 @@ export function OnlineAddModal({
 
 /** 下载源分段：176×30 轨道 p2 $surface-2 r8；内项 86×26 r6（选中 $accent + 11/600 $accent-ink） */
 function SourceSeg({ value, onChange }: { value: Source; onChange: (s: Source) => void }) {
+    const pillId = useId();
     const items: Array<{ key: Source; label: string }> = [
         { key: "modrinth", label: "Modrinth" },
         { key: "curseforge", label: "CurseForge" },
@@ -380,13 +441,20 @@ function SourceSeg({ value, onChange }: { value: Source; onChange: (s: Source) =
                         key={it.key}
                         onClick={() => onChange(it.key)}
                         className={cn(
-                            "flex h-[26px] w-[86px] items-center justify-center rounded-md text-[11px] leading-[16px] transition-colors",
+                            "relative flex h-[26px] w-[86px] items-center justify-center rounded-md text-[11px] leading-[16px] transition-colors",
                             active
-                                ? "bg-accent font-semibold text-accent-ink"
-                                : "bg-surface-2 font-medium text-text-3 hover:text-text-2"
+                                ? "font-semibold text-accent-ink"
+                                : "font-medium text-text-3 hover:text-text-2"
                         )}
                     >
-                        {it.label}
+                        {active && (
+                            <motion.span
+                                layoutId={`${pillId}-src-pill`}
+                                transition={SEG_PILL_SPRING}
+                                className="absolute inset-0 rounded-md bg-accent"
+                            />
+                        )}
+                        <span className="relative z-[1]">{it.label}</span>
                     </button>
                 );
             })}

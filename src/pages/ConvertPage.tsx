@@ -11,6 +11,7 @@
  */
 import { AlertTriangle, Archive, ChevronRight, Download, File, Globe, Layers } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
+import { AnimatePresence, motion, type Variants } from "motion/react";
 import * as api from "@/lib/api";
 import { useNavigation } from "@/lib/navigation";
 import { formatSize, loaderLabel, outputNameOf, truncateMiddle } from "@/lib/format";
@@ -42,7 +43,7 @@ import {
     ToneChip,
     type SelectOption,
 } from "@/components/design/ui";
-import { ExclusionModal, OnlineAddModal } from "@/components/features/convert-modals";
+import { OnlineAddModal, PlanListModal, type ListFocus } from "@/components/features/convert-modals";
 import { cn } from "@/lib/utils";
 
 /** VersionOption → 下拉项（group/recommended 透传，供分组与「推荐」标记） */
@@ -53,8 +54,19 @@ const toOption = (v: VersionOption): SelectOption => ({
     group: v.group,
 });
 
-/** 卡片内最多直接展示的行数，其余走「查看全部」弹窗（设计稿同样只画 3 行） */
-const PREVIEW_ROWS = 3;
+/** 卡片内直接展示的行数：设计稿画 3 行，但卡高定到 280 后行区放得下 4 行，
+ *  再多就会被行区 overflow 裁切；其余走「查看全部」弹窗 */
+const PREVIEW_ROWS = 4;
+
+/** 页面入场：容器管节奏，各卡依次上浮（与 Home idle 分支同一支弹簧手感） */
+const PAGE_RISE: Variants = {
+    hidden: {},
+    show: { transition: { staggerChildren: 0.06, delayChildren: 0.04 } },
+};
+const CARD_RISE: Variants = {
+    hidden: { opacity: 0, y: 14 },
+    show: { opacity: 1, y: 0, transition: { type: "spring", stiffness: 320, damping: 28 } },
+};
 
 export function ConvertPage() {
     const { entry, navigate, switchPrimary } = useNavigation();
@@ -71,7 +83,8 @@ export function ConvertPage() {
     const [mcOptions, setMcOptions] = useState<SelectOption[]>([]);
     const [loaderOptions, setLoaderOptions] = useState<SelectOption[]>([]);
     const [javaOptions, setJavaOptions] = useState<SelectOption[]>([]);
-    const [exclusionOpen, setExclusionOpen] = useState(false);
+    // 处置清单弹窗：null=关；remove/keep 决定壳的视角（剔除/保留共用一壳）
+    const [listFocus, setListFocus] = useState<ListFocus | null>(null);
     const [onlineOpen, setOnlineOpen] = useState(false);
     const [starting, setStarting] = useState(false);
 
@@ -202,171 +215,244 @@ export function ConvertPage() {
     const patch = (p: Partial<ConversionOptions>) => setOptions((o) => (o ? { ...o, ...p } : o));
 
     return (
-        <div className="flex flex-col gap-5">
-            <PageHeader
-                title="转换配置"
-                sub={`${truncateMiddle(manifest.fileName, 34)} · ${loader} · Minecraft ${manifest.mcVersion} · 检测完成，确认转换方案后开始构建`}
-            />
+        <motion.div
+            className="flex flex-col gap-5 overflow-hidden"
+            variants={PAGE_RISE}
+            initial="hidden"
+            animate="show"
+        >
+            <motion.div variants={CARD_RISE}>
+                <PageHeader
+                    title="转换配置"
+                    sub={`${truncateMiddle(manifest.fileName, 34)} · ${loader} · Minecraft ${manifest.mcVersion} · 检测完成，确认转换方案后开始构建`}
+                />
+            </motion.div>
 
             <div className="flex items-start gap-5">
                 {/* 左列：运行环境 / 模组方案 / 启动参数（卡间 16） */}
                 <div className="flex min-w-0 flex-1 flex-col gap-4">
                     {/* ---- 运行环境：三个版本下拉 + 启动脚本开关 ---- */}
-                    <Panel gap={14}>
-                        <PanelHead title="运行环境" />
-                        <div className="flex w-full gap-3">
-                            <SearchSelect
-                                className="flex-1"
-                                label="Minecraft 版本"
-                                value={options?.mcVersion ?? manifest.mcVersion}
-                                options={mcOptions}
-                                onChange={(v) => patch({ mcVersion: v })}
-                            />
-                            <SearchSelect
-                                className="flex-1"
-                                label={`${loader} Loader`}
-                                value={options?.loaderVersion ?? ""}
-                                options={loaderOptions}
-                                onChange={(v) => patch({ loaderVersion: v })}
-                            />
-                            <SearchSelect
-                                className="flex-1"
-                                label="Java 版本"
-                                value={options?.javaVersion ?? ""}
-                                options={javaOptions}
-                                onChange={(v) => patch({ javaVersion: v })}
-                            />
-                        </div>
-                        <Divider />
-                        <InlineRow label="生成启动脚本（start.sh / start.bat）">
-                            <Toggle
-                                checked={options?.generateScripts ?? true}
-                                onChange={(v) => patch({ generateScripts: v })}
-                            />
-                        </InlineRow>
-                    </Panel>
-
-                    {/* ---- 模组方案：分段 Tab + 预览行 + 出口 ---- */}
-                    <Panel gap={14}>
-                        <PanelHead
-                            title="模组方案"
-                            right={
-                                <SegTabs
-                                    items={[
-                                        { key: "remove" as ModDisposition, label: "剔除", count: counts.remove },
-                                        { key: "keep" as ModDisposition, label: "保留", count: counts.keep },
-                                        { key: "add" as ModDisposition, label: "新增", count: counts.add },
-                                    ]}
-                                    value={tab}
-                                    onChange={setTab}
+                    <motion.div variants={CARD_RISE} className="min-w-0">
+                        <Panel gap={14}>
+                            <PanelHead title="运行环境" />
+                            <div className="flex w-full gap-3">
+                                <SearchSelect
+                                    className="flex-1"
+                                    label="Minecraft 版本"
+                                    value={options?.mcVersion ?? manifest.mcVersion}
+                                    options={mcOptions}
+                                    onChange={(v) => patch({ mcVersion: v })}
                                 />
-                            }
-                        />
-
-                        {rows.length === 0 ? (
-                            <p className="py-4 text-center text-[11px] text-text-3">该分类下暂无模组</p>
-                        ) : (
-                            rows.map((m) => (
-                                <PlanModRow
-                                    key={m.id}
-                                    mod={m}
-                                    badge={badgeFor(m, localIds.has(m.id))}
-                                    onToggle={() =>
-                                        m.disposition === "add"
-                                            ? dropAdded(m)
-                                            : setDisposition(m.id, m.disposition === "remove" ? "keep" : "remove")
-                                    }
+                                <SearchSelect
+                                    className="flex-1"
+                                    label={`${loader} Loader`}
+                                    value={options?.loaderVersion ?? ""}
+                                    options={loaderOptions}
+                                    onChange={(v) => patch({ loaderVersion: v })}
                                 />
-                            ))
-                        )}
-
-                        {dropped && (
-                            <div
-                                className={cn(
-                                    "flex items-center gap-2 rounded-lg px-3 py-2",
-                                    dropped.autoSupplement ? "bg-gold-dim" : "bg-surface-2"
-                                )}
-                            >
-                                <AlertTriangle
-                                    className={cn(
-                                        "size-3.5 shrink-0",
-                                        dropped.autoSupplement ? "text-gold" : "text-text-3"
-                                    )}
+                                <SearchSelect
+                                    className="flex-1"
+                                    label="Java 版本"
+                                    value={options?.javaVersion ?? ""}
+                                    options={javaOptions}
+                                    onChange={(v) => patch({ javaVersion: v })}
                                 />
-                                <span
-                                    className={cn(
-                                        "min-w-0 flex-1 text-[11px] leading-[16px]",
-                                        dropped.autoSupplement ? "text-gold" : "text-text-2"
-                                    )}
-                                >
-                                    {dropped.autoSupplement
-                                        ? `已移除 ${dropped.name}：它是服务端必需前置，缺失可能导致启动失败`
-                                        : `已移除 ${dropped.name}：不再加入服务端包`}
-                                </span>
-                                <LinkBtn size="sm" onClick={() => undoDrop(dropped)}>
-                                    撤销
-                                </LinkBtn>
                             </div>
-                        )}
+                            <Divider />
+                            <InlineRow label="生成启动脚本（start.sh / start.bat）">
+                                <Toggle
+                                    checked={options?.generateScripts ?? true}
+                                    onChange={(v) => patch({ generateScripts: v })}
+                                />
+                            </InlineRow>
+                        </Panel>
+                    </motion.div>
 
-                        {tab === "remove" && (
-                            <LinkBtn chevron className="self-start" onClick={() => setExclusionOpen(true)}>
-                                查看全部 {counts.remove} 项剔除清单
-                            </LinkBtn>
-                        )}
+                    {/* ---- 模组方案：分段 Tab + 预览行 + 出口 ----
+                        卡高固定：切 Tab / 行数变化 / 底部出口块高低不同时，差值全部由
+                        行区（flex-1）吸收，卡片外形不再随内容抖动 */}
+                    <motion.div variants={CARD_RISE} className="min-w-0">
+                        <Panel gap={14} className="h-[280px]">
+                            <PanelHead
+                                title="模组方案"
+                                right={
+                                    <SegTabs
+                                        items={[
+                                            { key: "remove" as ModDisposition, label: "剔除", count: counts.remove },
+                                            { key: "keep" as ModDisposition, label: "保留", count: counts.keep },
+                                            { key: "add" as ModDisposition, label: "新增", count: counts.add },
+                                        ]}
+                                        value={tab}
+                                        onChange={setTab}
+                                    />
+                                }
+                            />
 
-                        {tab === "add" && (
-                            <>
-                                {/* add-btns：整行居中，两枚 h32 padding[0,18] 按钮 */}
-                                <div className="flex h-9 w-full items-center justify-center gap-2.5">
-                                    <Btn
-                                        size="sm"
-                                        icon={File}
-                                        className="px-[18px] font-semibold text-text-1"
-                                        onClick={() => void addLocal()}
+                            {/* 行区：切 Tab 时旧列表上滑退场、新列表下方升入，垂直居中消化行数差异 */}
+                            <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
+                                <AnimatePresence mode="wait" initial={false}>
+                                    <motion.div
+                                        key={tab}
+                                        initial={{ opacity: 0, y: 10 }}
+                                        animate={{ opacity: 1, y: 0 }}
+                                        exit={{ opacity: 0, y: -10 }}
+                                        transition={{ duration: 0.18, ease: "easeOut" }}
+                                        className="flex h-full flex-col justify-center gap-3.5"
                                     >
-                                        从本地添加
-                                    </Btn>
-                                    <Btn
-                                        variant="primary"
-                                        size="sm"
-                                        icon={Globe}
-                                        className="px-[18px] font-semibold"
-                                        onClick={() => setOnlineOpen(true)}
+                                        {rows.length === 0 ? (
+                                            <p className="text-center text-[11px] text-text-3">
+                                                该分类下暂无模组
+                                            </p>
+                                        ) : (
+                                            rows.map((m) => (
+                                                <PlanModRow
+                                                    key={m.id}
+                                                    mod={m}
+                                                    badge={badgeFor(m, localIds.has(m.id))}
+                                                    onToggle={() =>
+                                                        m.disposition === "add"
+                                                            ? dropAdded(m)
+                                                            : setDisposition(
+                                                                  m.id,
+                                                                  m.disposition === "remove"
+                                                                      ? "keep"
+                                                                      : "remove"
+                                                              )
+                                                    }
+                                                />
+                                            ))
+                                        )}
+                                    </motion.div>
+                                </AnimatePresence>
+                            </div>
+
+                            {/* 移除撤销条：出现/消失做淡入下滑，切新的移除项时整体重放 */}
+                            <AnimatePresence initial={false}>
+                                {dropped && (
+                                    <motion.div
+                                        key={dropped.id}
+                                        initial={{ opacity: 0, y: -8 }}
+                                        animate={{ opacity: 1, y: 0 }}
+                                        exit={{ opacity: 0, y: -8 }}
+                                        transition={{ duration: 0.18, ease: "easeOut" }}
+                                        className={cn(
+                                            "flex shrink-0 items-center gap-2 rounded-lg px-3 py-2",
+                                            dropped.autoSupplement ? "bg-gold-dim" : "bg-surface-2"
+                                        )}
                                     >
-                                        从网络添加
-                                    </Btn>
-                                </div>
-                                <p className="w-full text-center text-[10px] leading-[14px] font-normal text-text-3">
-                                    移除「自动补齐」模组会导致依赖它的客户端模组失效
-                                </p>
-                            </>
-                        )}
-                    </Panel>
+                                        <AlertTriangle
+                                            className={cn(
+                                                "size-3.5 shrink-0",
+                                                dropped.autoSupplement ? "text-gold" : "text-text-3"
+                                            )}
+                                        />
+                                        <span
+                                            className={cn(
+                                                "min-w-0 flex-1 text-[11px] leading-[16px]",
+                                                dropped.autoSupplement ? "text-gold" : "text-text-2"
+                                            )}
+                                        >
+                                            {dropped.autoSupplement
+                                                ? `已移除 ${dropped.name}：它是服务端必需前置，缺失可能导致启动失败`
+                                                : `已移除 ${dropped.name}：不再加入服务端包`}
+                                        </span>
+                                        <LinkBtn size="sm" onClick={() => undoDrop(dropped)}>
+                                            撤销
+                                        </LinkBtn>
+                                    </motion.div>
+                                )}
+                            </AnimatePresence>
+
+                            {/* 底部出口区：剔除/保留 → 查看清单链接；新增 → 两枚添加按钮 */}
+                            <div className="flex shrink-0 flex-col">
+                                <AnimatePresence mode="wait" initial={false}>
+                                    <motion.div
+                                        key={tab}
+                                        initial={{ opacity: 0, y: 8 }}
+                                        animate={{ opacity: 1, y: 0 }}
+                                        exit={{ opacity: 0, y: -6 }}
+                                        transition={{ duration: 0.18, ease: "easeOut" }}
+                                        className="flex w-full flex-col"
+                                    >
+                                        {tab === "remove" && (
+                                            <LinkBtn
+                                                chevron
+                                                className="self-start"
+                                                onClick={() => setListFocus("remove")}
+                                            >
+                                                查看全部 {counts.remove} 项剔除清单
+                                            </LinkBtn>
+                                        )}
+                                        {tab === "keep" && (
+                                            <LinkBtn
+                                                chevron
+                                                className="self-start"
+                                                onClick={() => setListFocus("keep")}
+                                            >
+                                                查看全部 {counts.keep} 项保留清单
+                                            </LinkBtn>
+                                        )}
+                                        {tab === "add" && (
+                                            <>
+                                                {/* add-btns：整行居中，两枚 h32 padding[0,18] 按钮 */}
+                                                <div className="flex h-9 w-full items-center justify-center gap-2.5">
+                                                    <Btn
+                                                        size="sm"
+                                                        icon={File}
+                                                        className="px-[18px] font-semibold text-text-1"
+                                                        onClick={() => void addLocal()}
+                                                    >
+                                                        从本地添加
+                                                    </Btn>
+                                                    <Btn
+                                                        variant="primary"
+                                                        size="sm"
+                                                        icon={Globe}
+                                                        className="px-[18px] font-semibold"
+                                                        onClick={() => setOnlineOpen(true)}
+                                                    >
+                                                        从网络添加
+                                                    </Btn>
+                                                </div>
+                                                <p className="mt-3.5 w-full text-center text-[10px] leading-[14px] font-normal text-text-3">
+                                                    移除「自动补齐」模组会导致依赖它的客户端模组失效
+                                                </p>
+                                            </>
+                                        )}
+                                    </motion.div>
+                                </AnimatePresence>
+                            </div>
+                        </Panel>
+                    </motion.div>
 
                     {/* ---- 启动参数：内存步进器 + 两枚开关 ---- */}
-                    <Panel gap={14}>
-                        <PanelHead title="启动参数" />
-                        <InlineRow label="服务器内存上限">
-                            <Stepper
-                                value={Math.round((options?.memoryMb ?? 6144) / 1024)}
-                                min={1}
-                                max={32}
-                                suffix="GB"
-                                onChange={(v) => patch({ memoryMb: v * 1024 })}
-                            />
-                        </InlineRow>
-                        <InlineRow label="无界面模式启动（--nogui）">
-                            <Toggle checked={options?.nogui ?? false} onChange={(v) => patch({ nogui: v })} />
-                        </InlineRow>
-                        <InlineRow label="自动写入 eula=true（同意 Mojang EULA）">
-                            <Toggle checked={options?.agreeEula ?? true} onChange={(v) => patch({ agreeEula: v })} />
-                        </InlineRow>
-                    </Panel>
+                    <motion.div variants={CARD_RISE} className="min-w-0">
+                        <Panel gap={14}>
+                            <PanelHead title="启动参数" />
+                            <InlineRow label="服务器内存上限">
+                                <Stepper
+                                    value={Math.round((options?.memoryMb ?? 6144) / 1024)}
+                                    min={1}
+                                    max={32}
+                                    suffix="GB"
+                                    onChange={(v) => patch({ memoryMb: v * 1024 })}
+                                />
+                            </InlineRow>
+                            <InlineRow label="无界面模式启动（--nogui）">
+                                <Toggle checked={options?.nogui ?? false} onChange={(v) => patch({ nogui: v })} />
+                            </InlineRow>
+                            <InlineRow label="自动写入 eula=true（同意 Mojang EULA）">
+                                <Toggle
+                                    checked={options?.agreeEula ?? true}
+                                    onChange={(v) => patch({ agreeEula: v })}
+                                />
+                            </InlineRow>
+                        </Panel>
+                    </motion.div>
                 </div>
 
                 {/* 右栏：转换摘要（280px 固定宽） */}
-                <aside className="flex w-[280px] shrink-0 flex-col gap-4">
+                <motion.aside variants={CARD_RISE} className="flex w-[280px] shrink-0 flex-col gap-4">
                     <Panel gap={14}>
                         <PanelHead title="转换摘要" />
                         <CountRow label="剔除客户端模组" count={counts.remove} tone="gold" />
@@ -393,13 +479,19 @@ export function ConvertPage() {
                             转换过程可随时取消，已下载依赖自动缓存复用
                         </p>
                     </Panel>
-                </aside>
+                </motion.aside>
             </div>
 
-            <ExclusionModal
-                open={exclusionOpen}
-                onClose={() => setExclusionOpen(false)}
-                mods={mods.filter((m) => m.clientOnly || m.disposition === "remove")}
+            <PlanListModal
+                open={listFocus !== null}
+                onClose={() => setListFocus(null)}
+                focus={listFocus ?? "remove"}
+                // 剔除视角喂剔除候选（客户端专属 + 已剔除）；保留视角喂保留中 + 被手动改剔除的（可反悔）
+                mods={
+                    (listFocus ?? "remove") === "remove"
+                        ? mods.filter((m) => m.clientOnly || m.disposition === "remove")
+                        : mods.filter((m) => m.disposition === "keep" || overrides[m.id] === "remove")
+                }
                 onDisposition={setDisposition}
             />
             <OnlineAddModal
@@ -409,7 +501,7 @@ export function ConvertPage() {
                 loader={manifest.loader}
                 onAdd={addOnline}
             />
-        </div>
+        </motion.div>
     );
 }
 

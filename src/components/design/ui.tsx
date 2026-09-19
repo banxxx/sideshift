@@ -22,8 +22,12 @@ import {
     X,
     type LucideIcon,
 } from "lucide-react";
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useEffect, useId, useRef, useState, type ReactNode } from "react";
+import { AnimatePresence, motion } from "motion/react";
 import { cn } from "@/lib/utils";
+
+/** 分段控件选中胶囊的滑动弹簧：短促、不回弹 */
+export const SEG_PILL_SPRING = { type: "spring", stiffness: 420, damping: 36 } as const;
 
 /* ---------------- 页头 ----------------
  * 默认（Home/Convert/Task/Report）：纵向 gap 6，H1 22/700 + sub 13 $text-2
@@ -519,6 +523,8 @@ export function SegTabs<T extends string>({
     onChange: (k: T) => void;
     className?: string;
 }) {
+    // 选中态抽成一颗 layoutId 胶囊：切 Tab 时它在三项之间滑动，而不是瞬移换底色
+    const pillId = useId();
     return (
         <div
             className={cn(
@@ -534,18 +540,31 @@ export function SegTabs<T extends string>({
                         key={it.key}
                         onClick={() => onChange(it.key)}
                         className={cn(
-                            "inline-flex h-[30px] items-center justify-center gap-[5px] rounded-md px-3 transition-colors",
+                            "relative inline-flex h-[30px] items-center justify-center rounded-md px-3 transition-colors",
                             active
-                                ? "border border-stroke bg-surface text-[12px] leading-[18px] font-semibold text-text-1"
-                                : "border border-transparent text-[12px] leading-[18px] font-medium text-text-3 hover:text-text-2"
+                                ? "text-[12px] leading-[18px] font-semibold text-text-1"
+                                : "text-[12px] leading-[18px] font-medium text-text-3 hover:text-text-2"
                         )}
                     >
-                        {Icon && (
-                            <Icon
-                                className={cn("size-[11px]", active ? "text-emerald" : "text-text-3")}
+                        {active && (
+                            <motion.span
+                                layoutId={`${pillId}-seg-pill`}
+                                transition={SEG_PILL_SPRING}
+                                className="absolute inset-0 rounded-md border border-stroke bg-surface"
                             />
                         )}
-                        {it.count === undefined ? it.label : `${it.label} ${it.count}`}
+                        {/* tabular-nums：数字位宽一致，计数变化时同一 Tab 不再横向抽动 */}
+                        <span className="relative z-[1] inline-flex items-center justify-center gap-[5px] tabular-nums">
+                            {Icon && (
+                                <Icon
+                                    className={cn(
+                                        "size-[11px]",
+                                        active ? "text-emerald" : "text-text-3"
+                                    )}
+                                />
+                            )}
+                            {it.count === undefined ? it.label : `${it.label} ${it.count}`}
+                        </span>
                     </button>
                 );
             })}
@@ -776,8 +795,23 @@ export function CountRow({
     return (
         <div className="flex w-full items-center justify-between">
             <span className="text-[12px] leading-[18px] font-normal text-text-2">{label}</span>
-            <span className={cn("font-mono text-[14px] leading-[20px] font-semibold", TONE_TEXT[tone])}>
-                {count}
+            {/* 定高裁剪窗：计数变化时旧数上滑退场、新数下方升入 */}
+            <span className="flex h-[20px] items-center overflow-hidden">
+                <AnimatePresence mode="popLayout" initial={false}>
+                    <motion.span
+                        key={count}
+                        initial={{ y: 16, opacity: 0 }}
+                        animate={{ y: 0, opacity: 1 }}
+                        exit={{ y: -16, opacity: 0 }}
+                        transition={{ type: "spring", stiffness: 420, damping: 32 }}
+                        className={cn(
+                            "font-mono text-[14px] leading-[20px] font-semibold",
+                            TONE_TEXT[tone]
+                        )}
+                    >
+                        {count}
+                    </motion.span>
+                </AnimatePresence>
             </span>
         </div>
     );
@@ -963,9 +997,20 @@ export function ModalShell({
     return (
         <DialogPrimitive.Root open={open} onOpenChange={(o) => !o && onClose()}>
             <DialogPrimitive.Portal>
-                <DialogPrimitive.Backdrop className="fixed inset-0 z-50 bg-black/50" />
+                {/* base-ui 在出入场过渡期挂 data-starting/ending-style，配 CSS 过渡做淡入+微缩放 */}
+                <DialogPrimitive.Backdrop
+                    className={cn(
+                        "fixed inset-0 z-50 bg-black/50 transition-opacity duration-200",
+                        "data-[starting-style]:opacity-0 data-[ending-style]:opacity-0"
+                    )}
+                />
                 <DialogPrimitive.Popup
-                    className="fixed top-1/2 left-1/2 z-50 flex -translate-x-1/2 -translate-y-1/2 flex-col gap-3 rounded-[12px] border border-stroke bg-surface p-5 outline-none"
+                    className={cn(
+                        "fixed top-1/2 left-1/2 z-50 flex -translate-x-1/2 -translate-y-1/2 flex-col gap-3 rounded-[12px] border border-stroke bg-surface p-5 outline-none",
+                        "transition-[opacity,scale] duration-200",
+                        "data-[starting-style]:opacity-0 data-[starting-style]:scale-[0.96]",
+                        "data-[ending-style]:opacity-0 data-[ending-style]:scale-[0.96]"
+                    )}
                     style={{ width, height }}
                 >
                     <div className="flex w-full items-center justify-between gap-2.5">
