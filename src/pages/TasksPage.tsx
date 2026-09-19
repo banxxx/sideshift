@@ -11,6 +11,7 @@
 import { Check, Download, Inbox, RefreshCw, X } from "lucide-react";
 import { useEffect, useState } from "react";
 import * as api from "@/lib/api";
+import { notify } from "@/lib/notify";
 import { useNavigation } from "@/lib/navigation";
 import { BAR_COLOR, progressChip, stageLabel } from "@/lib/rail-view";
 import { formatDuration, formatElapsed, formatSize, loaderLabel, outputNameOf, truncateMiddle } from "@/lib/format";
@@ -145,8 +146,15 @@ function TaskCard({ task }: { task: ConversionTask }) {
     const outName = task.outputFileName ?? outputNameOf(task.pack.fileName);
 
     const retry = async () => {
-        const id = await api.retryTask(task.id);
-        if (id) navigate("task", { taskId: id });
+        const res = await api.retryTask(task.id);
+        if (!res) return;
+        if (res.queued) notify("已有转换正在进行，重试任务已加入队列", "info");
+        navigate("task", { taskId: res.taskId });
+    };
+
+    const cancel = async () => {
+        await api.cancelTask(task.id);
+        notify("任务已取消，已下载的文件保留在缓存", "info");
     };
 
     const openOutput = () =>
@@ -214,22 +222,17 @@ function TaskCard({ task }: { task: ConversionTask }) {
                     </span>
                 )}
                 <div className="flex shrink-0 items-center gap-2">
-                    {(running || task.status === "failed") && (
-                        <Btn size="sm" onClick={() => navigate("task", { taskId: task.id })}>
-                            查看日志
-                        </Btn>
-                    )}
-                    {running && (
-                        <Btn size="sm" onClick={() => void api.cancelTask(task.id)}>
-                            取消
-                        </Btn>
-                    )}
-                    {task.status === "failed" && (
-                        <Btn variant="primary" size="sm" icon={RefreshCw} onClick={() => void retry()}>
-                            重试
-                        </Btn>
-                    )}
-                    {task.status === "success" && (
+                    {/* 五态统一有详情出口：运行/排队/失败/已取消看日志，成功看报告 */}
+                    {running ? (
+                        <>
+                            <Btn size="sm" onClick={() => void cancel()}>
+                                取消
+                            </Btn>
+                            <Btn size="sm" onClick={() => navigate("task", { taskId: task.id })}>
+                                查看日志
+                            </Btn>
+                        </>
+                    ) : task.status === "success" ? (
                         <>
                             <Btn variant="danger" size="sm" onClick={() => void api.deleteTask(task.id)}>
                                 删除
@@ -237,12 +240,34 @@ function TaskCard({ task }: { task: ConversionTask }) {
                             <Btn size="sm" onClick={openOutput}>
                                 打开输出目录
                             </Btn>
+                            <Btn
+                                variant="primary"
+                                size="sm"
+                                className="font-semibold"
+                                onClick={() => navigate("report", { taskId: task.id })}
+                            >
+                                查看报告
+                            </Btn>
                         </>
-                    )}
-                    {task.status === "cancelled" && (
+                    ) : task.status === "failed" ? (
                         <>
                             <Btn variant="danger" size="sm" onClick={() => void api.deleteTask(task.id)}>
                                 删除
+                            </Btn>
+                            <Btn size="sm" onClick={() => navigate("task", { taskId: task.id })}>
+                                查看日志
+                            </Btn>
+                            <Btn variant="primary" size="sm" icon={RefreshCw} onClick={() => void retry()}>
+                                重试
+                            </Btn>
+                        </>
+                    ) : (
+                        <>
+                            <Btn variant="danger" size="sm" onClick={() => void api.deleteTask(task.id)}>
+                                删除
+                            </Btn>
+                            <Btn size="sm" onClick={() => navigate("task", { taskId: task.id })}>
+                                查看日志
                             </Btn>
                             <Btn variant="primary" size="sm" className="font-semibold" onClick={() => void retry()}>
                                 重新转换
@@ -280,7 +305,8 @@ function chipLabel(task: ConversionTask, base: string): string {
 function detailLine(task: ConversionTask): string {
     if (task.status === "running" || task.status === "queued") {
         const last = task.logs[task.logs.length - 1]?.message;
-        return [task.stage ? `${task.stage} ·` : "", last ?? "等待开始…"].filter(Boolean).join(" ");
+        const where = task.stage ? `${stageLabel(task.stage)} ·` : "排队 ·";
+        return [where, last ?? "等待开始…"].filter(Boolean).join(" ");
     }
     if (task.status === "success") {
         const c = task.counts;

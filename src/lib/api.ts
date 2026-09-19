@@ -25,6 +25,7 @@ import type {
     PackManifest,
     PlanMod,
     ProgressEvent,
+    StartResult,
     VersionOption,
 } from "./types";
 import { EVENTS } from "./types";
@@ -175,12 +176,13 @@ export async function listModCategories(): Promise<string[]> {
 
 /* ---------------- 任务生命周期 ---------------- */
 
-/** 创建并开始转换（Rust: start_conversion(options, manifest, plan) -> taskId）；plan 为前端确认过的最终方案 */
+/** 创建转换任务（Rust: start_conversion(options, manifest, plan) -> StartResult）；
+ *  plan 为前端确认过的最终方案；同一时间只跑一条，已有任务在跑时新任务排队 */
 export async function startConversion(
     options: ConversionOptions,
     pack: PackManifest,
     plan: PlanMod[]
-): Promise<string> {
+): Promise<StartResult> {
     if (!isTauri) return mock.mockStartTask(options, pack);
     return invokeOrMock(
         "start_conversion",
@@ -209,10 +211,14 @@ export async function cancelTask(id: string): Promise<void> {
     return invokeOrMock("cancel_task", { id }, () => mock.mockCancelTask(id));
 }
 
-/** 重试任务（Rust: retry_task(id) -> newTaskId） */
-export async function retryTask(id: string): Promise<string | undefined> {
+/** 重试任务（Rust: retry_task(id) -> StartResult | null，语义同 start_conversion） */
+export async function retryTask(id: string): Promise<StartResult | undefined> {
     if (!isTauri) return mock.mockRetryTask(id);
-    return invokeOrMock("retry_task", { id }, () => mock.mockRetryTask(id));
+    return invokeOrMock<StartResult | undefined>(
+        "retry_task",
+        { id },
+        () => mock.mockRetryTask(id)
+    );
 }
 
 /** 删除任务记录（Rust: delete_task(id)） */

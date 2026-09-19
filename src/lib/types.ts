@@ -175,6 +175,13 @@ export interface ConversionTask {
     logs: TaskLogLine[];
 }
 
+/** 创建/重试任务的返回（Rust: start_conversion / retry_task）；同一时间只跑一条，其余排队 */
+export interface StartResult {
+    taskId: string;
+    /** true = 已有任务在跑，本次创建进入排队队列 */
+    queued: boolean;
+}
+
 /** 结构化错误载荷（对应 Errors 族四张卡） */
 export interface TaskError {
     /** 出错阶段 */

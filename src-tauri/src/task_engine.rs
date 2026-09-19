@@ -6,6 +6,7 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
+use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager};
 
 use crate::core::builder::{self, BuildInput};
@@ -17,6 +18,18 @@ use crate::models::*;
 pub const EVENT_PROGRESS: &str = "conversion://progress";
 pub const EVENT_DONE: &str = "conversion://done";
 const SETTINGS_FILE: &str = "settings.json";
+/// 任务本地存档：注册表全量快照（任务 + 方案 + 报告），重启后可见可重试
+const TASKS_FILE: &str = "tasks.json";
+
+#[derive(Default, serde::Serialize, serde::Deserialize)]
+struct TasksFile {
+    #[serde(default)]
+    tasks: HashMap<String, ConversionTask>,
+    #[serde(default)]
+    plans: HashMap<String, Vec<PlanMod>>,
+    #[serde(default)]
+    reports: HashMap<String, ConversionReport>,
+}
 
 #[derive(Default)]
 pub struct Inner {
@@ -30,6 +43,8 @@ pub struct Inner {
     /// 任务创建时前端确认过的最终方案（含用户勾改/本地与服务端新增）
     pub plans: HashMap<String, Vec<PlanMod>>,
     pub settings: AppSettings,
+    /// 当前独占运行的任务 id——同一时间只允许一条转换在跑，其余排队
+    pub current: Option<String>,
 }
 
 pub struct AppState {
@@ -38,11 +53,13 @@ pub struct AppState {
 
 impl AppState {
     pub fn new(app: &AppHandle) -> Self {
+        let mut inner = Inner {
+            settings: load_settings(app),
+            ..Default::default()
+        };
+        load_tasks(app, &mut inner);
         Self {
-            inner: Mutex::new(Inner {
-                settings: load_settings(app),
-                ..Default::default()
-            }),
+            inner: Mutex::new(inner),
         }
     }
 }
@@ -92,9 +109,64 @@ pub fn save_settings(app: &AppHandle, s: &AppSettings) {
     }
 }
 
+/* ---------------- 任务存档 ---------------- */
+
+fn tasks_path(app: &AppHandle) -> Option<PathBuf> {
+    app.path().app_config_dir().ok().map(|d| d.join(TASKS_FILE))
+}
+
+/// 启动回灌：tasks/plans/reports 全量恢复；上次会话遗留的排队/运行中转会失败可重试
+/// （流水线、源包解析缓存都不跨进程，复活即错）
+fn load_tasks(app: &AppHandle, inner: &mut Inner) {
+    let Some(Ok(text)) = tasks_path(app).map(|f| std::fs::read_to_string(f)) else { return };
+    let Ok(v) = serde_json::from_str::<TasksFile>(&text) else { return };
+    for (id, mut t) in v.tasks {
+        if matches!(t.status, TaskStatus::Queued | TaskStatus::Running) {
+            t.status = TaskStatus::Failed;
+            t.error = Some(TaskError {
+                stage: t.stage.unwrap_or(PipelineStage::Parser),
+                title: "转换中断".into(),
+                detail: "应用退出时任务尚未完成，可重试".into(),
+                retryable: true,
+                attempts: None,
+                log_tail: None,
+                exit_code: None,
+            });
+            t.finished_at = Some(now_ms());
+        }
+        inner.tasks.insert(id, t);
+    }
+    inner.plans = v.plans;
+    inner.reports = v.reports;
+}
+
+/// 注册表任意变更后同步落盘（量小、低频，调用方持锁即可）
+pub fn save_tasks(app: &AppHandle, inner: &Inner) {
+    let Some(p) = tasks_path(app) else { return };
+    if let Some(dir) = p.parent() {
+        let _ = std::fs::create_dir_all(dir);
+    }
+    let snapshot = TasksFile {
+        tasks: inner.tasks.clone(),
+        plans: inner.plans.clone(),
+        reports: inner.reports.clone(),
+    };
+    if let Ok(json) = serde_json::to_string_pretty(&snapshot) {
+        let _ = std::fs::write(p, json);
+    }
+}
+
 /* ---------------- 任务创建与调度 ---------------- */
 
-/// 注册任务并异步启动流水线，返回任务 id。
+/// 任务创建结果：queued = 已有任务在跑，本条进入排队队列
+#[derive(Serialize, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct StartResult {
+    pub task_id: String,
+    pub queued: bool,
+}
+
+/// 注册任务，空闲则立即开跑，否则留在排队队列，返回 (id, 是否排队)。
 /// 方案由前端 Convert 页确认后整体传入（含勾改与新增项）。
 pub fn create_task(
     app: &AppHandle,
@@ -102,7 +174,7 @@ pub fn create_task(
     options: ConversionOptions,
     manifest: PackManifest,
     plan: Vec<PlanMod>,
-) -> String {
+) -> StartResult {
     let id = format!("task-{}", uuid::Uuid::new_v4().simple());
     let task = ConversionTask {
         id: id.clone(),
@@ -122,33 +194,83 @@ pub fn create_task(
         output_size_bytes: None,
         logs: Vec::new(),
     };
-    {
+    let queued = {
         let mut inner = state.inner.lock().unwrap();
         inner.plans.insert(id.clone(), plan);
         inner.cancel.insert(id.clone(), Arc::new(AtomicBool::new(false)));
         inner.tasks.insert(id.clone(), task);
+        save_tasks(app, &inner);
+        // 有任务在跑就安心排队；否则本条即刻上位
+        if inner.current.is_some() {
+            true
+        } else {
+            inner.current = Some(id.clone());
+            false
+        }
+    };
+    if !queued {
+        spawn_pipeline(app, state, id.clone());
     }
-    start(app.clone(), state.clone(), id.clone());
-    id
+    StartResult { task_id: id, queued }
 }
 
-fn start(app: AppHandle, state: Arc<AppState>, id: String) {
+/// 独占槽位交接点：流水线退出（成功/失败/取消皆如此）后拉起队首排队任务。
+/// 返回 Some(next_id) 表示调用方需 spawn
+fn release_and_next(app: &AppHandle, state: &Arc<AppState>, done_id: &str) -> Option<String> {
+    let next = {
+        let mut inner = state.inner.lock().unwrap();
+        if inner.current.as_deref() == Some(done_id) {
+            inner.current = None;
+        }
+        if inner.current.is_some() {
+            None
+        } else {
+            let cand = inner
+                .tasks
+                .iter()
+                .filter(|(_, t)| t.status == TaskStatus::Queued)
+                .min_by_key(|(_, t)| t.created_at)
+                .map(|(id, _)| id.clone());
+            if cand.is_some() {
+                inner.current = cand.clone();
+            }
+            cand
+        }
+    };
+    save_tasks(app, &state.inner.lock().unwrap());
+    next
+}
+
+fn spawn_pipeline(app: &AppHandle, state: &Arc<AppState>, id: String) {
+    let (a, s) = (app.clone(), state.clone());
     tauri::async_runtime::spawn(async move {
-        run_pipeline(app, state, id).await;
+        run_pipeline(a.clone(), s.clone(), id.clone()).await;
+        if let Some(next) = release_and_next(&a, &s, &id) {
+            spawn_pipeline(&a, &s, next);
+        }
     });
 }
 
-pub fn cancel(state: &Arc<AppState>, id: &str) {
-    let mut inner = state.inner.lock().unwrap();
-    if let Some(flag) = inner.cancel.get(id) {
-        flag.store(true, Ordering::Relaxed);
+pub fn cancel(app: &AppHandle, state: &Arc<AppState>, id: &str) {
+    {
+        let mut inner = state.inner.lock().unwrap();
+        if let Some(flag) = inner.cancel.get(id) {
+            flag.store(true, Ordering::Relaxed);
+        }
+        if let Some(t) = inner.tasks.get_mut(id) {
+            if matches!(t.status, TaskStatus::Queued | TaskStatus::Running) {
+                t.status = TaskStatus::Cancelled;
+                t.finished_at = Some(now_ms());
+                let stage = t.stage.unwrap_or(PipelineStage::Parser);
+                t.logs.push(log_line(stage, LogLevel::Warn, "任务已被用户取消"));
+            }
+        }
+        save_tasks(app, &inner);
     }
-    if let Some(t) = inner.tasks.get_mut(id) {
-        if matches!(t.status, TaskStatus::Queued | TaskStatus::Running) {
-            t.status = TaskStatus::Cancelled;
-            t.finished_at = Some(now_ms());
-            let stage = t.stage.unwrap_or(PipelineStage::Parser);
-            t.logs.push(log_line(stage, LogLevel::Warn, "任务已被用户取消"));
+    // 排队中的任务从未开跑，取消后不会再有收尾钩子，这里直接放行下一队
+    if state.inner.lock().unwrap().current.as_deref() != Some(id) {
+        if let Some(next) = release_and_next(app, state, id) {
+            spawn_pipeline(app, state, next);
         }
     }
 }
@@ -213,6 +335,10 @@ fn fail(app: &AppHandle, state: &Arc<AppState>, id: &str, error: TaskError) {
         state,
         id,
         |t| {
+            // 已取消的行不再转失败（取消与下载/构建报错可能同时到达）
+            if !matches!(t.status, TaskStatus::Queued | TaskStatus::Running) {
+                return;
+            }
             t.status = TaskStatus::Failed;
             t.error = Some(error.clone());
             t.finished_at = Some(now_ms());
@@ -225,6 +351,7 @@ fn fail(app: &AppHandle, state: &Arc<AppState>, id: &str, error: TaskError) {
         true,
     );
     let _ = app.emit(EVENT_DONE, HashMap::from([("taskId".to_string(), id.to_string())]));
+    save_tasks(app, &state.inner.lock().unwrap());
 }
 
 /* ---------------- 流水线 ---------------- */
@@ -236,6 +363,10 @@ async fn run_pipeline(app: AppHandle, state: Arc<AppState>, id: String) {
             Some(t) => t,
             None => return,
         };
+        // 排队期间被取消（或已删除）：不进入运行态，交回调度器拉起下一队
+        if !matches!(task.status, TaskStatus::Queued | TaskStatus::Running) {
+            return;
+        }
         (
             inner.plans.get(&id).cloned().unwrap_or_default(),
             task.pack.clone(),
@@ -672,6 +803,7 @@ async fn run_pipeline(app: AppHandle, state: Arc<AppState>, id: String) {
         inner.reports.insert(id.clone(), report);
     }
     let _ = app.emit(EVENT_DONE, HashMap::from([("taskId".to_string(), id.clone())]));
+    save_tasks(&app, &state.inner.lock().unwrap());
 }
 
 fn map_download_error(app: &AppHandle, state: &Arc<AppState>, id: &str, e: &DownloadError) {

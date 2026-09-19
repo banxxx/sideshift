@@ -383,7 +383,9 @@ export function ConvertPage() {
         setStarting(true);
         try {
             // 停用行不下发：后端方案里根本没有它，无需感知停用概念
-            const taskId = await api.startConversion(options, manifest, activeMods);
+            const { taskId, queued } = await api.startConversion(options, manifest, activeMods);
+            // 同一时间只跑一条转换：有任务在跑时本次进排队队列
+            if (queued) notify("已有转换正在进行，本次任务已加入队列", "info");
             navigate("task", { taskId });
         } catch {
             setStarting(false);

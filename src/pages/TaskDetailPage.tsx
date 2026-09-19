@@ -15,6 +15,7 @@
  */
 import { useEffect, useRef, useState } from "react";
 import * as api from "@/lib/api";
+import { notify } from "@/lib/notify";
 import { useNavigation } from "@/lib/navigation";
 import {
     BAR_COLOR,
@@ -108,8 +109,10 @@ export function TaskDetailPage() {
     );
 
     const retry = async () => {
-        const id = await api.retryTask(task.id);
-        if (id) navigate("task", { taskId: id });
+        const res = await api.retryTask(task.id);
+        if (!res) return;
+        if (res.queued) notify("已有转换正在进行，重试任务已加入队列", "info");
+        navigate("task", { taskId: res.taskId });
     };
 
     const copyDiagnostics = async () => {

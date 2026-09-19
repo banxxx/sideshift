@@ -14,6 +14,7 @@ import type {
     PackDirNode,
     PackManifest,
     PlanMod,
+    StartResult,
     TaskLogLine,
     VersionOption,
 } from "./types";
@@ -428,27 +429,40 @@ function ensureSeeded(): void {
     seq = HISTORY.length;
 }
 
-/** 启动（或重启）一个模拟转换任务，返回任务 id */
+/** 启动（或重启）一个模拟转换任务；同一时间只跑一条，有任务在跑则排队 */
 export function mockStartTask(
     options: ConversionOptions,
     pack: PackManifest = mockManifest
-): string {
+): StartResult {
     ensureSeeded();
+    const queued = [...tasks.values()].some((t) => t.status === "running");
     const id = `task-${++seq}`;
     const task: ConversionTask = {
         id,
         pack,
         options,
-        status: "running",
+        status: queued ? "queued" : "running",
         progress: 0,
         counts: mockPlanCounts,
         createdAt: Date.now(),
-        startedAt: Date.now(),
+        startedAt: queued ? undefined : Date.now(),
         logs: [],
     };
     tasks.set(id, task);
-    advance(id);
-    return id;
+    if (!queued) advance(id);
+    return { taskId: id, queued };
+}
+
+/** 队首转正：当前无运行时，把最早创建的排队任务拉起（与 Rust release_and_next 同语义） */
+function dequeueNext(): void {
+    if ([...tasks.values()].some((t) => t.status === "running")) return;
+    const next = [...tasks.values()]
+        .filter((t) => t.status === "queued")
+        .sort((a, b) => a.createdAt - b.createdAt)[0];
+    if (!next) return;
+    next.status = "running";
+    next.startedAt = Date.now();
+    advance(next.id);
 }
 
 function advance(id: string) {
@@ -457,6 +471,7 @@ function advance(id: string) {
         if (!task || task.status !== "running") {
             clearInterval(timer);
             timers.delete(id);
+            dequeueNext();
             return;
         }
         task.progress = Math.min(100, task.progress + 2);
@@ -483,6 +498,7 @@ function advance(id: string) {
             task.outputSizeBytes = 96 * 1024 * 1024;
             clearInterval(timer);
             timers.delete(id);
+            dequeueNext();
         }
     }, 200);
     timers.set(id, timer);
@@ -500,14 +516,17 @@ export function mockGetTask(id: string): ConversionTask | undefined {
 
 export function mockCancelTask(id: string): void {
     const task = tasks.get(id);
-    if (task && task.status === "running") {
+    if (task && (task.status === "running" || task.status === "queued")) {
+        const wasQueued = task.status === "queued";
         task.status = "cancelled";
         task.finishedAt = Date.now();
         task.logs.push({ time: now(), stage: task.stage ?? "builder", message: "任务已被用户取消", level: "warn" });
+        // 排队行没有推进器，取消后由其替运行中任务交棒；运行中的交棒在 advance 里做
+        if (wasQueued) dequeueNext();
     }
 }
 
-export function mockRetryTask(id: string): string | undefined {
+export function mockRetryTask(id: string): StartResult | undefined {
     const task = tasks.get(id);
     if (!task) return undefined;
     return mockStartTask(task.options, task.pack);
@@ -519,6 +538,7 @@ export function mockDeleteTask(id: string): void {
     if (timer) clearInterval(timer);
     timers.delete(id);
     tasks.delete(id);
+    dequeueNext();
 }
 
 export function mockReport(taskId: string): ConversionReport | undefined {

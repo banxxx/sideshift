@@ -269,7 +269,7 @@ pub fn start_conversion(
     options: ConversionOptions,
     manifest: PackManifest,
     plan: Vec<PlanMod>,
-) -> String {
+) -> task_engine::StartResult {
     task_engine::create_task(&app, &state, options, manifest, plan)
 }
 
@@ -286,8 +286,8 @@ pub fn get_task(state: S<'_>, id: String) -> Option<ConversionTask> {
 }
 
 #[tauri::command]
-pub fn cancel_task(state: S<'_>, id: String) {
-    task_engine::cancel(&state, &id);
+pub fn cancel_task(app: AppHandle, state: S<'_>, id: String) {
+    task_engine::cancel(&app, &state, &id);
 }
 
 #[tauri::command]
@@ -295,7 +295,7 @@ pub fn retry_task(
     app: AppHandle,
     state: S<'_>,
     id: String,
-) -> Option<String> {
+) -> Option<task_engine::StartResult> {
     let (options, pack, plan) = {
         let inner = lock(&state);
         let t = inner.tasks.get(&id)?;
@@ -309,12 +309,17 @@ pub fn retry_task(
 }
 
 #[tauri::command]
-pub fn delete_task(state: S<'_>, id: String) {
+pub fn delete_task(app: AppHandle, state: S<'_>, id: String) {
     let mut inner = lock(&state);
+    // 运行中的行不允许直接删（先取消）
+    if inner.current.as_deref() == Some(id.as_str()) {
+        return;
+    }
     inner.tasks.remove(&id);
     inner.reports.remove(&id);
     inner.plans.remove(&id);
     inner.cancel.remove(&id);
+    task_engine::save_tasks(&app, &inner);
 }
 
 #[tauri::command]
