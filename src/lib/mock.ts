@@ -113,6 +113,12 @@ export const mockPlanMods: PlanMod[] = [
     ...ADD_SAMPLES,
 ];
 
+/** 补真实感体积与下载来源：keep 行约 1/4 视为包内直取（未声明 jar），其余联网下载 */
+mockPlanMods.forEach((m, i) => {
+    m.sizeBytes = (3 + ((i * 7) % 26)) * 1_000_000 + ((i * 131) % 900) * 1000;
+    m.needsDownload = !(m.disposition === "keep" && i % 4 === 0);
+});
+
 /** 反向依赖演示数据：保留项依赖被剔除/新增的前置库 */
 const MOCK_DEPENDS: Record<string, string[]> = {
     Create: ["fabric-api"],
@@ -193,12 +199,19 @@ export function mockSearch(query: ModSearchQuery): ModSearchPage {
     };
 }
 
+/** Modrinth /tag/category 的真实模组类别（dev 浏览器离线兜底；Tauri 走接口） */
+export const mockModCategories: string[] = [
+    "adventure", "cursed", "decoration", "economy", "equipment", "food", "game-mechanics",
+    "library", "magic", "management", "minigame", "mobs", "optimization", "social",
+    "storage", "technology", "transportation", "utility", "worldgen",
+];
+
 /** Mod Detail：Krypton 的版本行（整行点击下载） */
 export const mockModVersions: ModVersionEntry[] = [
-    { id: "v-0.2.3", versionNumber: "0.2.3", mcVersion: "1.20.1", loader: "fabric", date: "2023-11-02", sizeBytes: 412_000, recommended: true },
-    { id: "v-0.2.2", versionNumber: "0.2.2", mcVersion: "1.20.1", loader: "fabric", date: "2023-08-19", sizeBytes: 410_500, recommended: false },
-    { id: "v-0.2.1", versionNumber: "0.2.1", mcVersion: "1.20", loader: "fabric", date: "2023-06-07", sizeBytes: 408_100, recommended: false },
-    { id: "v-0.2.0", versionNumber: "0.2.0", mcVersion: "1.19.4", loader: "fabric", date: "2023-02-14", sizeBytes: 402_900, recommended: false },
+    { id: "v-0.2.3", versionNumber: "0.2.3", mcVersion: "1.20.1", loader: "fabric", date: "2023-11-02", sizeBytes: 412_000, recommended: true, url: "https://cdn.modrinth.com/data/fabric-krypton/versions/v-0.2.3/krypton-0.2.3.jar", sha1: "a3d5f1c09b7e2d46c8a05e1f3b7d9c2e4a6c8e01", fileName: "krypton-0.2.3.jar" },
+    { id: "v-0.2.2", versionNumber: "0.2.2", mcVersion: "1.20.1", loader: "fabric", date: "2023-08-19", sizeBytes: 410_500, recommended: false, url: "https://cdn.modrinth.com/data/fabric-krypton/versions/v-0.2.2/krypton-0.2.2.jar", sha1: "b4e6a2d10c8f3e57d9b16f2a4c8e0d3f5b7d9e02", fileName: "krypton-0.2.2.jar" },
+    { id: "v-0.2.1", versionNumber: "0.2.1", mcVersion: "1.20", loader: "fabric", date: "2023-06-07", sizeBytes: 408_100, recommended: false, url: "https://cdn.modrinth.com/data/fabric-krypton/versions/v-0.2.1/krypton-0.2.1.jar", sha1: "c5f7b3e21d9a4f68e0c27a3b5d9f1e4a6c8e0f03", fileName: "krypton-0.2.1.jar" },
+    { id: "v-0.2.0", versionNumber: "0.2.0", mcVersion: "1.19.4", loader: "fabric", date: "2023-02-14", sizeBytes: 402_900, recommended: false, url: "https://cdn.modrinth.com/data/fabric-krypton/versions/v-0.2.0/krypton-0.2.0.jar", fileName: "krypton-0.2.0.jar" },
 ];
 
 export const mockDefaultOptions: ConversionOptions = {

@@ -32,6 +32,13 @@ export interface PackManifest {
 /** 单个模组在转换方案中的处置（对应 Convert 模组方案三行） */
 export type ModDisposition = "remove" | "keep" | "add";
 
+/** 用户在添加那一刻钉住的 Modrinth 构建（方案显示版本 = 构建下载版本） */
+export interface PinnedVersion {
+    url: string;
+    sha1?: string;
+    fileName: string;
+}
+
 /** 转换方案里的一行模组 */
 export interface PlanMod {
     id: string;
@@ -47,8 +54,14 @@ export interface PlanMod {
     needsReview: boolean;
     /** 自动补齐的依赖项（移除时给依赖警告） */
     autoSupplement: boolean;
+    /** 源文件大小（字节）；0 = 未知（外部新增行构建期才解析） */
+    sizeBytes?: number;
+    /** 需联网下载（源声明带 URL）；false = 包内直取 */
+    needsDownload?: boolean;
     /** 「从本地添加」的 .jar 绝对路径（真实后端直接取本地文件） */
     localPath?: string;
+    /** 在线添加时钉住的构建；缺省 = 构建期解析最新兼容版（自动补行） */
+    pinned?: PinnedVersion;
     /** 依赖的其他方案行 id（mrpack depends 元数据；反向依赖警告用） */
     depends?: string[];
 }
@@ -220,6 +233,11 @@ export interface ModVersionEntry {
     date: string;
     sizeBytes: number;
     recommended: boolean;
+    /** 该构建主文件直链（在线添加时随版本一起钉住） */
+    url: string;
+    sha1?: string;
+    /** 服务端下载文件名 */
+    fileName: string;
 }
 
 /** 在线搜索结果分页（对应 Online Add 分页页脚） */
@@ -236,8 +254,10 @@ export interface ModSearchPage {
 export interface ModSearchQuery {
     source: "modrinth" | "curseforge";
     text: string;
+    /** 空串 = 全部版本 */
     mcVersion: string;
-    loader: LoaderKind;
+    /** null = 任意加载器 */
+    loader: LoaderKind | null;
     /** 类别过滤，可空=全部 */
     category?: string;
     page: number;

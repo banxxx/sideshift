@@ -985,6 +985,7 @@ export function ModalShell({
     title,
     sub,
     icon: Icon,
+    iconNode,
     back,
     children,
     footerNote,
@@ -998,6 +999,8 @@ export function ModalShell({
     title: string;
     sub?: string;
     icon?: LucideIcon;
+    /** 自定义头部图标（如模组真实头像）；给了它就替代 icon 的图标壳 */
+    iconNode?: ReactNode;
     back?: () => void;
     children: ReactNode;
     footerNote?: string;
@@ -1030,11 +1033,12 @@ export function ModalShell({
                     style={{ width, height }}
                 >
                     <div className="flex w-full items-center justify-between gap-2.5">
-                        {Icon && (
-                            <span className="flex size-10 shrink-0 items-center justify-center rounded-lg bg-surface-2">
-                                <Icon className="size-5 text-accent" />
-                            </span>
-                        )}
+                        {iconNode ??
+                            (Icon && (
+                                <span className="flex size-10 shrink-0 items-center justify-center rounded-lg bg-surface-2">
+                                    <Icon className="size-5 text-accent" />
+                                </span>
+                            ))}
                         <div className="flex min-w-0 flex-1 flex-col gap-[3px]">
                             <DialogPrimitive.Title className="truncate text-[14px] leading-[20px] font-semibold text-text-1">
                                 {title}

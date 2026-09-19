@@ -66,7 +66,10 @@ pub fn build_plan(parsed: &ParsedPack, strip_client_only: bool) -> Vec<PlanMod> 
                 client_only,
                 needs_review,
                 auto_supplement: false,
+                size_bytes: f.size_bytes,
+                needs_download: !f.url.is_empty(),
                 local_path: None,
+                pinned: None,
                 depends: Vec::new(),
             }
         })
@@ -103,7 +106,10 @@ pub fn build_plan(parsed: &ParsedPack, strip_client_only: bool) -> Vec<PlanMod> 
             client_only: false,
             needs_review: false,
             auto_supplement: true,
-                local_path: None,
+            size_bytes: 0,
+            needs_download: true,
+            local_path: None,
+            pinned: None,
             depends: Vec::new(),
         });
     }
@@ -118,7 +124,10 @@ pub fn build_plan(parsed: &ParsedPack, strip_client_only: bool) -> Vec<PlanMod> 
             client_only: false,
             needs_review: false,
             auto_supplement: false,
+            size_bytes: 0,
+            needs_download: true,
             local_path: None,
+            pinned: None,
             depends: Vec::new(),
         });
     }
@@ -213,6 +222,7 @@ mod tests {
             file_name: name.into(),
             url: String::new(),
             sha1: None,
+            size_bytes: 0,
             server_required: true,
             env_declared: true,
             depends: depends.iter().map(|s| s.to_string()).collect(),

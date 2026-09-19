@@ -174,6 +174,20 @@ export function ConvertPage() {
         [mods]
     );
 
+    /** 预下载真实聚合：联网行按源 fileSize 求和，包内直取行单列；加载器按固定经验值计入下载 */
+    const downloadEstimate = useMemo(() => {
+        let download = 0;
+        let fromPack = 0;
+        for (const m of mods) {
+            if (m.disposition === "remove") continue;
+            if (m.needsDownload) download += m.sizeBytes ?? 0;
+            else fromPack += m.sizeBytes ?? 0;
+        }
+        // 加载器本体：Fabric 一体化 server jar 约 25MB，Forge/NeoForge installer 约 12MB
+        download += manifest?.loader === "fabric" ? 25_000_000 : 12_000_000;
+        return { download, fromPack };
+    }, [mods, manifest]);
+
     /** 反向依赖警告：保留/新增项依赖了被剔除的行（mrpack depends 元数据，按缺失项聚合） */
     const depWarnings = useMemo(() => {
         const byId = new Map(mods.map((m) => [m.id, m]));
@@ -231,6 +245,7 @@ export function ConvertPage() {
                 clientOnly: false,
                 needsReview: false,
                 autoSupplement: false,
+                needsDownload: false,
                 localPath: path,
             },
         ]);
@@ -253,6 +268,14 @@ export function ConvertPage() {
                           clientOnly: false,
                           needsReview: false,
                           autoSupplement: false,
+                          sizeBytes: version.sizeBytes,
+                          needsDownload: true,
+                          // 钉住用户此刻所选构建：构建时按此下载，版本与所选严格一致
+                          pinned: {
+                              url: version.url,
+                              sha1: version.sha1,
+                              fileName: version.fileName,
+                          },
                       },
                   ]
         );
@@ -740,7 +763,10 @@ export function ConvertPage() {
                         <CountRow label="新增服务端模组" count={counts.add} tone="accent" />
                         <Divider />
                         <NoteRow icon={Download}>
-                            预计下载 {formatSize((counts.keep + counts.add) * 1_200_000)}
+                            预计下载 {formatSize(downloadEstimate.download)}
+                            {downloadEstimate.fromPack > 0 &&
+                                ` · 包内直取 ${formatSize(downloadEstimate.fromPack)}`}
+                            （估算，已缓存部分会跳过）
                         </NoteRow>
                         <NoteRow icon={Archive}>输出 {outputNameOf(manifest.fileName)}</NoteRow>
                         <NoteRow icon={Folder}>
@@ -838,13 +864,12 @@ function PlanModRow({
     );
 }
 
-/** 徽章优先级：自动补齐 > 需人工确认 > 本地 > 客户端专属 > 推荐（新增项） */
+/** 徽章优先级：自动补齐 > 需人工确认 > 本地 > 客户端专属；普通在线新增无徽章（不挂无逻辑装饰） */
 function badgeFor(mod: PlanMod, local: boolean): React.ReactNode {
     if (mod.autoSupplement) return <TagChip>自动补齐</TagChip>;
     if (mod.needsReview) return <ToneChip tone="gold" size="sm">需人工确认</ToneChip>;
     if (local) return <TagChip>本地</TagChip>;
     if (mod.clientOnly) return <TagChip>客户端专属</TagChip>;
-    if (mod.disposition === "add") return <TagChip className="text-gold">推荐</TagChip>;
     return undefined;
 }
 

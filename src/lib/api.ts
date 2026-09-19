@@ -155,6 +155,12 @@ export async function listModVersions(
     return invokeOrMock("list_mod_versions", { modId }, () => mock.mockModVersions);
 }
 
+/** Modrinth 官方模组类别标签（Rust: list_mod_categories，供网络添加「类别」下拉） */
+export async function listModCategories(): Promise<string[]> {
+    if (!isTauri) return mock.mockModCategories;
+    return invokeOrMock("list_mod_categories", {}, () => mock.mockModCategories);
+}
+
 /* ---------------- 任务生命周期 ---------------- */
 
 /** 创建并开始转换（Rust: start_conversion(options, manifest, plan) -> taskId）；plan 为前端确认过的最终方案 */

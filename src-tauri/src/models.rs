@@ -57,12 +57,31 @@ pub struct PlanMod {
     pub client_only: bool,
     pub needs_review: bool,
     pub auto_supplement: bool,
+    /// 源文件大小（字节）：mrpack fileSize / zip 条目大小；0 = 未知（外部新增构建期才解析）
+    #[serde(default)]
+    pub size_bytes: u64,
+    /// 需真联网下载（源声明带 URL）；false = 包内直取（本地 jar 抽取/本地文件）
+    #[serde(default)]
+    pub needs_download: bool,
     /// 本地添加的 .jar 绝对路径（「从本地添加」项专用，downloader 直接取本地文件）
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub local_path: Option<String>,
+    /// 在线添加时钉住的具体构建：构建时按所选 url/sha1/文件名取，不再解析最新版
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pinned: Option<PinnedVersion>,
     /// 依赖的其他方案行 id（mrpack depends 解析所得，供反向依赖警告）
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub depends: Vec<String>,
+}
+
+/// 用户在添加那一刻选定的 Modrinth 构建（与版本行一一对应，保证方案显示版本 = 实际下载版本）
+#[derive(Serialize, Deserialize, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct PinnedVersion {
+    pub url: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sha1: Option<String>,
+    pub file_name: String,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -287,8 +306,11 @@ pub struct ModSearchPage {
 pub struct ModSearchQuery {
     pub source: ModSource,
     pub text: String,
+    /// 空串 = 全部版本（不加 versions facet）
     pub mc_version: String,
-    pub loader: LoaderKind,
+    /// None = 任意加载器（不加 categories facet；前端「任意加载器」传 null）
+    #[serde(default)]
+    pub loader: Option<LoaderKind>,
     #[serde(default)]
     pub category: Option<String>,
     pub page: u32,
@@ -304,6 +326,12 @@ pub struct ModVersionEntry {
     pub date: String,
     pub size_bytes: u64,
     pub recommended: bool,
+    /// 该构建主文件的直链（在线添加时随版本一起钉住）
+    pub url: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sha1: Option<String>,
+    /// 服务端下载文件名（与方案行展示版本对应）
+    pub file_name: String,
 }
 
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]

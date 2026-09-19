@@ -29,6 +29,7 @@ pub fn run() {
             commands::list_excluded_mods,
             commands::search_mods,
             commands::list_mod_versions,
+            commands::list_mod_categories,
             commands::start_conversion,
             commands::list_tasks,
             commands::get_task,

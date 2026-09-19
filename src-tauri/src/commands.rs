@@ -234,6 +234,14 @@ pub async fn list_mod_versions(
         .map_err(|e| e.to_string())
 }
 
+#[tauri::command]
+pub async fn list_mod_categories(state: S<'_>) -> Result<Vec<String>, String> {
+    downloader_of(&state)
+        .list_mod_categories()
+        .await
+        .map_err(|e| e.to_string())
+}
+
 /* ---------------- 任务生命周期 ---------------- */
 
 #[tauri::command]

@@ -284,10 +284,12 @@ impl Downloader {
         if !q.mc_version.is_empty() {
             facets.push(vec![format!("versions:{}", q.mc_version)]);
         }
-        facets.push(vec![format!("categories:{}", loader_cat(q.loader))]);
+        if let Some(l) = q.loader {
+            facets.push(vec![format!("categories:{}", loader_cat(l))]);
+        }
         if let Some(cat) = &q.category {
             if !cat.is_empty() && cat != "all" {
-                facets.push(vec![format!("categories:{cat}")]);
+                facets.push(vec![format!("categories:{}", cat.to_lowercase())]);
             }
         }
         let index = if q.text.trim().is_empty() {
@@ -381,6 +383,9 @@ impl Downloader {
                         .unwrap_or_default(),
                     size_bytes: file["size"].as_u64().unwrap_or(0),
                     recommended: false,
+                    url: file["url"].as_str().unwrap_or_default().to_string(),
+                    sha1: file["hashes"]["sha1"].as_str().map(String::from),
+                    file_name: file["filename"].as_str().unwrap_or("mod.jar").to_string(),
                 });
             }
         }
@@ -394,6 +399,27 @@ impl Downloader {
             first.recommended = true;
         }
         Ok(entries)
+    }
+
+    /// Modrinth 官方类别标签（GET /tag/category，取模组向条目去重排序），供「类别」下拉
+    pub async fn list_mod_categories(&self) -> Result<Vec<String>, DownloadError> {
+        let v = self.get_json(&format!("{MODRINTH_API}/tag/category")).await?;
+        let mut out: Vec<String> = Vec::new();
+        if let Some(arr) = v.as_array() {
+            for e in arr {
+                let pt = e["project_type"].as_str().unwrap_or("");
+                if pt != "mod" && pt != "all" {
+                    continue;
+                }
+                if let Some(n) = e["name"].as_str() {
+                    if !out.iter().any(|x| x == n) {
+                        out.push(n.to_string());
+                    }
+                }
+            }
+        }
+        out.sort();
+        Ok(out)
     }
 
     /// 解析某模组在 (mc, loader) 下最新 release 构建的下载地址

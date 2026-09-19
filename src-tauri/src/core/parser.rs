@@ -22,6 +22,8 @@ pub struct PackFile {
     pub url: String,
     /// files[].hashes.sha1，用作缓存键
     pub sha1: Option<String>,
+    /// 原始文件大小（字节）：index.fileSize 或 zip 条目大小；0 = 未知
+    pub size_bytes: u64,
     /// env.server != unsupported
     pub server_required: bool,
     /// 条目是否声明了 env 段（声明则按 env 精确判定，否则走名称启发式）
@@ -125,6 +127,8 @@ struct RawFile {
     env: Option<RawEnv>,
     #[serde(default)]
     depends: Vec<RawDep>,
+    #[serde(default, rename = "fileSize")]
+    file_size: Option<u64>,
 }
 
 #[derive(Deserialize)]
@@ -198,6 +202,7 @@ fn parse_mrpack(path: &Path) -> Result<ParsedPack, String> {
             file_name,
             url: f.downloads.first().cloned().unwrap_or_default(),
             sha1: f.hashes.get("sha1").cloned(),
+            size_bytes: f.file_size.unwrap_or(0),
             server_required: server_side != Some("unsupported"),
             env_declared: f.env.as_ref().and_then(|e| e.server.clone()).is_some(),
             depends: f
@@ -231,21 +236,39 @@ fn parse_mrpack(path: &Path) -> Result<ParsedPack, String> {
         if lower == MRPACK_ENTRY || declared.contains(&name) {
             continue;
         }
-        // 只认「某目录下的文件」，且跳过 mods 与启动器重量级目录
-        let Some(j) = lower.find('/') else { continue };
-        let top = &lower[..j];
-        if top == "mods" || ZIP_SKIP_TOP_DIRS.contains(&top) {
-            continue;
-        }
         let file_name = Path::new(&name)
             .file_name()
             .map(|s| s.to_string_lossy().to_string())
             .unwrap_or_else(|| name.clone());
+        // 只认「某目录下的文件」，且跳过启动器重量级目录
+        let Some(j) = lower.find('/') else { continue };
+        let top = &lower[..j];
+        if top == "mods" {
+            // 手动塞进 mrpack /mods 的未声明 jar：mrpack 规范允许，启动器原样安装，
+            // 方案必须收录（无 url 无 sha1 → 构建时 ZipEntry 直取）；其余文件忽略
+            if lower.ends_with(".jar") {
+                mod_files.push(PackFile {
+                    path: name,
+                    file_name,
+                    url: String::new(),
+                    sha1: None,
+                    size_bytes: ent.size(),
+                    server_required: true,
+                    env_declared: false,
+                    depends: Vec::new(),
+                });
+            }
+            continue;
+        }
+        if ZIP_SKIP_TOP_DIRS.contains(&top) {
+            continue;
+        }
         extra_files.push(PackFile {
             path: name,
             file_name,
             url: String::new(), // 物理存在于源包：构建时 Fetch::ZipEntry 直接抽取
             sha1: None,
+            size_bytes: ent.size(),
             server_required: true,
             env_declared: false,
             depends: Vec::new(),
@@ -321,7 +344,7 @@ fn parse_plain_zip(path: &Path) -> Result<ParsedPack, String> {
 
     let mut mod_files = Vec::new();
     let mut extra_files = Vec::new();
-    for (name, _) in &entries {
+    for (name, size) in &entries {
         let lower = name.to_lowercase();
         let file_name = Path::new(name)
             .file_name()
@@ -333,6 +356,7 @@ fn parse_plain_zip(path: &Path) -> Result<ParsedPack, String> {
                 file_name,
                 url: String::new(), // 裸包无下载源：downloader 将按名称在 Modrinth 反查
                 sha1: None,
+                size_bytes: *size,
                 server_required: true,
                 env_declared: false,
                 depends: Vec::new(),
@@ -347,6 +371,7 @@ fn parse_plain_zip(path: &Path) -> Result<ParsedPack, String> {
                     file_name,
                     url: String::new(),
                     sha1: None,
+                    size_bytes: *size,
                     server_required: true,
                     env_declared: false,
                     depends: Vec::new(),

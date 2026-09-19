@@ -8,9 +8,9 @@
  *    取消勾选即「反向待办」（金色行 + 描边徽章）；勾选只进弹窗草稿，
  *    「应用」时才把差异行回写页面（「取消」/关闭按钮放弃草稿）
  */
-import { ChevronDown, ChevronLeft, ChevronRight, Folder, MinusSquare, Puzzle, RefreshCw, Square, SquareCheck } from "lucide-react";
+import { Check, ChevronDown, ChevronLeft, ChevronRight, Folder, MinusSquare, Puzzle, Search, Square, SquareCheck } from "lucide-react";
 import { useEffect, useId, useMemo, useRef, useState } from "react";
-import { motion } from "motion/react";
+import { AnimatePresence, motion } from "motion/react";
 import * as api from "@/lib/api";
 import { formatSize, loaderLabel } from "@/lib/format";
 import type {
@@ -20,6 +20,7 @@ import type {
     ModVersionEntry,
     PackDirNode,
     PlanMod,
+    VersionOption,
 } from "@/lib/types";
 import {
     Btn,
@@ -479,6 +480,14 @@ export function DirPickerModal({
 
 type Source = "modrinth" | "curseforge";
 
+/** 筛选下拉的一项：chip = 触发钮上的短文案，label = 列表项全文 */
+interface FilterOpt {
+    value: string;
+    chip: string;
+    label: string;
+    group?: string;
+}
+
 export function OnlineAddModal({
     open,
     onClose,
@@ -496,29 +505,92 @@ export function OnlineAddModal({
     const [view, setView] = useState<"list" | "detail">("list");
     const [source, setSource] = useState<Source>("modrinth");
     const [query, setQuery] = useState("");
+    const [debounced, setDebounced] = useState("");
     const [page, setPage] = useState(1);
+    // 三筛选值："" = 全部版本；"" = 任意加载器；"all" = 全部类别
+    const [verSel, setVerSel] = useState(mcVersion);
+    const [loSel, setLoSel] = useState<LoaderKind | "">(loader);
+    const [catSel, setCatSel] = useState("all");
+    const [mcOptions, setMcOptions] = useState<VersionOption[]>([]);
+    const [categories, setCategories] = useState<string[]>([]);
     const [detail, setDetail] = useState<ModSearchResult | null>(null);
     const [versions, setVersions] = useState<ModVersionEntry[]>([]);
+    const [versionsLoading, setVersionsLoading] = useState(false);
+    const [versionsError, setVersionsError] = useState<string | null>(null);
     const [result, setResult] = useState<{ total: number; results: ModSearchResult[] }>({
         total: 0,
         results: [],
     });
+    const [loading, setLoading] = useState(false);
+    const [error, setError] = useState<string | null>(null);
+
+    // 弹窗壳常驻挂载：每次打开重置回一级视图与包自身版本/加载器
+    useEffect(() => {
+        if (!open) return;
+        setView("list");
+        setDetail(null);
+        setQuery("");
+        setDebounced("");
+        setPage(1);
+        setVerSel(mcVersion);
+        setLoSel(loader);
+        setCatSel("all");
+    }, [open, mcVersion, loader]);
+
+    // 搜索词防抖 300ms：真实后端逐键请求会打爆 Modrinth
+    useEffect(() => {
+        const t = setTimeout(() => setDebounced(query), 300);
+        return () => clearTimeout(t);
+    }, [query]);
+
+    // 筛选下拉的真实选项：MC 版本表 + Modrinth 官方类别标签
+    useEffect(() => {
+        if (!open) return;
+        void api.listMcVersions().then(setMcOptions).catch(() => {});
+        void api.listModCategories().then(setCategories).catch(() => {});
+    }, [open]);
 
     useEffect(() => {
         if (!open) return;
         let alive = true;
-        void api.searchMods({ source, text: query, mcVersion, loader, page }).then((p) => {
-            if (alive) setResult({ total: p.total, results: p.results });
-        });
+        setLoading(true);
+        setError(null);
+        void api
+            .searchMods({
+                source,
+                text: debounced,
+                mcVersion: verSel,
+                loader: loSel || null,
+                category: catSel,
+                page,
+            })
+            .then((p) => {
+                if (!alive) return;
+                setResult({ total: p.total, results: p.results });
+                setLoading(false);
+            })
+            .catch((e: unknown) => {
+                if (!alive) return;
+                setResult({ total: 0, results: [] });
+                setError(e instanceof Error ? e.message : String(e));
+                setLoading(false);
+            });
         return () => {
             alive = false;
         };
-    }, [open, source, query, page, mcVersion, loader]);
+    }, [open, source, debounced, page, verSel, loSel, catSel]);
 
     const openDetail = (mod: ModSearchResult) => {
         setDetail(mod);
         setView("detail");
-        void api.listModVersions(mod.id).then(setVersions);
+        setVersions([]);
+        setVersionsError(null);
+        setVersionsLoading(true);
+        void api
+            .listModVersions(mod.id)
+            .then(setVersions)
+            .catch((e: unknown) => setVersionsError(e instanceof Error ? e.message : String(e)))
+            .finally(() => setVersionsLoading(false));
     };
 
     const close = () => {
@@ -527,7 +599,45 @@ export function OnlineAddModal({
         setDetail(null);
     };
 
-    const loaderName = loaderLabel(loader);
+    const verOpts = useMemo<FilterOpt[]>(
+        () => [
+            { value: "", chip: "全部", label: "全部版本" },
+            ...mcOptions.map((o) => ({
+                value: o.value,
+                chip: o.value,
+                label: o.value,
+                group: o.group,
+            })),
+        ],
+        [mcOptions]
+    );
+    const loOpts = useMemo<FilterOpt[]>(
+        () => [
+            { value: "", chip: "任意", label: "任意加载器" },
+            { value: "fabric", chip: "Fabric", label: "Fabric" },
+            { value: "forge", chip: "Forge", label: "Forge" },
+            { value: "neoforge", chip: "NeoForge", label: "NeoForge" },
+        ],
+        []
+    );
+    const catOpts = useMemo<FilterOpt[]>(
+        () => [
+            { value: "all", chip: "全部", label: "全部类别" },
+            ...categories.map((c) => ({ value: c, chip: c, label: c })),
+        ],
+        [categories]
+    );
+
+    // 二级视图共用同一筛选状态：版本行按所选版本/加载器在前端过滤
+    const shownVersions = useMemo(
+        () =>
+            versions.filter(
+                (v) => (!verSel || v.mcVersion === verSel) && (!loSel || v.loader === loSel)
+            ),
+        [versions, verSel, loSel]
+    );
+
+    const filterNote = `${verSel ? `Minecraft ${verSel}` : "全部版本"} · ${loSel ? loaderLabel(loSel) : "任意加载器"}`;
 
     /* ---- 二级视图：模组详情 + 版本列表（整行点击下载） ---- */
     if (view === "detail" && detail) {
@@ -540,6 +650,7 @@ export function OnlineAddModal({
                 width={800}
                 height={464}
                 icon={Puzzle}
+                iconNode={<ModIcon url={detail.iconUrl} className="size-10" puzzleClass="size-5" />}
                 title={detail.name}
                 sub={`${source === "modrinth" ? "Modrinth" : "CurseForge"} · 作者 ${detail.author} · ${formatCount(detail.downloads)} 次下载`}
             >
@@ -548,46 +659,68 @@ export function OnlineAddModal({
                 </p>
                 <div className="flex h-[30px] w-full shrink-0 items-center gap-2">
                     <div className="flex h-7 items-center gap-2">
-                        <FilterChip label={`版本 ${mcVersion}`} />
-                        <FilterChip label={`加载器 ${loaderName}`} />
+                        <FilterSelect
+                            prefix="版本"
+                            value={verSel}
+                            options={verOpts}
+                            searchable
+                            onChange={setVerSel}
+                        />
+                        <FilterSelect
+                            prefix="加载器"
+                            value={loSel}
+                            options={loOpts}
+                            onChange={(v) => setLoSel(v as LoaderKind | "")}
+                        />
                     </div>
                 </div>
                 <div className="-mx-1 flex min-h-0 flex-1 flex-col gap-0.5 overflow-auto px-1">
-                    {versions.map((v, i) => (
-                        <ListRow
-                            key={v.id}
-                            className={cn(
-                                "cursor-pointer hover:bg-surface-2",
-                                i === versions.length - 1 && "bg-surface"
-                            )}
-                            onClick={() => {
-                                onAdd(detail, v);
-                                close();
-                            }}
-                        >
-                            <span className="flex min-w-0 flex-1 flex-col gap-0.5">
-                                <span className="flex items-center gap-2">
-                                    <span className="truncate font-mono text-[12px] leading-[18px] font-medium text-text-1">
-                                        {v.versionNumber}
-                                    </span>
-                                    {v.recommended && (
-                                        <ToneChip tone="gold" size="xs">
-                                            推荐
-                                        </ToneChip>
-                                    )}
-                                </span>
-                                <span className="truncate text-[10px] leading-[14px] font-normal text-text-3">
-                                    Minecraft {v.mcVersion} · {loaderLabel(v.loader)} · {v.date} ·{" "}
-                                    {formatSize(v.sizeBytes)}
-                                </span>
-                            </span>
-                        </ListRow>
-                    ))}
-                    {versions.length === 0 && (
-                        <span className="flex items-center justify-center gap-1.5 py-8 text-center text-[11px] text-text-3">
-                            <RefreshCw className="size-3 animate-spin" />
-                            加载版本中…
+                    {versionsLoading ? (
+                        <ListSkeleton rows={5} />
+                    ) : versionsError ? (
+                        <span className="py-8 text-center text-[11px] text-gold">
+                            版本加载失败 · {versionsError}
                         </span>
+                    ) : (
+                        <>
+                            {shownVersions.map((v, i) => (
+                                <ListRow
+                                    key={v.id}
+                                    className={cn(
+                                        "cursor-pointer hover:bg-surface-2",
+                                        i === shownVersions.length - 1 && "bg-surface"
+                                    )}
+                                    onClick={() => {
+                                        onAdd(detail, v);
+                                        close();
+                                    }}
+                                >
+                                    <span className="flex min-w-0 flex-1 flex-col gap-0.5">
+                                        <span className="flex items-center gap-2">
+                                            <span className="truncate font-mono text-[12px] leading-[18px] font-medium text-text-1">
+                                                {v.versionNumber}
+                                            </span>
+                                            {v.recommended && (
+                                                <ToneChip tone="gold" size="xs">
+                                                    推荐
+                                                </ToneChip>
+                                            )}
+                                        </span>
+                                        <span className="truncate text-[10px] leading-[14px] font-normal text-text-3">
+                                            Minecraft {v.mcVersion} · {loaderLabel(v.loader)} ·{" "}
+                                            {v.date} · {formatSize(v.sizeBytes)}
+                                        </span>
+                                    </span>
+                                </ListRow>
+                            ))}
+                            {shownVersions.length === 0 && (
+                                <span className="py-8 text-center text-[11px] text-text-3">
+                                    {versions.length === 0
+                                        ? "该模组没有可用构建"
+                                        : "当前筛选下没有构建"}
+                                </span>
+                            )}
+                        </>
                     )}
                 </div>
             </ModalShell>
@@ -603,15 +736,19 @@ export function OnlineAddModal({
             width={800}
             height={464}
             title="从网络添加模组"
-            sub={`搜索 Modrinth 与 CurseForge · 自动匹配 Minecraft ${mcVersion} · ${loaderName}`}
-            footerNote={`${source === "modrinth" ? "Modrinth" : "CurseForge"} · 共 ${result.total} 个结果`}
+            sub={`搜索 Modrinth 与 CurseForge · ${filterNote}`}
+            footerNote={
+                error
+                    ? `${source === "modrinth" ? "Modrinth" : "CurseForge"} · 加载失败`
+                    : `${source === "modrinth" ? "Modrinth" : "CurseForge"} · 共 ${result.total} 个结果`
+            }
             footerActions={
                 <>
                     <Btn
                         size="sm"
                         icon={ChevronLeft}
                         className="w-9 px-0"
-                        disabled={page <= 1}
+                        disabled={page <= 1 || loading}
                         onClick={() => setPage((p) => p - 1)}
                         title="上一页"
                     />
@@ -619,7 +756,7 @@ export function OnlineAddModal({
                         size="sm"
                         icon={ChevronRight}
                         className="w-9 bg-surface px-0"
-                        disabled={page * result.results.length >= result.total}
+                        disabled={loading || page * result.results.length >= result.total}
                         onClick={() => setPage((p) => p + 1)}
                         title="下一页"
                     />
@@ -639,7 +776,7 @@ export function OnlineAddModal({
                 className="bg-surface-2"
             />
 
-            {/* toolbar：下载源分段（176×30）+ 筛选 chip 组（h28） */}
+            {/* toolbar：下载源分段（176×30）+ 真实筛选下拉组（h28） */}
             <div className="flex h-[30px] w-full shrink-0 items-center justify-between gap-2">
                 <SourceSeg
                     value={source}
@@ -649,44 +786,79 @@ export function OnlineAddModal({
                     }}
                 />
                 <div className="flex h-7 items-center gap-2">
-                    <FilterChip label={`版本 ${mcVersion}`} />
-                    <FilterChip label={`加载器 ${loaderName}`} />
-                    <FilterChip label="类别 全部" />
+                    <FilterSelect
+                        prefix="版本"
+                        value={verSel}
+                        options={verOpts}
+                        searchable
+                        onChange={(v) => {
+                            setVerSel(v);
+                            setPage(1);
+                        }}
+                    />
+                    <FilterSelect
+                        prefix="加载器"
+                        value={loSel}
+                        options={loOpts}
+                        onChange={(v) => {
+                            setLoSel(v as LoaderKind | "");
+                            setPage(1);
+                        }}
+                    />
+                    <FilterSelect
+                        prefix="类别"
+                        value={catSel}
+                        options={catOpts}
+                        onChange={(v) => {
+                            setCatSel(v);
+                            setPage(1);
+                        }}
+                    />
                 </div>
             </div>
 
-            {/* 结果行：整行点入模组详情 */}
+            {/* 结果行：真实图标 + 整行点入模组详情；请求中显示骨架屏 */}
             <div className="-mx-1 flex min-h-0 flex-1 flex-col gap-0.5 overflow-auto px-1">
-                {result.results.map((m, i) => (
-                    <ListRow
-                        key={m.id}
-                        className={cn(
-                            "cursor-pointer hover:bg-surface-2",
-                            i === result.results.length - 1 && "bg-surface"
-                        )}
-                        onClick={() => openDetail(m)}
-                    >
-                        <span className="flex size-9 shrink-0 items-center justify-center rounded-lg bg-surface-2">
-                            <Puzzle className="size-4 text-text-2" />
-                        </span>
-                        <span className="flex min-w-0 flex-1 flex-col gap-0.5">
-                            <span className="truncate font-mono text-[12px] leading-[18px] font-medium text-text-1">
-                                {m.name}
+                {loading ? (
+                    <ListSkeleton rows={6} icon />
+                ) : error ? (
+                    <span className="py-8 text-center text-[11px] text-gold">
+                        加载失败 · {error}
+                    </span>
+                ) : (
+                    <>
+                        {result.results.map((m, i) => (
+                            <ListRow
+                                key={m.id}
+                                className={cn(
+                                    "cursor-pointer hover:bg-surface-2",
+                                    i === result.results.length - 1 && "bg-surface"
+                                )}
+                                onClick={() => openDetail(m)}
+                            >
+                                <ModIcon url={m.iconUrl} />
+                                <span className="flex min-w-0 flex-1 flex-col gap-0.5">
+                                    <span className="truncate font-mono text-[12px] leading-[18px] font-medium text-text-1">
+                                        {m.name}
+                                    </span>
+                                    <span className="truncate text-[10px] leading-[14px] font-normal text-text-3">
+                                        {m.description}
+                                    </span>
+                                </span>
+                                {m.alreadyAdded && (
+                                    <ToneChip tone="emerald" size="xs">
+                                        已添加
+                                    </ToneChip>
+                                )}
+                                <ChevronRight className="size-3.5 shrink-0 text-text-3" />
+                            </ListRow>
+                        ))}
+                        {result.results.length === 0 && (
+                            <span className="py-8 text-center text-[11px] text-text-3">
+                                无匹配结果
                             </span>
-                            <span className="truncate text-[10px] leading-[14px] font-normal text-text-3">
-                                {m.description}
-                            </span>
-                        </span>
-                        {m.alreadyAdded && (
-                            <ToneChip tone="emerald" size="xs">
-                                已添加
-                            </ToneChip>
                         )}
-                        <ChevronRight className="size-3.5 shrink-0 text-text-3" />
-                    </ListRow>
-                ))}
-                {result.results.length === 0 && (
-                    <span className="py-8 text-center text-[11px] text-text-3">无匹配结果</span>
+                    </>
                 )}
             </div>
         </ModalShell>
@@ -730,13 +902,175 @@ function SourceSeg({ value, onChange }: { value: Source; onChange: (s: Source) =
     );
 }
 
-/** 筛选 chip：h28 gap4 padding[0,10] $surface + $stroke 1px r6，11/500 $text-1 + chevron-down 12 */
-function FilterChip({ label }: { label: string }) {
+/** 模组头像：真实 iconUrl 直链；无图/加载失败回退拼图占位 */
+function ModIcon({
+    url,
+    className,
+    puzzleClass = "size-4",
+}: {
+    url?: string;
+    className?: string;
+    puzzleClass?: string;
+}) {
+    const [failed, setFailed] = useState(false);
+    useEffect(() => setFailed(false), [url]);
+    const box = cn(
+        "flex shrink-0 items-center justify-center overflow-hidden rounded-lg bg-surface-2",
+        className ?? "size-9"
+    );
+    if (!url || failed) {
+        return (
+            <span className={box}>
+                <Puzzle className={cn(puzzleClass, "text-text-2")} />
+            </span>
+        );
+    }
     return (
-        <button className="inline-flex h-7 shrink-0 items-center gap-1 rounded-md border border-stroke bg-surface px-2.5 text-[11px] leading-[16px] font-medium text-text-1 transition-colors hover:bg-surface-2">
-            {label}
-            <ChevronDown className="size-3 text-text-2" />
-        </button>
+        <img
+            src={url}
+            alt=""
+            loading="lazy"
+            onError={() => setFailed(true)}
+            className={cn(box, "object-cover")}
+        />
+    );
+}
+
+/** 列表骨架屏：请求未回来时占住行高，避免布局跳动 */
+function ListSkeleton({ rows = 6, icon = false }: { rows?: number; icon?: boolean }) {
+    return (
+        <div className="flex min-h-0 flex-1 flex-col gap-0.5">
+            {Array.from({ length: rows }, (_, i) => (
+                <div key={i} className="flex h-[46px] shrink-0 animate-pulse items-center gap-3 rounded-lg px-2">
+                    {icon && <span className="size-9 shrink-0 rounded-lg bg-surface-2" />}
+                    <span className="flex min-w-0 flex-1 flex-col gap-1.5">
+                        <span className="h-3 w-2/5 rounded bg-surface-2" />
+                        <span className="h-2.5 w-3/5 rounded bg-surface-2" />
+                    </span>
+                </div>
+            ))}
+        </div>
+    );
+}
+
+/** 筛选下拉 chip：外观同 FilterChip（h28 r6 + chevron），点开浮层单选；searchable 供长列表（版本）过滤，不自动聚焦 */
+function FilterSelect({
+    prefix,
+    value,
+    options,
+    onChange,
+    searchable,
+    searchPlaceholder = "搜索…",
+}: {
+    prefix: string;
+    value: string;
+    options: FilterOpt[];
+    onChange: (v: string) => void;
+    searchable?: boolean;
+    searchPlaceholder?: string;
+}) {
+    const [open, setOpen] = useState(false);
+    const [q, setQ] = useState("");
+    const ref = useRef<HTMLDivElement>(null);
+
+    useEffect(() => {
+        if (!open) return;
+        const onDown = (e: MouseEvent) => {
+            if (!ref.current?.contains(e.target as Node)) setOpen(false);
+        };
+        window.addEventListener("mousedown", onDown);
+        return () => window.removeEventListener("mousedown", onDown);
+    }, [open]);
+
+    const current = options.find((o) => o.value === value);
+    const filtered = options.filter((o) => !q || o.label.toLowerCase().includes(q.toLowerCase()));
+
+    return (
+        <div ref={ref} className="relative shrink-0">
+            <button
+                onClick={() => setOpen((v) => !v)}
+                className={cn(
+                    "inline-flex h-7 shrink-0 items-center gap-1 rounded-md border bg-surface px-2.5 text-[11px] leading-[16px] font-medium text-text-1 transition-colors hover:bg-surface-2",
+                    open ? "border-accent" : "border-stroke"
+                )}
+            >
+                {prefix} {current?.chip ?? value}
+                <ChevronDown
+                    className={cn("size-3 text-text-2 transition-transform", open && "rotate-180")}
+                />
+            </button>
+            <AnimatePresence>
+                {open && (
+                    <motion.div
+                        initial={{ opacity: 0, y: -6, scaleY: 0.9 }}
+                        animate={{ opacity: 1, y: 0, scaleY: 1 }}
+                        exit={{ opacity: 0, y: -6, scaleY: 0.9 }}
+                        transition={{ duration: 0.16, ease: [0.16, 1, 0.3, 1] }}
+                        className="absolute top-full right-0 z-30 mt-1 flex max-h-[248px] min-w-[168px] origin-top flex-col gap-0.5 overflow-hidden rounded-lg border border-stroke bg-surface p-1.5 shadow-lg"
+                    >
+                        {searchable && (
+                            <>
+                                <div className="flex h-[26px] shrink-0 items-center gap-1.5 rounded-md px-2">
+                                    <Search className="size-3 shrink-0 text-text-3" />
+                                    <input
+                                        value={q}
+                                        onChange={(e) => setQ(e.target.value)}
+                                        placeholder={searchPlaceholder}
+                                        className="min-w-0 flex-1 bg-transparent text-[11px] text-text-1 outline-none placeholder:text-text-3"
+                                    />
+                                </div>
+                                <div className="h-px w-full shrink-0 bg-stroke" />
+                            </>
+                        )}
+                        <div className="flex min-h-0 flex-col gap-0.5 overflow-auto">
+                            {filtered.map((o, i) => {
+                                const active = o.value === value;
+                                const showGroup = !!o.group && filtered[i - 1]?.group !== o.group;
+                                return (
+                                    <div key={o.value || "any"} className="flex flex-col">
+                                        {showGroup && (
+                                            <span className="px-2 pt-1 pb-0.5 text-[10px] leading-[14px] font-normal text-text-3">
+                                                {o.group}
+                                            </span>
+                                        )}
+                                        <button
+                                            onClick={() => {
+                                                onChange(o.value);
+                                                setOpen(false);
+                                                setQ("");
+                                            }}
+                                            className={cn(
+                                                "flex h-[26px] w-full items-center justify-between gap-2 rounded-md px-2 transition-colors",
+                                                active ? "bg-surface-2" : "hover:bg-surface-2"
+                                            )}
+                                        >
+                                            <span
+                                                className={cn(
+                                                    "truncate font-mono text-[12px] leading-[18px]",
+                                                    active
+                                                        ? "font-semibold text-accent"
+                                                        : "font-normal text-text-1"
+                                                )}
+                                            >
+                                                {o.label}
+                                            </span>
+                                            {active && (
+                                                <Check className="size-3 shrink-0 text-accent" />
+                                            )}
+                                        </button>
+                                    </div>
+                                );
+                            })}
+                            {filtered.length === 0 && (
+                                <span className="px-2 py-3 text-center text-[11px] text-text-3">
+                                    无匹配项
+                                </span>
+                            )}
+                        </div>
+                    </motion.div>
+                )}
+            </AnimatePresence>
+        </div>
     );
 }
 

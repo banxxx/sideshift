@@ -351,6 +351,17 @@ async fn run_pipeline(app: AppHandle, state: Arc<AppState>, id: String) {
 
     // 3.1 保留 + 新增的模组
     for row in plan.iter().filter(|m| m.disposition != ModDisposition::Remove) {
+        // 在线添加的钉住行最先匹配：用户选哪个构建，构建时就下哪个（不再解析最新版）
+        if let Some(p) = &row.pinned {
+            let file_name = unique_mod_name(&mut used_names, &p.file_name, &row.id);
+            items.push(ItemSpec {
+                fetch: Fetch::Url(p.url.clone()),
+                sha1: p.sha1.clone(),
+                dest: mods_dir.join(&file_name),
+                file_name,
+            });
+            continue;
+        }
         let matched = parsed
             .mod_files
             .iter()
