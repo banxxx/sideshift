@@ -10,13 +10,12 @@
  * 数据来源全部走 @/lib/api 门面（浏览器 dev 自动落 mock），页面零 invoke。
  */
 import { useNavigation } from "@/lib/navigation";
+import { AnimatePresence, motion, type Variants } from "motion/react";
 import { LineDotRightHorizontal } from "lucide-react";
-import {
-    useActiveTask,
-    usePackSelection,
-    useTauriFileDrop,
-} from "@/lib/home-state";
+import { useActiveTask, useTauriFileDrop } from "@/lib/home-state";
+import { usePackStore } from "@/lib/pack-store";
 import { taskToRail } from "@/lib/rail-view";
+import { truncateMiddle } from "@/lib/format";
 import { Dropzone } from "@/components/features/Dropzone";
 import { HelpRow } from "@/components/features/HelpRow";
 import { PackCard } from "@/components/features/PackCard";
@@ -24,10 +23,18 @@ import { ShiftRail } from "@/components/features/ShiftRail";
 import type { PackCardStatus } from "@/components/features/PackCard";
 import { PageHeader } from "@/components/design/ui";
 
+/** idle 分支容器：具名 variants 把 show/hide 标签向后代（HelpRow 三卡）传播；
+ *  入场延迟 120ms 让 Dropzone 先行，退场整体 0.18 淡出与三卡下沉同步发生 */
+const IDLE_BRANCH: Variants = {
+    hidden: {},
+    show: { transition: { delayChildren: 0.12 } },
+    hide: { opacity: 0, transition: { duration: 0.18 } },
+};
+
 export function HomePage() {
     const { navigate } = useNavigation();
     const { manifest, parsing, error, errorName, parse, pickByDialog, reset } =
-        usePackSelection();
+        usePackStore();
     const { active } = useActiveTask();
 
     // Tauri 下 OS 拖入 → 直接解析第一个文件；拖拽悬停标志用于拖放卡高亮
@@ -55,7 +62,9 @@ export function HomePage() {
     const rail = view === "converting" && active ? taskToRail(active) : null;
 
     return (
-        <div className="flex flex-col gap-5 min-h-full">
+        // overflow-hidden：进出场时 PackCard 右移 64px / ShiftRail 下移 72px 属于
+        // 容器外变换，不裁剪会撑大 main 的滚动区域、闪出横竖滚动条
+        <div className="flex flex-col gap-5 min-h-full relative overflow-hidden">
             <PageHeader
                 title={
                     <span className="inline-flex items-center gap-2">
@@ -71,65 +80,103 @@ export function HomePage() {
                 sub="拖入整合包，SideShift 自动剔除客户端专属内容，补齐服务端依赖，生成可直接运行的服务器包。"
             />
 
-            {view === "idle" ? (
-                /* Idle：拖放卡 + 帮助三卡，垂直居中（设计稿 760 栏居中） */
-                <div className="flex-1 flex flex-col items-center justify-center gap-5 py-2">
-                    <Dropzone onPick={pickByDialog} onDropPaths={(p) => void parse(p[0])} fileDragging={fileDragging} />
-                    <HelpRow />
-                </div>
-            ) : (
-                <div className="flex flex-col gap-5">
-                    {/* 上半：拖放卡（紧凑 540）+ 已选包详情卡，设计稿定高 288 */}
-                    <div className="flex gap-5 items-stretch h-[288px]">
+            {/* idle ↔ cards 布局切换：
+                - popLayout 让退场分支脱离文档流，入场布局立即就位、不互相挤压；
+                - Dropzone 挂同一 layoutId，motion 自动投影"大卡缩小左上归位"（退出反向）；
+                - PackCard 从右滑入、ShiftRail 从下方滑入，错峰 60ms，退场按原路径返回 */}
+            <AnimatePresence mode="popLayout" initial={false}>
+                {view === "idle" ? (
+                    <motion.div
+                        key="idle"
+                        className="flex-1 flex flex-col items-center justify-center gap-5 py-2"
+                        variants={IDLE_BRANCH}
+                        initial="hidden"
+                        animate="show"
+                        exit="hide"
+                    >
                         <Dropzone
-                            compact
-                            busy={parsing}
+                            layoutId="dropzone"
                             onPick={pickByDialog}
                             onDropPaths={(p) => void parse(p[0])}
                             fileDragging={fileDragging}
                         />
-                        <PackCard
-                            manifest={manifest ?? active?.pack ?? null}
-                            status={cardStatus}
-                            error={error}
-                            fileName={errorName ?? undefined}
-                            onChangeFile={reset}
-                            onPrimary={() =>
-                                converting && active
-                                    ? navigate("task", { taskId: active.id })
-                                    : navigate("convert", { manifest })
-                            }
-                        />
-                    </div>
+                        <HelpRow />
+                    </motion.div>
+                ) : (
+                    <motion.div key="cards" className="flex flex-col gap-5">
+                        {/* 上半：拖放卡（紧凑 540）+ 已选包详情卡，设计稿定高 288 */}
+                        <div className="flex gap-5 items-stretch h-[288px]">
+                            <Dropzone
+                                layoutId="dropzone"
+                                compact
+                                busy={parsing}
+                                onPick={pickByDialog}
+                                onDropPaths={(p) => void parse(p[0])}
+                                fileDragging={fileDragging}
+                            />
+                            <motion.div
+                                className="flex min-w-0 flex-1"
+                                initial={{ x: 64, opacity: 0 }}
+                                animate={{ x: 0, opacity: 1 }}
+                                exit={{ x: 64, opacity: 0, transition: { duration: 0.18 } }}
+                                transition={{ type: "spring", stiffness: 260, damping: 28 }}
+                            >
+                                <PackCard
+                                    manifest={manifest ?? active?.pack ?? null}
+                                    status={cardStatus}
+                                    error={error}
+                                    fileName={errorName ?? undefined}
+                                    onChangeFile={reset}
+                                    onPrimary={() =>
+                                        converting && active
+                                            ? navigate("task", { taskId: active.id })
+                                            : navigate("convert", { manifest })
+                                    }
+                                />
+                            </motion.div>
+                        </div>
 
-                    {/* Shift Rail 实况小窗 */}
-                    <ShiftRail
-                        statuses={
-                            rail
-                                ? rail.statuses
-                                : /* 设计稿 i1k2jT：未开始时第 1 站即为金色"当前站" */
-                                  { parser: "active" }
-                        }
-                        status={
-                            rail
-                                ? rail.status
-                                : parsing
-                                  ? { label: "解析中", tone: "gold" }
-                                  : { label: "已检测 · 待转换", tone: "emerald" }
-                        }
-                        logs={rail?.logs ?? []}
-                        waiting={
-                            rail?.waiting ?? {
-                                title: "等待开始转换",
-                                detail: `已选择 ${manifest?.fileName ?? ""} · 点击「配置并转换」进入转换配置`,
-                            }
-                        }
-                        onOpenTask={
-                            active ? () => navigate("task", { taskId: active.id }) : undefined
-                        }
-                    />
-                </div>
-            )}
+                        {/* Shift Rail 实况小窗 */}
+                        <motion.div
+                            initial={{ y: 72, opacity: 0 }}
+                            animate={{ y: 0, opacity: 1 }}
+                            exit={{ y: 72, opacity: 0, transition: { duration: 0.18 } }}
+                            transition={{
+                                type: "spring",
+                                stiffness: 240,
+                                damping: 28,
+                                delay: 0.06,
+                            }}
+                        >
+                            <ShiftRail
+                                statuses={
+                                    rail
+                                        ? rail.statuses
+                                        : /* 设计稿 i1k2jT：未开始时第 1 站即为金色"当前站" */
+                                          { parser: "active" }
+                                }
+                                status={
+                                    rail
+                                        ? rail.status
+                                        : parsing
+                                          ? { label: "解析中", tone: "gold" }
+                                          : { label: "已检测 · 待转换", tone: "emerald" }
+                                }
+                                logs={rail?.logs ?? []}
+                                waiting={
+                                    rail?.waiting ?? {
+                                        title: "等待开始转换",
+                                        detail: `已选择 ${truncateMiddle(manifest?.fileName ?? "", 40)} · 点击「配置并转换」进入转换配置`,
+                                    }
+                                }
+                                onOpenTask={
+                                    active ? () => navigate("task", { taskId: active.id }) : undefined
+                                }
+                            />
+                        </motion.div>
+                    </motion.div>
+                )}
+            </AnimatePresence>
         </div>
     );
 }

@@ -13,7 +13,7 @@ import { useEffect, useState } from "react";
 import * as api from "@/lib/api";
 import { useNavigation } from "@/lib/navigation";
 import { BAR_COLOR, progressChip, stageLabel } from "@/lib/rail-view";
-import { formatDuration, formatElapsed, formatSize, loaderLabel, outputNameOf } from "@/lib/format";
+import { formatDuration, formatElapsed, formatSize, loaderLabel, outputNameOf, truncateMiddle } from "@/lib/format";
 import type { ConversionTask, TaskStatus } from "@/lib/types";
 import { Bar, Btn, PageHeader, Panel, SegTabs, ToneChip } from "@/components/design/ui";
 import { cn } from "@/lib/utils";
@@ -165,7 +165,7 @@ function TaskCard({ task }: { task: ConversionTask }) {
                 </span>
                 <div className="flex min-w-0 flex-1 flex-col gap-[3px]">
                     <span className="truncate font-mono text-[13px] leading-[20px] font-semibold text-text-1">
-                        {task.pack.fileName}
+                        {truncateMiddle(task.pack.fileName, 32)}
                     </span>
                     <span className="truncate font-mono text-[11px] leading-[16px] font-normal text-text-3">
                         {subLine(task, outName)}

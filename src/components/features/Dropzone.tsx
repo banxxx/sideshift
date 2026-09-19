@@ -14,7 +14,7 @@
  *   浏览器 dev 下 dragover/dragleave 生效，drop 退化为读取文件名交给 mock 解析。
  * - 点击整卡 = 打开系统文件选择框（onPick）。
  */
-import { useState } from "react";
+import { useLayoutEffect, useRef, useState } from "react";
 import { AnimatePresence, motion } from "motion/react";
 import { Upload } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -26,6 +26,8 @@ interface DropzoneProps {
     onDropPaths?: (paths: string[]) => void;
     /** Tauri：OS 文件正在拖拽悬停于窗口（webview enter/over/leave 事件驱动） */
     fileDragging?: boolean;
+    /** motion 共享元素变换 id：Home 大卡↔紧凑卡时自动做"缩小+归位"morph */
+    layoutId?: string;
     /** 紧凑模式（选包后 540 宽）下不显示"识别后显示…"提示行 */
     compact?: boolean;
     busy?: boolean;
@@ -36,11 +38,18 @@ interface DropzoneProps {
 const FADE = { duration: 0.2 } as const;
 /** 上浮用弹簧，比线性位移更像"被托起来" */
 const LIFT_SPRING = { type: "spring", stiffness: 380, damping: 28 } as const;
+/** layoutId 形态变换（大卡↔紧凑卡）的弹簧：稍软，位移/尺寸同步收敛 */
+export const MORPH_SPRING = {
+    type: "spring",
+    stiffness: 260,
+    damping: 28,
+} as const;
 
 export function Dropzone({
     onPick,
     onDropPaths,
     fileDragging,
+    layoutId,
     compact,
     busy,
     className,
@@ -51,12 +60,34 @@ export function Dropzone({
     // 悬停与拖拽共用同一套激活效果；仅文案区分语义
     const active = hovering || dragging;
 
+    // 蚂蚁线无缝化：虚线周期 24，但矩形周长一般不是 24 的整数倍，
+    // 首尾（左上角起点处）相位对不齐会露出接缝。测出真实周长后把
+    // pathLength 设成最近的 24 整数倍，浏览器按比例重标定虚线单位，首尾必然闭合。
+    const antsRef = useRef<SVGRectElement | null>(null);
+    const [antsPathLength, setAntsPathLength] = useState<number>();
+    useLayoutEffect(() => {
+        const el = antsRef.current;
+        if (!el) return;
+        const fit = () => {
+            const cycles = Math.max(1, Math.round(el.getTotalLength() / 24));
+            setAntsPathLength(cycles * 24);
+        };
+        fit();
+        const ro = new ResizeObserver(fit);
+        ro.observe(el);
+        return () => ro.disconnect();
+    }, []);
+
     return (
         <motion.div
             role="button"
             tabIndex={0}
-            onClick={onPick}
-            onKeyDown={(e) => (e.key === "Enter" || e.key === " ") && onPick()}
+            // busy 时不能点选，但绝不能用 pointer-events-none 屏蔽：那会让解析期间的
+            // mouseleave 丢失，指针移开后 hovering 卡死、蚂蚁线常亮（改由这里守卫点击）
+            onClick={busy ? undefined : onPick}
+            onKeyDown={(e) =>
+                !busy && (e.key === "Enter" || e.key === " ") && onPick()
+            }
             onMouseEnter={() => setHovering(true)}
             onMouseLeave={() => setHovering(false)}
             onFocus={() => setHovering(true)}
@@ -89,13 +120,14 @@ export function Dropzone({
                 if (list.length > 0) onDropPaths?.(list);
             }}
             initial={false}
+            layoutId={layoutId}
             animate={{ y: active ? -2 : 0 }}
-            transition={LIFT_SPRING}
+            transition={{ ...LIFT_SPRING, layout: MORPH_SPRING }}
             className={cn(
                 "group relative rounded-[12px] bg-surface border px-7 py-8 flex flex-col items-center justify-center gap-4 cursor-pointer select-none transition-colors duration-200",
                 active ? "border-transparent" : "border-stroke",
                 compact ? "w-[540px] shrink-0" : "w-[760px] h-[360px]",
-                busy && "pointer-events-none opacity-70",
+                busy && "opacity-70",
                 className
             )}
         >
@@ -137,11 +169,13 @@ export function Dropzone({
                 transition={FADE}
             >
                 <motion.rect
+                    ref={antsRef}
                     className="dz-ants-rect"
                     x={1}
                     y={1}
                     rx={11}
                     fill="none"
+                    pathLength={antsPathLength}
                     style={{ stroke: "var(--accent)" }}
                     strokeWidth={2}
                     strokeDasharray="12 12"

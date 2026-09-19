@@ -54,3 +54,23 @@ export function loaderLabel(loader: LoaderKind): string {
 export function outputNameOf(fileName: string): string {
     return `${fileName.replace(/\.(mrpack|zip|7z)$/i, "")}-server.zip`;
 }
+
+/**
+ * 过长的展示文件名做"掐中间"截断：保头保尾，后缀（.mrpack/.zip…）永远完整。
+ * CSS 的 text-overflow 只能尾部省略（会把后缀截丢），故用字符数预算在 JS 层处理；
+ * 各调用点按容器宽度传 budget（mono 字体下每字符约等宽，估算可靠）。
+ */
+export function truncateMiddle(fileName: string, budget = 34): string {
+    if (fileName.length <= budget) return fileName;
+    const dot = fileName.lastIndexOf(".");
+    // 无后缀或点开头的隐藏文件：整名当词干处理
+    const hasExt = dot > 0;
+    const stem = hasExt ? fileName.slice(0, dot) : fileName;
+    const ext = hasExt ? fileName.slice(dot) : "";
+    // 预算里刨去省略号与后缀，词干按 6:4 分给头尾
+    const keep = budget - 1 - ext.length;
+    if (keep < 4) return `${stem.slice(0, Math.max(1, budget - ext.length - 1))}…${ext}`;
+    const head = Math.ceil(keep * 0.6);
+    const tail = keep - head;
+    return `${stem.slice(0, head)}…${stem.slice(stem.length - tail)}${ext}`;
+}

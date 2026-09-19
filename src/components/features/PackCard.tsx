@@ -7,7 +7,7 @@
  */
 import { Archive, Check, ChevronRight, RefreshCw, X } from "lucide-react";
 import type { PackManifest } from "@/lib/types";
-import { formatSize } from "@/lib/format";
+import { formatSize, truncateMiddle } from "@/lib/format";
 import { Btn, Divider, MetaCell, Panel, ToneChip, type Tone } from "@/components/design/ui";
 
 export type PackCardStatus = "parsing" | "ready" | "converting" | "error";
@@ -62,7 +62,7 @@ export function PackCard({
             <div className="flex min-w-0 items-center gap-2">
                 <Archive className="size-4 shrink-0 text-amethyst" />
                 <span className="truncate font-mono text-[13px] leading-[20px] font-medium text-text-1">
-                    {manifest?.fileName ?? fileName ?? "等待选择文件…"}
+                    {truncateMiddle(manifest?.fileName ?? fileName ?? "等待选择文件…", 30)}
                 </span>
             </div>
 

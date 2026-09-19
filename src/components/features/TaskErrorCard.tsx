@@ -12,6 +12,7 @@
  */
 import { Download, RefreshCw, X, type LucideIcon } from "lucide-react";
 import type { TaskError } from "@/lib/types";
+import { truncateMiddle } from "@/lib/format";
 import { Btn, LinkBtn, ToneChip } from "@/components/design/ui";
 import { cn } from "@/lib/utils";
 
@@ -69,7 +70,7 @@ export function TaskErrorCard({
 
                 {error.stage === "parser" && fileName && (
                     <span className="truncate font-mono text-[11px] leading-[16px] font-normal text-text-3">
-                        {fileName}
+                        {truncateMiddle(fileName, 28)}
                     </span>
                 )}
                 {error.stage === "downloader" && error.attempts != null && error.attempts > 0 && (

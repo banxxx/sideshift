@@ -13,6 +13,7 @@ import { SettingsPage } from "@/pages/SettingsPage";
 import { ConvertPage } from "@/pages/ConvertPage";
 import { TaskDetailPage } from "@/pages/TaskDetailPage";
 import { ReportPage } from "@/pages/ReportPage";
+import { PackStoreProvider } from "@/lib/pack-store";
 import {
     NavigationProvider,
     useNavigation,
@@ -71,7 +72,9 @@ function App() {
         <NavigationProvider>
             {/* reducedMotion:"user"：跟随系统"减少动态效果"设置，全局降级 motion 动画 */}
             <MotionConfig reducedMotion="user">
-                <Shell />
+                <PackStoreProvider>
+                    <Shell />
+                </PackStoreProvider>
             </MotionConfig>
         </NavigationProvider>
     );

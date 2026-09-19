@@ -24,7 +24,7 @@ import {
     toneDot,
     toneText,
 } from "@/lib/rail-view";
-import { formatClock, formatDuration, loaderLabel, outputNameOf } from "@/lib/format";
+import { formatClock, formatDuration, loaderLabel, outputNameOf, truncateMiddle } from "@/lib/format";
 import type { ConversionTask } from "@/lib/types";
 import { TaskErrorCard } from "@/components/features/TaskErrorCard";
 import { Bar, Btn, Divider, InfoRow, PageHeader, Panel, PanelHead, ToneChip } from "@/components/design/ui";
@@ -102,7 +102,10 @@ export function TaskDetailPage() {
     const elapsed = (task.finishedAt ?? Date.now()) - started;
     const lastLog = task.logs[task.logs.length - 1];
     const counts = task.counts;
-    const packName = task.pack.fileName.replace(/\.(mrpack|zip|7z)$/i, "");
+    const packName = truncateMiddle(
+        task.pack.fileName.replace(/\.(mrpack|zip|7z)$/i, ""),
+        32
+    );
 
     const retry = async () => {
         const id = await api.retryTask(task.id);

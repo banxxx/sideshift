@@ -8,7 +8,7 @@ import { Archive, Check, FileText, Minus, Plus } from "lucide-react";
 import { useEffect, useState } from "react";
 import * as api from "@/lib/api";
 import { useNavigation } from "@/lib/navigation";
-import { formatClock, formatDuration, formatSize, loaderLabel } from "@/lib/format";
+import { formatClock, formatDuration, formatSize, loaderLabel, truncateMiddle } from "@/lib/format";
 import type { ConversionReport, ConversionTask } from "@/lib/types";
 import {
     Btn,
@@ -105,7 +105,7 @@ export function ReportPage() {
         <div className="flex flex-col gap-5">
             <PageHeader
                 title="转换报告"
-                sub={`${report.outputFileName} 已生成 · ${loader} · Minecraft ${o.mcVersion} · 总耗时 ${duration}`}
+                sub={`${truncateMiddle(report.outputFileName, 36)} 已生成 · ${loader} · Minecraft ${o.mcVersion} · 总耗时 ${duration}`}
             />
 
             <div className="flex items-start gap-5">
@@ -128,7 +128,7 @@ export function ReportPage() {
                         <div className="flex w-full items-center gap-2">
                             <FileText className="size-3.5 shrink-0 text-text-3" />
                             <span className="min-w-0 flex-1 truncate font-mono text-[12px] leading-[18px] font-medium text-text-1">
-                                {report.outputFileName}
+                                {truncateMiddle(report.outputFileName, 44)}
                             </span>
                             <TagChip className="py-0.5 font-normal">{formatSize(report.outputSizeBytes)}</TagChip>
                         </div>
@@ -231,7 +231,7 @@ export function ReportPage() {
                         <div className="flex w-full items-center gap-2">
                             <FileText className="size-3.5 shrink-0 text-text-3" />
                             <span className="min-w-0 flex-1 truncate font-mono text-[11px] leading-[16px] font-medium text-text-1">
-                                {report.outputFileName}
+                                {truncateMiddle(report.outputFileName, 36)}
                             </span>
                         </div>
                         <div className="flex w-full items-center justify-between gap-3">

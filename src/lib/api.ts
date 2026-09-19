@@ -52,7 +52,9 @@ async function invokeOrMock<T>(
 
 /* ---------------- 解析 / 选项 ---------------- */
 
-/** 打开系统文件选择器，返回选中的 .mrpack/.zip 路径（取消为 null） */
+/** 打开系统文件选择器，返回选中的 .mrpack/.zip 路径（取消为 null）
+ * 注：刻意用 plugin-dialog 模态框——曾试过无 owner 的 rfd 命令以支持"对话框开着
+ * 也能拖文件进窗口"，但会引发弹窗失焦系列问题，已回退，勿再改回 */
 export async function pickPackFile(): Promise<string | null> {
     if (!isTauri) return mock.mockManifest.fileName;
     const { open } = await import("@tauri-apps/plugin-dialog");

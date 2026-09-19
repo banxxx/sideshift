@@ -152,11 +152,10 @@ export function ShiftRail({
                 {status && (
                     <span
                         className={cn(
-                            "flex items-center gap-1.5 rounded-full px-2.5 py-1 font-mono text-[11px] font-medium",
+                            "flex items-center rounded-full px-2.5 py-1 font-mono text-[11px] font-semibold",
                             CHIP_TONE[status.tone]
                         )}
                     >
-                        <span className="size-1.5 rounded-full bg-current" />
                         {status.label}
                     </span>
                 )}

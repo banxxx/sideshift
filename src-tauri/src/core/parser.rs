@@ -1,4 +1,7 @@
 //! 整合包解析：.mrpack 精确解析（modrinth.index.json）；裸 .zip 启发式扫描 mods/ 目录。
+//!
+//! mrpack 规范口径：顶层 `game` 恒为游戏 ID（"minecraft"），MC 版本在 `dependencies.minecraft`；
+//! `files[]` 中 downloads 为空的条目是"包内自带"（local）文件，同样计入模组。
 
 use std::collections::BTreeMap;
 use std::fs::File;
@@ -15,7 +18,7 @@ pub struct PackFile {
     /// 相对路径，如 mods/fabric-api.jar
     pub path: String,
     pub file_name: String,
-    /// 下载 URL（mrpack 内嵌；裸 zip 为空，需反查）
+    /// 下载 URL（mrpack 内嵌；裸 zip 与包内自带文件为空，需反查或直接抽取）
     pub url: String,
     /// files[].hashes.sha1，用作缓存键
     pub sha1: Option<String>,
@@ -91,8 +94,6 @@ pub fn parse(path: &Path) -> ParsedPack {
 #[derive(Deserialize)]
 struct IndexJson {
     #[serde(default)]
-    game: String,
-    #[serde(default)]
     dependencies: BTreeMap<String, String>,
     #[serde(default)]
     files: Vec<RawFile>,
@@ -150,22 +151,27 @@ fn parse_mrpack(path: &Path) -> Result<ParsedPack, String> {
         LoaderKind::Forge => index.dependencies.get("forge").cloned(),
         LoaderKind::NeoForge => index.dependencies.get("neoforge").cloned(),
     };
+    // 顶层 game 字段按规范恒为 "minecraft"（游戏 ID），版本号在 dependencies.minecraft
+    let mc_version = index
+        .dependencies
+        .get("minecraft")
+        .cloned()
+        .unwrap_or_default();
 
     let mut mod_files = Vec::new();
     let mut extra_files = Vec::new();
     for f in &index.files {
-        let Some(url) = f.downloads.first().cloned() else {
-            continue; // 无下载源的条目跳过
-        };
         let file_name = Path::new(&f.path)
             .file_name()
             .map(|s| s.to_string_lossy().to_string())
             .unwrap_or_else(|| f.path.clone());
         let server_side = f.env.as_ref().and_then(|e| e.server.as_deref());
+        // downloads 为空 = 包内自带（local）文件：同样计入模组与方案，
+        // 构建时由流水线经 Fetch::ZipEntry 直接从源包抽取，不联网
         let pf = PackFile {
             path: f.path.clone(),
             file_name,
-            url,
+            url: f.downloads.first().cloned().unwrap_or_default(),
             sha1: f.hashes.get("sha1").cloned(),
             server_required: server_side != Some("unsupported"),
             env_declared: f.env.as_ref().and_then(|e| e.server.clone()).is_some(),
@@ -178,8 +184,8 @@ fn parse_mrpack(path: &Path) -> Result<ParsedPack, String> {
     }
 
     let mut error = None;
-    if index.game.is_empty() {
-        error = Some("modrinth.index.json 缺少 game 字段（无法确定 Minecraft 版本）".into());
+    if mc_version.is_empty() {
+        error = Some("modrinth.index.json 缺少 dependencies.minecraft（无法确定 Minecraft 版本）".into());
     } else if mod_files.is_empty() {
         error = Some("整合包中没有任何模组文件（mods 目录为空）".into());
     }
@@ -189,7 +195,7 @@ fn parse_mrpack(path: &Path) -> Result<ParsedPack, String> {
             .map(|s| s.to_string_lossy().to_string())
             .unwrap_or_default(),
         loader,
-        mc_version: index.game.clone(),
+        mc_version,
         mod_count: mod_files.len() as u32,
         size_bytes: std::fs::metadata(path).map(|m| m.len()).unwrap_or(0),
         parsed: error.is_none(),
@@ -374,5 +380,81 @@ fn guess_loader(entries: &[(String, u64)], path: &Path) -> LoaderKind {
         } else {
             LoaderKind::Fabric
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+
+    /// 构造一个最小 mrpack：MC 版本只在 dependencies 里，
+    /// 含 1 个下载条目 + 1 个包内自带（local）模组 + 1 个自带配置文件
+    fn write_fake_mrpack() -> std::path::PathBuf {
+        let path = std::env::temp_dir().join(format!(
+            "sideshift-parser-{}.mrpack",
+            uuid::Uuid::new_v4()
+        ));
+        let mut w = zip::ZipWriter::new(File::create(&path).unwrap());
+        let opts = zip::write::SimpleFileOptions::default();
+        w.start_file(MRPACK_ENTRY, opts).unwrap();
+        write!(
+            w,
+            r#"{{
+  "game": "minecraft",
+  "dependencies": {{ "minecraft": "1.21.1", "fabric-loader": "0.16.9" }},
+  "files": [
+    {{ "path": "mods/dl.jar", "hashes": {{}}, "downloads": ["https://x/dl.jar"] }},
+    {{ "path": "mods/local.jar", "hashes": {{}}, "downloads": [], "fileSize": 4 }},
+    {{ "path": "config/x.toml", "hashes": {{}}, "downloads": [], "fileSize": 2 }}
+  ]
+}}"#
+        )
+        .unwrap();
+        w.start_file("mods/local.jar", opts).unwrap();
+        w.write_all(b"junk").unwrap();
+        w.start_file("config/x.toml", opts).unwrap();
+        w.write_all(b"x=1").unwrap();
+        w.finish().unwrap();
+        path
+    }
+
+    #[test]
+    fn mrpack_mc_version_from_dependencies_not_game() {
+        let path = write_fake_mrpack();
+        let parsed = parse(&path);
+        let _ = std::fs::remove_file(&path);
+        assert!(parsed.manifest.parsed, "{:?}", parsed.manifest.error);
+        assert_eq!(parsed.manifest.mc_version, "1.21.1");
+        assert_eq!(parsed.loader_version.as_deref(), Some("0.16.9"));
+    }
+
+    #[test]
+    fn mrpack_counts_local_and_downloaded_mods() {
+        let path = write_fake_mrpack();
+        let parsed = parse(&path);
+        let _ = std::fs::remove_file(&path);
+        assert_eq!(parsed.manifest.mod_count, 2); // dl + local 都算
+        assert_eq!(parsed.mod_files.len(), 2);
+        // 自带文件：url 为空（流水线据此走 Fetch::ZipEntry 从源包抽取）
+        assert!(
+            parsed
+                .mod_files
+                .iter()
+                .find(|f| f.path == "mods/local.jar")
+                .unwrap()
+                .url
+                .is_empty()
+        );
+        assert!(!parsed
+            .mod_files
+            .iter()
+            .find(|f| f.path == "mods/dl.jar")
+            .unwrap()
+            .url
+            .is_empty());
+        // 非 mods 的自带文件归入 extra_files
+        assert_eq!(parsed.extra_files.len(), 1);
+        assert_eq!(parsed.extra_files[0].path, "config/x.toml");
     }
 }

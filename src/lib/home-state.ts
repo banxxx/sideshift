@@ -1,9 +1,10 @@
 /**
  * Home 页状态机 hooks（对应 SS.pen Home 三态：Idle / Parsing·Ready / 转换中实况）
  *
- * - usePackSelection：文件选取 + 解析。Tauri 下 OS 文件拖入走 webview 的
- *   onDragDropEvent（HTML5 drop 拿不到真实路径），这里统一订阅并把 {paths}
- *   合成事件交给页面；浏览器 dev 下该订阅是 no-op，由 Dropzone 自带兜底。
+ * - useTauriFileDrop：Tauri 下 OS 文件拖入走 webview 的 onDragDropEvent
+ *   （HTML5 drop 拿不到真实路径），这里统一订阅并把 {paths} 合成事件交给页面；
+ *   浏览器 dev 下该订阅是 no-op，由 Dropzone 自带兜底。
+ *   选包/解析状态本身已提升到 App 级 @/lib/pack-store（切标签不丢）。
  * - useActiveTask：当前活跃/最近完成任务。事件驱动（onProgress）+ 1s 轮询兜底
  *   （mock 引擎与完成态切换都靠它；无后端时全部走 mock 数据）。
  */
@@ -11,57 +12,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import * as api from "@/lib/api";
 import { isTauri } from "@/lib/api";
-import type { ConversionTask, PackManifest } from "@/lib/types";
-
-/** 拖放/选择 → 解析 一体化状态 */
-export function usePackSelection() {
-    const [manifest, setManifest] = useState<PackManifest | null>(null);
-    const [parsing, setParsing] = useState(false);
-    const [error, setError] = useState<string | null>(null);
-    /** 解析失败的文件名：错误态卡片仍要显示"是哪个包失败了" */
-    const [errorName, setErrorName] = useState<string | null>(null);
-
-    const parse = useCallback(async (path: string) => {
-        setParsing(true);
-        setError(null);
-        setErrorName(null);
-        const fail = (msg: string) => {
-            setManifest(null);
-            setError(msg);
-            setErrorName(path.split(/[\\/]/).pop() ?? path);
-        };
-        try {
-            const m = await api.parsePack(path);
-            if (m.parsed) {
-                setManifest(m);
-            } else {
-                fail(m.error ?? "解析失败");
-            }
-        } catch (e) {
-            fail(e instanceof Error ? e.message : String(e));
-        } finally {
-            setParsing(false);
-        }
-    }, []);
-
-    const pickByDialog = useCallback(async () => {
-        try {
-            const path = await api.pickPackFile();
-            if (path) await parse(path);
-        } catch (e) {
-            setError(e instanceof Error ? e.message : String(e));
-        }
-    }, [parse]);
-
-    const reset = useCallback(() => {
-        setManifest(null);
-        setError(null);
-        setErrorName(null);
-        setParsing(false);
-    }, []);
-
-    return { manifest, parsing, error, errorName, parse, pickByDialog, reset };
-}
+import type { ConversionTask } from "@/lib/types";
 
 /**
  * Tauri webview 文件拖入 → 回调路径列表；浏览器环境下不注册。

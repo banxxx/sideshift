@@ -13,7 +13,7 @@ import { AlertTriangle, Archive, ChevronRight, Download, File, Globe, Layers } f
 import { useEffect, useMemo, useState } from "react";
 import * as api from "@/lib/api";
 import { useNavigation } from "@/lib/navigation";
-import { formatSize, loaderLabel, outputNameOf } from "@/lib/format";
+import { formatSize, loaderLabel, outputNameOf, truncateMiddle } from "@/lib/format";
 import type {
     ConversionOptions,
     ModDisposition,
@@ -205,7 +205,7 @@ export function ConvertPage() {
         <div className="flex flex-col gap-5">
             <PageHeader
                 title="转换配置"
-                sub={`${manifest.fileName} · ${loader} · Minecraft ${manifest.mcVersion} · 检测完成，确认转换方案后开始构建`}
+                sub={`${truncateMiddle(manifest.fileName, 34)} · ${loader} · Minecraft ${manifest.mcVersion} · 检测完成，确认转换方案后开始构建`}
             />
 
             <div className="flex items-start gap-5">
