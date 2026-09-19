@@ -652,68 +652,76 @@ export function SearchSelect({
                     <ChevronDown className="size-3 shrink-0 text-text-3" />
                 )}
             </button>
-            {open && (
-                <div className="absolute top-full right-0 left-0 z-30 mt-1 flex min-w-[220px] flex-col gap-0.5 rounded-lg border border-stroke bg-surface p-1.5 shadow-lg">
-                    <div className="flex h-[26px] shrink-0 items-center gap-1.5 rounded-md px-2">
-                        <Search className="size-3 shrink-0 text-text-3" />
-                        <input
-                            autoFocus
-                            value={query}
-                            onChange={(e) => setQuery(e.target.value)}
-                            placeholder="搜索版本…"
-                            className="min-w-0 flex-1 bg-transparent text-[11px] text-text-1 outline-none placeholder:text-text-3"
-                        />
-                    </div>
-                    <div className="h-px w-full bg-stroke" />
-                    <div className="flex max-h-[212px] flex-col gap-0.5 overflow-auto">
-                        {filtered.map((o) => {
-                            const active = o.value === value;
-                            return (
-                                <div key={o.value} className="flex flex-col">
-                                    {o.group && (
-                                        <span className="px-2 py-0.5 text-[10px] leading-[14px] font-normal text-text-3">
-                                            {o.group}
-                                        </span>
-                                    )}
-                                    <button
-                                        onClick={() => {
-                                            onChange(o.value);
-                                            setOpen(false);
-                                            setQuery("");
-                                        }}
-                                        className={cn(
-                                            "flex h-[26px] w-full items-center justify-between gap-2 rounded-md px-2 transition-colors",
-                                            active ? "bg-surface-2" : "hover:bg-surface-2"
+            <AnimatePresence>
+                {open && (
+                    <motion.div
+                        // 从触发框向下"抽出"：顶部为原点做纵向缩放 + 轻微位移 + 淡入淡出
+                        initial={{ opacity: 0, y: -6, scaleY: 0.9 }}
+                        animate={{ opacity: 1, y: 0, scaleY: 1 }}
+                        exit={{ opacity: 0, y: -6, scaleY: 0.9 }}
+                        transition={{ duration: 0.16, ease: [0.16, 1, 0.3, 1] }}
+                        className="absolute top-full right-0 left-0 z-30 mt-1 flex min-w-[220px] origin-top flex-col gap-0.5 rounded-lg border border-stroke bg-surface p-1.5 shadow-lg"
+                    >
+                        <div className="flex h-[26px] shrink-0 items-center gap-1.5 rounded-md px-2">
+                            <Search className="size-3 shrink-0 text-text-3" />
+                            <input
+                                value={query}
+                                onChange={(e) => setQuery(e.target.value)}
+                                placeholder="搜索版本…"
+                                className="min-w-0 flex-1 bg-transparent text-[11px] text-text-1 outline-none placeholder:text-text-3"
+                            />
+                        </div>
+                        <div className="h-px w-full bg-stroke" />
+                        <div className="flex max-h-[212px] flex-col gap-0.5 overflow-auto">
+                            {filtered.map((o, i) => {
+                                const active = o.value === value;
+                                // 分组标题只在该组第一行出现（同组连续排列），不再逐行重复
+                                const showGroup =
+                                    !!o.group && filtered[i - 1]?.group !== o.group;
+                                return (
+                                    <div key={o.value} className="flex flex-col">
+                                        {showGroup && (
+                                            <span className="px-2 pt-1 pb-0.5 text-[10px] leading-[14px] font-normal text-text-3">
+                                                {o.group}
+                                            </span>
                                         )}
-                                    >
-                                        <span
+                                        <button
+                                            onClick={() => {
+                                                onChange(o.value);
+                                                setOpen(false);
+                                                setQuery("");
+                                            }}
                                             className={cn(
-                                                "truncate font-mono text-[12px] leading-[18px]",
-                                                active
-                                                    ? "font-semibold text-accent"
-                                                    : "font-normal text-text-1"
+                                                "flex h-[26px] w-full items-center justify-between gap-2 rounded-md px-2 transition-colors",
+                                                active ? "bg-surface-2" : "hover:bg-surface-2"
                                             )}
                                         >
-                                            {o.label}
-                                            {o.recommended && !active && (
-                                                <span className="ml-2 text-[10px] font-semibold text-gold">
-                                                    推荐
-                                                </span>
+                                            <span
+                                                className={cn(
+                                                    "truncate font-mono text-[12px] leading-[18px]",
+                                                    active
+                                                        ? "font-semibold text-accent"
+                                                        : "font-normal text-text-1"
+                                                )}
+                                            >
+                                                {o.label}
+                                            </span>
+                                            {active && (
+                                                <Check className="size-3 shrink-0 text-accent" />
                                             )}
-                                        </span>
-                                        {active && <Check className="size-3 shrink-0 text-accent" />}
-                                    </button>
-                                </div>
-                            );
-                        })}
-                        {filtered.length === 0 && (
-                            <span className="px-2 py-3 text-center text-[11px] text-text-3">
-                                无匹配版本
-                            </span>
-                        )}
-                    </div>
-                </div>
-            )}
+                                        </button>
+                                    </div>
+                                );
+                            })}
+                            {filtered.length === 0 && (
+                                <span className="px-2 py-3 text-center text-[11px] text-text-3">
+                                    无匹配版本
+                                </span>
+                            )}
+                        </div>
+                    </motion.div>
+                )}
+            </AnimatePresence>
         </div>
     );
 }

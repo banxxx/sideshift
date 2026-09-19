@@ -17,6 +17,8 @@ pub const MODRINTH_API: &str = "https://api.modrinth.com/v2";
 const PISTON_MANIFEST: &str = "https://piston-meta.mojang.com/mc/game/version_manifest_v2.json";
 const FABRIC_META: &str = "https://meta.fabricmc.net/v2";
 const FORGE_PROMOTIONS: &str = "https://files.minecraftforge.net/net/minecraftforge/forge/promotions_slim.json";
+/// 每个 MC 版本的全部 Forge 构建：{ "1.20.1": ["1.20.1-47.4.10", …], … }
+const FORGE_MAVEN_META: &str = "https://files.minecraftforge.net/net/minecraftforge/forge/maven-metadata.json";
 const NEOFORGE_VERSIONS: &str =
     "https://maven.neoforged.net/api/maven/versions/releases/net/neoforged/neoforge";
 const USER_AGENT: &str = "SideShift/0.1 (desktop pack converter)";
@@ -397,24 +399,26 @@ impl Downloader {
 
     /* ---------------- 版本表 ---------------- */
 
+    /// 全量版本清单（接口本就一次返回，不截断，前端搜索即全量过滤）。
+    /// 收 正式版 + Beta + Alpha 以兼容老整合包；快照（400+ 条）不进选择器。
     pub async fn list_mc_versions(&self) -> Result<Vec<VersionOption>, DownloadError> {
         let v = self.get_json(PISTON_MANIFEST).await?;
         let mut out = Vec::new();
         if let Some(arr) = v["versions"].as_array() {
             for e in arr {
-                if e["type"].as_str() != Some("release") {
-                    continue;
-                }
+                let group = match e["type"].as_str() {
+                    Some("release") => "正式版",
+                    Some("old_beta") => "Beta",
+                    Some("old_alpha") => "Alpha",
+                    _ => continue,
+                };
                 let id = e["id"].as_str().unwrap_or_default().to_string();
                 out.push(VersionOption {
                     recommended: None,
-                    group: Some("正式版".into()),
+                    group: Some(group.into()),
                     label: id.clone(),
                     value: id,
                 });
-                if out.len() >= 25 {
-                    break;
-                }
             }
         }
         if let Some(first) = out.first_mut() {
@@ -453,19 +457,58 @@ impl Downloader {
                 Ok(out)
             }
             LoaderKind::Forge => {
-                let v = self.get_json(FORGE_PROMOTIONS).await?;
-                let mut out = Vec::new();
-                for (key_suffix, group) in [("recommended", "推荐"), ("latest", "最新")] {
-                    let k = format!("{key_suffix}-{mc_version}");
-                    if let Some(ver) = v[k].as_str() {
-                        let ver = ver.strip_prefix(&format!("{mc_version}-")).unwrap_or(ver);
+                // 双官方接口：promotions_slim 只给每个 MC 版本的 recommended/latest 两个
+                // 指针（键 "{mc}-{kind}"），maven-metadata 才含该版本全部构建。
+                // 任一接口挂掉降级用另一个，双双失败才报错。
+                let promos_res = self.get_json(FORGE_PROMOTIONS).await;
+                let meta_res = self.get_json(FORGE_MAVEN_META).await;
+                let (promos, meta) = match (promos_res, meta_res) {
+                    (Err(e), Err(_)) => return Err(e),
+                    (p, m) => (p.ok(), m.ok()),
+                };
+                let prefix = format!("{mc_version}-");
+                let strip = |s: &str| s.strip_prefix(&prefix).unwrap_or(s).to_string();
+                let promo = |kind: &str| {
+                    promos
+                        .as_ref()?
+                        .get("promos")?
+                        .get(format!("{mc_version}-{kind}"))?
+                        .as_str()
+                        .map(|s| strip(s))
+                };
+                let mut all: Vec<String> = meta
+                    .as_ref()
+                    .and_then(|m| m.get(mc_version))
+                    .and_then(|a| a.as_array())
+                    .map(|arr| {
+                        arr.iter()
+                            .filter_map(|x| x.as_str().map(|s| strip(s)))
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                // 构建号倒序（version_cmp 按点分数字段比较）
+                all.sort_by(|a, b| version_cmp(b, a));
+
+                let mut out: Vec<VersionOption> = Vec::new();
+                let mut seen = std::collections::HashSet::new();
+                let mut add = |ver: String, group: &str, recommended: Option<bool>| {
+                    if seen.insert(ver.clone()) {
                         out.push(VersionOption {
-                            value: ver.to_string(),
-                            label: ver.to_string(),
-                            recommended: Some(key_suffix == "recommended"),
+                            value: ver.clone(),
+                            label: ver,
+                            recommended,
                             group: Some(group.into()),
                         });
                     }
+                };
+                if let Some(r) = promo("recommended") {
+                    add(r, "推荐", Some(true));
+                }
+                if let Some(l) = promo("latest") {
+                    add(l, "最新", Some(false));
+                }
+                for ver in all {
+                    add(ver, "全部构建", None);
                 }
                 Ok(out)
             }
