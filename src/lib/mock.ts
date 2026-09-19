@@ -10,6 +10,7 @@ import type {
     ModSearchPage,
     ModSearchQuery,
     ModVersionEntry,
+    PackDirEntry,
     PackManifest,
     PlanMod,
     TaskLogLine,
@@ -54,6 +55,7 @@ const REMOVE_SAMPLES: PlanMod[] = [
     { id: "optifine", name: "OptiFine", version: "F9M2+1.20.1", disposition: "remove", clientOnly: true, needsReview: false, autoSupplement: false },
     { id: "xaeros-minimap", name: "Xaero's Minimap", version: "23.10.0", loader: "Fabric", disposition: "remove", clientOnly: true, needsReview: false, autoSupplement: false },
     { id: "viafabricplus", name: "ViaFabricPlus", version: "3.4.11", loader: "客户端/服务端两可用", disposition: "remove", clientOnly: false, needsReview: true, autoSupplement: false },
+    { id: "geckolib", name: "GeckoLib", version: "4.4.7", loader: "Fabric", disposition: "remove", clientOnly: false, needsReview: true, autoSupplement: false },
 ];
 
 const ADD_SAMPLES: PlanMod[] = [
@@ -110,6 +112,18 @@ export const mockPlanMods: PlanMod[] = [
     ...buildKept(146),
     ...ADD_SAMPLES,
 ];
+
+/** 反向依赖演示数据：保留项依赖被剔除/新增的前置库 */
+const MOCK_DEPENDS: Record<string, string[]> = {
+    Create: ["fabric-api"],
+    Botania: ["fabric-api"],
+    "Applied Energistics 2": ["fabric-api"],
+    "Sophisticated Backpacks": ["geckolib"],
+    "Farmer's Delight": ["geckolib"],
+};
+for (const m of mockPlanMods) {
+    if (MOCK_DEPENDS[m.name]) m.depends = MOCK_DEPENDS[m.name];
+}
 
 /** 剔除清单弹窗数据 = 方案中处置为 remove 的子集 */
 export const mockExcludedMods: PlanMod[] = mockPlanMods.filter(
@@ -195,7 +209,28 @@ export const mockDefaultOptions: ConversionOptions = {
     generateScripts: true,
     nogui: false,
     agreeEula: true,
+    serverPort: 25565,
+    motd: "A SideShift powered Minecraft server",
+    maxPlayers: 20,
+    gamemode: "survival",
+    difficulty: "easy",
+    onlineMode: true,
+    levelSeed: "",
+    useAikarFlags: false,
+    extraJvmArgs: "",
+    outputOverride: "",
+    keepDirs: [],
 };
+
+/** 包内可保留目录（客户端保留目录卡演示数据） */
+export const mockPackDirs: PackDirEntry[] = [
+    { name: "config", fileCount: 138 },
+    { name: "kubejs", fileCount: 24 },
+    { name: "ct_output", fileCount: 9 },
+    { name: "shaderpacks", fileCount: 6 },
+    { name: "journeymap", fileCount: 5 },
+    { name: "maps", fileCount: 3 },
+];
 
 /* ---------------- 任务引擎：定时器模拟四阶段流水线 ---------------- */
 

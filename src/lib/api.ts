@@ -20,6 +20,7 @@ import type {
     ModSearchPage,
     ModSearchQuery,
     ModVersionEntry,
+    PackDirEntry,
     PackManifest,
     PlanMod,
     ProgressEvent,
@@ -116,6 +117,12 @@ export async function defaultOptions(
         { manifest },
         () => mock.mockDefaultOptions
     );
+}
+
+/** 包内可保留的顶层目录（Rust: list_pack_dirs） */
+export async function listPackDirs(): Promise<PackDirEntry[]> {
+    if (!isTauri) return mock.mockPackDirs;
+    return invokeOrMock("list_pack_dirs", undefined, () => mock.mockPackDirs);
 }
 
 /* ---------------- 转换方案 ---------------- */
@@ -265,10 +272,13 @@ export function dirOf(path: string): string {
     return path.replace(/[\\/][^\\/]*$/, "");
 }
 
-/** 输出文件完整路径 = 设置的输出目录 + 文件名（Report / Task 详情展示用） */
-export async function resolveOutputPath(fileName: string): Promise<string> {
+/** 输出文件完整路径 = 输出目录（任务覆写优先，否则全局设置）+ 文件名 */
+export async function resolveOutputPath(
+    fileName: string,
+    overrideDir?: string
+): Promise<string> {
     const { outputDir } = await getSettings();
-    return joinPath(outputDir, fileName);
+    return joinPath(overrideDir?.trim() || outputDir, fileName);
 }
 
 /** 在系统文件管理器中定位文件（浏览器 dev 下为空操作） */

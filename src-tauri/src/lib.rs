@@ -24,6 +24,7 @@ pub fn run() {
             commands::list_loader_versions,
             commands::list_java_versions,
             commands::default_options,
+            commands::list_pack_dirs,
             commands::get_plan,
             commands::list_excluded_mods,
             commands::search_mods,

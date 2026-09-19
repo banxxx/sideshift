@@ -410,10 +410,16 @@ async fn run_pipeline(app: AppHandle, state: Arc<AppState>, id: String) {
         }
     }
 
-    // 3.2 config 等非模组文件（保留包内声明为服务端可用的）
+    // 3.2 用户在「客户端保留目录」卡勾选的顶层目录（config/kubejs/地图等），mods/ 之外原样带入
     for f in &parsed.extra_files {
         let rel = f.path.replace('\\', "/");
-        let keep = rel.starts_with("config/");
+        let keep = match rel.find('/') {
+            Some(i) => options
+                .keep_dirs
+                .iter()
+                .any(|d| d.eq_ignore_ascii_case(&rel[..i])),
+            None => false, // 根文件（pack.png 等）不随目录保留
+        };
         if !keep {
             continue;
         }
@@ -532,10 +538,15 @@ async fn run_pipeline(app: AppHandle, state: Arc<AppState>, id: String) {
         .filter(|m| m.needs_review)
         .map(|m| m.name.clone())
         .collect();
-    let readme = build_readme(&plan, &counts, &review, parsed.manifest.loader);
+    let readme = build_readme(&plan, &counts, &review, parsed.manifest.loader, &options.keep_dirs);
     let build_state = state.clone();
     let build_app = app.clone();
-    let output_dir = PathBuf::from(&settings.output_dir);
+    // 本次包的输出目录覆写：空则回落全局设置
+    let output_dir = if options.output_override.trim().is_empty() {
+        PathBuf::from(&settings.output_dir)
+    } else {
+        PathBuf::from(options.output_override.trim())
+    };
     let build_options = options.clone();
     let build_loader = parsed.manifest.loader;
     let build_id = id.clone();
@@ -663,6 +674,7 @@ fn build_readme(
     counts: &PlanCounts,
     review: &[String],
     loader: LoaderKind,
+    keep_dirs: &[String],
 ) -> Vec<String> {
     let mut lines = vec![
         "SideShift 转换报告".to_string(),
@@ -674,6 +686,9 @@ fn build_readme(
             }
         },
     ];
+    if !keep_dirs.is_empty() {
+        lines.push(format!("已随包保留客户端目录：{}", keep_dirs.join("、")));
+    }
     if !review.is_empty() {
         lines.push(format!("待人工确认模组：{}", review.join("、")));
     }

@@ -60,10 +60,13 @@ pub struct PlanMod {
     /// 本地添加的 .jar 绝对路径（「从本地添加」项专用，downloader 直接取本地文件）
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub local_path: Option<String>,
+    /// 依赖的其他方案行 id（mrpack depends 解析所得，供反向依赖警告）
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub depends: Vec<String>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", default)]
 pub struct ConversionOptions {
     pub mc_version: String,
     pub loader_version: String,
@@ -72,6 +75,62 @@ pub struct ConversionOptions {
     pub generate_scripts: bool,
     pub nogui: bool,
     pub agree_eula: bool,
+    /* ---- 服务端设置（server.properties 高频字段） ---- */
+    pub server_port: u16,
+    pub motd: String,
+    pub max_players: u32,
+    /// survival | creative | adventure | spectator
+    pub gamemode: String,
+    /// peaceful | easy | normal | hard
+    pub difficulty: String,
+    pub online_mode: bool,
+    pub level_seed: String,
+    /* ---- 启动参数扩展 ---- */
+    /// Aikar's flags：G1GC 调优参数组，拼入 start 脚本 JVM 参数
+    pub use_aikar_flags: bool,
+    /// 用户附加 JVM 参数（原样拼接）
+    pub extra_jvm_args: String,
+    /* ---- 单包输出覆写 ---- */
+    /// 本次转换输出目录；空 = 用全局设置
+    pub output_override: String,
+    /* ---- 客户端保留目录 ---- */
+    /// 需要原样带入服务端的包内顶层目录（config/kubejs/地图等）
+    pub keep_dirs: Vec<String>,
+}
+
+impl Default for ConversionOptions {
+    fn default() -> Self {
+        Self {
+            mc_version: String::new(),
+            loader_version: String::new(),
+            java_version: String::new(),
+            memory_mb: 4096,
+            generate_scripts: true,
+            nogui: true,
+            agree_eula: false,
+            server_port: 25565,
+            motd: "A SideShift powered Minecraft server".into(),
+            max_players: 20,
+            gamemode: "survival".into(),
+            difficulty: "easy".into(),
+            online_mode: true,
+            level_seed: String::new(),
+            use_aikar_flags: false,
+            extra_jvm_args: String::new(),
+            output_override: String::new(),
+            keep_dirs: Vec::new(),
+        }
+    }
+}
+
+/// 包内可保留的顶层目录（客户端保留目录卡数据源）
+#[derive(Serialize, Deserialize, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct PackDirEntry {
+    /// 顶层目录名，如 kubejs
+    pub name: String,
+    /// 目录内文件数（含子目录）
+    pub file_count: u32,
 }
 
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]

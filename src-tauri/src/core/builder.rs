@@ -47,9 +47,36 @@ pub fn build(input: &BuildInput) -> Result<(PathBuf, u64), BuilderError> {
     Ok((out_path, size))
 }
 
+/// Aikar's flags：官方推荐的 G1GC 调优参数组（4G+ 内存口径）
+const AIKAR_FLAGS: &str = "-XX:+UseG1GC -XX:+ParallelRefProcEnabled -XX:MaxGCPauseMillis=200 \
+-XX:+UnlockExperimentalVMOptions -XX:+DisableExplicitGC -XX:+AlwaysPreTouch \
+-XX:G1NewSizePercent=30 -XX:G1MaxNewSizePercent=40 -XX:G1HeapRegionSize=8M \
+-XX:G1ReservePercent=20 -XX:G1HeapWastePercent=5 -XX:G1MixedGCCountTarget=4 \
+-XX:InitiatingHeapOccupancyPercent=15 -XX:G1MixedGCLiveThresholdPercent=90 \
+-XX:G1RSetUpdatingPauseTimePercent=5 -XX:SurvivorRatio=32 -XX:+PerfDisableSharedMem \
+-XX:MaxTenuringThreshold=1";
+
+/// 内存 + Aikar + 用户附加参数 → 一行 JVM 参数（换行剔除，防注入第二行命令）
+fn jvm_args(options: &ConversionOptions) -> String {
+    let mut parts = vec![format!("-Xmx{}M", options.memory_mb)];
+    if options.use_aikar_flags {
+        parts.push(AIKAR_FLAGS.to_string());
+    }
+    let extra = options.extra_jvm_args.trim();
+    if !extra.is_empty() {
+        parts.push(extra.replace(['\r', '\n'], " "));
+    }
+    parts.join(" ")
+}
+
+/// 单行属性值清洗：换行→空格，反斜杠转义（server.properties 的 \n 语义）
+fn one_line(s: &str) -> String {
+    s.replace('\\', "\\\\").replace(['\r', '\n'], " ")
+}
+
 /// 启动脚本、eula、server.properties、README
 fn write_root_files(input: &BuildInput) -> Result<(), BuilderError> {
-    let mem = format!("-Xmx{}M", input.options.memory_mb);
+    let jvm = jvm_args(input.options);
     if input.options.generate_scripts {
         let (bat, sh) = match input.loader {
             LoaderKind::Fabric => {
@@ -57,12 +84,14 @@ fn write_root_files(input: &BuildInput) -> Result<(), BuilderError> {
                 let nogui = if input.options.nogui { " nogui" } else { "" };
                 (
                     format!(
-                        "@echo off\r\njava {mem} -jar {jar}{nogui}\r\npause\r\n"
+                        "@echo off\r\njava {jvm} -jar {jar}{nogui}\r\npause\r\n"
                     ),
-                    format!("#!/usr/bin/env bash\njava {mem} -jar {jar}{nogui}\n"),
+                    format!("#!/usr/bin/env bash\njava {jvm} -jar {jar}{nogui}\n"),
                 )
             }
             LoaderKind::Forge | LoaderKind::NeoForge => {
+                // JVM 参数经 user_jvm_args.txt 注入（installer 生成的 run 脚本以 @user_jvm_args.txt 引用）
+                std::fs::write(input.staging.join("user_jvm_args.txt"), format!("{jvm}\n"))?;
                 let installer = input
                     .installer_jar_name
                     .as_deref()
@@ -88,10 +117,28 @@ fn write_root_files(input: &BuildInput) -> Result<(), BuilderError> {
         )?;
     }
     if !input.staging.join("server.properties").exists() {
-        std::fs::write(
-            input.staging.join("server.properties"),
-            "# SideShift 生成的默认配置，可按需修改\nonline-mode=true\nmax-players=20\nview-distance=10\nsimulation-distance=10\n",
-        )?;
+        let o = input.options;
+        // 枚举字段白名单收口，防脏值写入属性文件
+        let gamemode = match o.gamemode.as_str() {
+            "creative" | "adventure" | "spectator" => o.gamemode.as_str(),
+            _ => "survival",
+        };
+        let difficulty = match o.difficulty.as_str() {
+            "peaceful" | "normal" | "hard" => o.difficulty.as_str(),
+            _ => "easy",
+        };
+        let mut props = String::from("# 由 SideShift 按转换配置生成，可按需修改\n");
+        props.push_str(&format!("online-mode={}\n", o.online_mode));
+        props.push_str(&format!("server-port={}\n", o.server_port));
+        props.push_str(&format!("motd={}\n", one_line(&o.motd)));
+        props.push_str(&format!("max-players={}\n", o.max_players));
+        props.push_str(&format!("gamemode={gamemode}\n"));
+        props.push_str(&format!("difficulty={difficulty}\n"));
+        if !o.level_seed.trim().is_empty() {
+            props.push_str(&format!("level-seed={}\n", one_line(o.level_seed.trim())));
+        }
+        props.push_str("view-distance=10\nsimulation-distance=10\n");
+        std::fs::write(input.staging.join("server.properties"), props)?;
     }
     if !input.readme_lines.is_empty() {
         std::fs::write(

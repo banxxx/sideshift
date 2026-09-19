@@ -122,7 +122,30 @@ pub fn default_options(state: S<'_>, manifest: PackManifest) -> ConversionOption
         generate_scripts: true,
         nogui: true,
         agree_eula: false,
+        ..Default::default()
     }
+}
+
+/// 最近一次解析包内可保留的顶层目录（mods 之外，按文件数降序）
+#[tauri::command]
+pub fn list_pack_dirs(state: S<'_>) -> Vec<PackDirEntry> {
+    let Some(p) = last_parsed(&state) else {
+        return Vec::new();
+    };
+    let mut counts: std::collections::BTreeMap<String, u32> = Default::default();
+    for f in &p.extra_files {
+        let rel = f.path.replace('\\', "/");
+        if let Some(i) = rel.find('/') {
+            // mrpack 里 config 之外还有 pack.png 等根文件；只统计有顶层目录的
+            *counts.entry(rel[..i].to_lowercase()).or_default() += 1;
+        }
+    }
+    let mut v: Vec<PackDirEntry> = counts
+        .into_iter()
+        .map(|(name, file_count)| PackDirEntry { name, file_count })
+        .collect();
+    v.sort_by(|a, b| b.file_count.cmp(&a.file_count).then(a.name.cmp(&b.name)));
+    v
 }
 
 /* ---------------- 转换方案 ---------------- */

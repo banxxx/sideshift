@@ -67,9 +67,28 @@ pub fn build_plan(parsed: &ParsedPack, strip_client_only: bool) -> Vec<PlanMod> 
                 needs_review,
                 auto_supplement: false,
                 local_path: None,
+                depends: Vec::new(),
             }
         })
         .collect();
+
+    // mrpack files[].depends 引用的是 Modrinth project_id，映射回方案行 id：
+    // 行 id 由文件名切出（如 "sodium-fabric"），故按 精确 > 前缀 匹配首个宿主行
+    for (i, f) in parsed.mod_files.iter().enumerate() {
+        let mut deps = Vec::new();
+        for p in &f.depends {
+            if let Some(j) = plan.iter().position(|m| &m.id == p).or_else(|| {
+                plan.iter().position(|m| {
+                    m.id.len() > p.len() && m.id.starts_with(&format!("{p}-"))
+                })
+            }) {
+                if j != i && !deps.contains(&plan[j].id) {
+                    deps.push(plan[j].id.clone());
+                }
+            }
+        }
+        plan[i].depends = deps;
+    }
 
     // 自动补齐：Fabric 包缺 fabric-api 时补服务端基础库
     let ids: Vec<String> = plan.iter().map(|m| m.id.to_lowercase()).collect();
@@ -85,6 +104,7 @@ pub fn build_plan(parsed: &ParsedPack, strip_client_only: bool) -> Vec<PlanMod> 
             needs_review: false,
             auto_supplement: true,
                 local_path: None,
+            depends: Vec::new(),
         });
     }
     // 推荐项：服务端性能监控 spark
@@ -99,6 +119,7 @@ pub fn build_plan(parsed: &ParsedPack, strip_client_only: bool) -> Vec<PlanMod> 
             needs_review: false,
             auto_supplement: false,
             local_path: None,
+            depends: Vec::new(),
         });
     }
     plan
@@ -181,5 +202,41 @@ mod tests {
             title_from_id("viafabricplus-0.2.3"),
             "Viafabricplus"
         );
+    }
+
+    #[test]
+    fn depends_project_id_maps_to_plan_row() {
+        use crate::core::parser::{PackFile, ParsedPack};
+        use crate::models::PackManifest;
+        let file = |name: &str, depends: &[&str]| PackFile {
+            path: format!("mods/{name}"),
+            file_name: name.into(),
+            url: String::new(),
+            sha1: None,
+            server_required: true,
+            env_declared: true,
+            depends: depends.iter().map(|s| s.to_string()).collect(),
+        };
+        let parsed = ParsedPack {
+            manifest: PackManifest {
+                file_name: "t.mrpack".into(),
+                loader: LoaderKind::NeoForge, // 避开 Fabric 自动补齐行的干扰
+                mc_version: "1.20.1".into(),
+                mod_count: 2,
+                size_bytes: 0,
+                parsed: true,
+                error: None,
+                source_path: None,
+            },
+            mod_files: vec![
+                file("geckolib-4.4.7.jar", &[]),
+                file("create-0.5.1.jar", &["geckolib", "sodium"]),
+            ],
+            extra_files: Vec::new(),
+            loader_version: None,
+        };
+        let plan = build_plan(&parsed, true);
+        // project_id 精确命中行 id；包内不存在的 "sodium" 被丢弃
+        assert_eq!(plan[1].depends, vec!["geckolib".to_string()]);
     }
 }

@@ -26,6 +26,8 @@ pub struct PackFile {
     pub server_required: bool,
     /// 条目是否声明了 env 段（声明则按 env 精确判定，否则走名称启发式）
     pub env_declared: bool,
+    /// 非可选依赖的 project_id 列表（mrpack files[].depends；裸 zip 为空）
+    pub depends: Vec<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -109,11 +111,22 @@ struct RawFile {
     downloads: Vec<String>,
     #[serde(default)]
     env: Option<RawEnv>,
+    #[serde(default)]
+    depends: Vec<RawDep>,
 }
 
 #[derive(Deserialize)]
 struct RawEnv {
     server: Option<String>,
+}
+
+/// mrpack files[].depends[]：指向包内另一 Modrinth 文件版本的项目引用
+#[derive(Deserialize)]
+struct RawDep {
+    #[serde(default)]
+    project_id: String,
+    #[serde(default)]
+    optional: bool,
 }
 
 fn detect_loader_from_deps(deps: &BTreeMap<String, String>) -> LoaderKind {
@@ -175,12 +188,56 @@ fn parse_mrpack(path: &Path) -> Result<ParsedPack, String> {
             sha1: f.hashes.get("sha1").cloned(),
             server_required: server_side != Some("unsupported"),
             env_declared: f.env.as_ref().and_then(|e| e.server.clone()).is_some(),
+            depends: f
+                .depends
+                .iter()
+                .filter(|d| !d.optional && !d.project_id.is_empty())
+                .map(|d| d.project_id.clone())
+                .collect(),
         };
         if pf.path.starts_with("mods/") && pf.file_name.ends_with(".jar") {
             mod_files.push(pf);
         } else {
             extra_files.push(pf);
         }
+    }
+
+    // 补收 mrpack 内「未在 index 声明」的物理文件：手动拖进 zip 的 kubejs/、地图等
+    // 目录不会出现在 modrinth.index.json 里，只能直接枚举 zip 条目拿到
+    let declared: std::collections::HashSet<String> = index
+        .files
+        .iter()
+        .map(|f| f.path.replace('\\', "/"))
+        .collect();
+    for i in 0..archive.len() {
+        let ent = archive.by_index(i).map_err(|e| e.to_string())?;
+        if ent.is_dir() {
+            continue;
+        }
+        let name = ent.name().to_string();
+        let lower = name.to_lowercase();
+        if lower == MRPACK_ENTRY || declared.contains(&name) {
+            continue;
+        }
+        // 只认「某目录下的文件」，且跳过 mods 与启动器重量级目录
+        let Some(j) = lower.find('/') else { continue };
+        let top = &lower[..j];
+        if top == "mods" || ZIP_SKIP_TOP_DIRS.contains(&top) {
+            continue;
+        }
+        let file_name = Path::new(&name)
+            .file_name()
+            .map(|s| s.to_string_lossy().to_string())
+            .unwrap_or_else(|| name.clone());
+        extra_files.push(PackFile {
+            path: name,
+            file_name,
+            url: String::new(), // 物理存在于源包：构建时 Fetch::ZipEntry 直接抽取
+            sha1: None,
+            server_required: true,
+            env_declared: false,
+            depends: Vec::new(),
+        });
     }
 
     let mut error = None;
@@ -211,6 +268,21 @@ fn parse_mrpack(path: &Path) -> Result<ParsedPack, String> {
 }
 
 /* ---------------- 裸 zip（启发式） ---------------- */
+
+/// 裸 zip 收录非模组文件时跳过的重量级/无意义顶层目录（启动器缓存、运行时产物）
+const ZIP_SKIP_TOP_DIRS: &[&str] = &[
+    "assets",
+    "libraries",
+    "versions",
+    "logs",
+    "screenshots",
+    "run",
+    "runtime",
+    "java",
+    "bin",
+    "natives",
+    "downloads",
+];
 
 fn parse_plain_zip(path: &Path) -> Result<ParsedPack, String> {
     let zip = File::open(path).map_err(|e| format!("无法打开文件：{e}"))?;
@@ -251,17 +323,23 @@ fn parse_plain_zip(path: &Path) -> Result<ParsedPack, String> {
                 sha1: None,
                 server_required: true,
                 env_declared: false,
+                depends: Vec::new(),
             });
-        } else if lower.ends_with(".toml") || lower.ends_with(".json") || lower.ends_with(".cfg")
-        {
-            extra_files.push(PackFile {
-                path: name.clone(),
-                file_name,
-                url: String::new(),
-                sha1: None,
-                server_required: true,
-                env_declared: false,
-            });
+        } else if let Some(i) = lower.find('/') {
+            // 非 mods 的目录文件全部收录（kubejs/地图/材质包等），供「客户端保留目录」卡勾选；
+            // 启动器/运行时的重量级目录剔除，避免解析出上万条目
+            let top = &lower[..i];
+            if !top.starts_with("mods") && !ZIP_SKIP_TOP_DIRS.contains(&top) {
+                extra_files.push(PackFile {
+                    path: name.clone(),
+                    file_name,
+                    url: String::new(),
+                    sha1: None,
+                    server_required: true,
+                    env_declared: false,
+                    depends: Vec::new(),
+                });
+            }
         }
     }
 
@@ -415,6 +493,9 @@ mod tests {
         w.write_all(b"junk").unwrap();
         w.start_file("config/x.toml", opts).unwrap();
         w.write_all(b"x=1").unwrap();
+        // 未声明文件：手动拖进 zip 的 kubejs 脚本（index.files 里没有这个条目）
+        w.start_file("kubejs/client_scripts/demo.js", opts).unwrap();
+        w.write_all(b"console.info('hi')").unwrap();
         w.finish().unwrap();
         path
     }
@@ -453,8 +534,14 @@ mod tests {
             .unwrap()
             .url
             .is_empty());
-        // 非 mods 的自带文件归入 extra_files
-        assert_eq!(parsed.extra_files.len(), 1);
+        // 非 mods 的自带文件归入 extra_files；另含 1 个未声明的 kubejs 物理文件
+        assert_eq!(parsed.extra_files.len(), 2);
         assert_eq!(parsed.extra_files[0].path, "config/x.toml");
+        let undeclared = parsed
+            .extra_files
+            .iter()
+            .find(|f| f.path == "kubejs/client_scripts/demo.js")
+            .expect("未声明的 zip 文件应被补收");
+        assert!(undeclared.url.is_empty()); // 构建时走 ZipEntry 直接从源包抽取
     }
 }

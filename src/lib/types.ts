@@ -49,9 +49,11 @@ export interface PlanMod {
     autoSupplement: boolean;
     /** 「从本地添加」的 .jar 绝对路径（真实后端直接取本地文件） */
     localPath?: string;
+    /** 依赖的其他方案行 id（mrpack depends 元数据；反向依赖警告用） */
+    depends?: string[];
 }
 
-/** 转换可选项（对应 Convert 启动参数 + 运行环境） */
+/** 转换可选项（对应 Convert 启动参数 + 运行环境 + 服务端设置） */
 export interface ConversionOptions {
     /** 目标 Minecraft 版本 */
     mcVersion: string;
@@ -67,6 +69,36 @@ export interface ConversionOptions {
     nogui: boolean;
     /** 自动写入 eula=true */
     agreeEula: boolean;
+    /** 服务器端口（server.properties server-port） */
+    serverPort: number;
+    /** 服务器 MOTD */
+    motd: string;
+    /** 最大人数 */
+    maxPlayers: number;
+    /** 游戏模式 */
+    gamemode: "survival" | "creative" | "adventure" | "spectator";
+    /** 难度 */
+    difficulty: "peaceful" | "easy" | "normal" | "hard";
+    /** 正版验证 online-mode */
+    onlineMode: boolean;
+    /** 世界种子（空=随机） */
+    levelSeed: string;
+    /** Aikar's flags G1GC 调优参数组 */
+    useAikarFlags: boolean;
+    /** 附加 JVM 参数（原样拼入启动脚本） */
+    extraJvmArgs: string;
+    /** 本次输出目录覆写（空=用全局设置） */
+    outputOverride: string;
+    /** 原样带入服务端的包内顶层目录（config/kubejs/地图等） */
+    keepDirs: string[];
+}
+
+/** 包内可保留的顶层目录（客户端保留目录卡行） */
+export interface PackDirEntry {
+    /** 目录名，如 kubejs */
+    name: string;
+    /** 目录内文件数（含子目录） */
+    fileCount: number;
 }
 
 /** 流水线四阶段（Shift Rail 站点，对应 Rust core 四模块） */

@@ -7,7 +7,7 @@
  *  - 处置清单壳剔除/保留共用（focus 区分）：行勾选语义 = 是否处于该处置；
  *    取消勾选即「反向待办」（金色行 + 描边徽章）
  */
-import { ChevronDown, ChevronLeft, ChevronRight, Puzzle, RefreshCw, Square, SquareCheck } from "lucide-react";
+import { ChevronDown, ChevronLeft, ChevronRight, Folder, Puzzle, RefreshCw, Square, SquareCheck } from "lucide-react";
 import { useEffect, useId, useMemo, useState } from "react";
 import { motion } from "motion/react";
 import * as api from "@/lib/api";
@@ -17,10 +17,12 @@ import type {
     ModDisposition,
     ModSearchResult,
     ModVersionEntry,
+    PackDirEntry,
     PlanMod,
 } from "@/lib/types";
 import {
     Btn,
+    CheckBox,
     ListRow,
     ModalShell,
     SEG_PILL_SPRING,
@@ -203,6 +205,142 @@ export function PlanListModal({
                             {copy.more(filtered.length - 4)}
                         </span>
                     </div>
+                )}
+            </div>
+        </ModalShell>
+    );
+}
+
+/* ================= 目录勾选弹窗（客户端保留目录卡「添加目录」） ================= */
+
+/**
+ * 列出包内全部顶层目录供主动勾选：暂存 draft（打开时从已选初始化），
+ * 「应用」整体回写——卡片只展示勾选结果，不做默认预选。
+ */
+export function DirPickerModal({
+    open,
+    onClose,
+    dirs,
+    selected,
+    onApply,
+}: {
+    open: boolean;
+    onClose: () => void;
+    dirs: PackDirEntry[];
+    selected: string[];
+    onApply: (next: string[]) => void;
+}) {
+    const [query, setQuery] = useState("");
+    const [draft, setDraft] = useState<string[]>(selected);
+
+    // 每次打开都从当前已选重建暂存（卡片行内移除后再开也不会带旧草稿）
+    useEffect(() => {
+        if (open) setDraft(selected.slice());
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [open]);
+
+    const filtered = useMemo(
+        () => dirs.filter((d) => !query || d.name.toLowerCase().includes(query.toLowerCase())),
+        [dirs, query]
+    );
+
+    const toggle = (name: string) =>
+        setDraft((v) => (v.includes(name) ? v.filter((x) => x !== name) : [...v, name]));
+
+    return (
+        <ModalShell
+            open={open}
+            onClose={onClose}
+            width={560}
+            height={440}
+            title={`选择保留目录 · ${dirs.length} 个目录`}
+            sub="整合包内 mods 之外的顶层目录 · 勾选后随包复制到服务端"
+            footerNote={`${draft.length} 个目录将随包保留`}
+            footerActions={
+                <>
+                    <Btn size="sm" className="px-3.5" onClick={onClose}>
+                        取消
+                    </Btn>
+                    <Btn
+                        variant="primary"
+                        size="sm"
+                        className="px-3.5 font-semibold"
+                        onClick={() => {
+                            onApply(draft);
+                            onClose();
+                        }}
+                    >
+                        应用
+                    </Btn>
+                </>
+            }
+        >
+            <SearchBox
+                value={query}
+                onChange={setQuery}
+                placeholder="搜索目录名称…"
+                className="border border-stroke"
+            />
+
+            {/* toolbar：左全选/清除 + 右计数 */}
+            <div className="flex w-full shrink-0 items-center justify-between gap-2">
+                <div className="flex items-center gap-3">
+                    <button
+                        className="flex items-center gap-2 text-[11px] leading-[16px] font-medium text-text-2 hover:text-text-1"
+                        onClick={() => setDraft(filtered.map((d) => d.name))}
+                    >
+                        <SquareCheck className="size-3.5 text-accent" />
+                        全选
+                    </button>
+                    <button
+                        className="text-[11px] leading-[16px] font-medium text-text-3 hover:text-text-1"
+                        onClick={() => setDraft([])}
+                    >
+                        清除
+                    </button>
+                </div>
+                <span className="font-mono text-[11px] leading-[16px] font-normal tabular-nums text-text-3">
+                    已勾选 {draft.length} / {dirs.length}
+                </span>
+            </div>
+
+            <div className="-mx-1 flex min-h-0 flex-1 flex-col gap-0.5 overflow-auto px-1">
+                {filtered.map((d) => {
+                    const on = draft.includes(d.name);
+                    return (
+                        <ListRow
+                            key={d.name}
+                            className="cursor-pointer hover:bg-surface-2"
+                            onClick={() => toggle(d.name)}
+                        >
+                            {/* 勾选框自带点击，阻止冒泡避免行 onClick 二次翻转 */}
+                            <span onClick={(e) => e.stopPropagation()}>
+                                <CheckBox checked={on} onChange={() => toggle(d.name)} />
+                            </span>
+                            <Folder
+                                className={cn(
+                                    "size-4 shrink-0",
+                                    on ? "text-accent" : "text-text-3"
+                                )}
+                            />
+                            <span className="min-w-0 flex-1 truncate font-mono text-[12px] leading-[18px] font-medium text-text-1">
+                                {d.name}/
+                            </span>
+                            <span
+                                className={cn(
+                                    "shrink-0 font-mono text-[11px] leading-[16px] tabular-nums",
+                                    on ? "text-emerald" : "text-text-3"
+                                )}
+                            >
+                                {d.fileCount} 文件
+                            </span>
+                        </ListRow>
+                    );
+                })}
+                {filtered.length === 0 && (
+                    <span className="py-8 text-center text-[11px] text-text-3">
+                        {dirs.length === 0 ? "包内没有可保留的目录" : "无匹配目录"}
+                    </span>
                 )}
             </div>
         </ModalShell>

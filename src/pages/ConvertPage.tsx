@@ -9,17 +9,19 @@
  *  - overrides 记录用户对 remove/keep 的改动，removedAdds 记录被取消勾选的新增项
  *  - 计数与摘要卡一律由这三者派生，保证「Tab 计数 = 摘要计数 = 实际方案」不漂移
  */
-import { AlertTriangle, Archive, ChevronRight, Download, File, Globe, Layers } from "lucide-react";
+import { AlertTriangle, Archive, ChevronRight, Download, File, Folder, Globe, Info, Layers, Plus, X } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { AnimatePresence, motion, type Variants } from "motion/react";
 import * as api from "@/lib/api";
 import { useNavigation } from "@/lib/navigation";
 import { formatSize, loaderLabel, outputNameOf, truncateMiddle } from "@/lib/format";
 import type {
+    AppSettings,
     ConversionOptions,
     ModDisposition,
     ModSearchResult,
     ModVersionEntry,
+    PackDirEntry,
     PackManifest,
     PlanMod,
     VersionOption,
@@ -39,11 +41,12 @@ import {
     SegTabs,
     Stepper,
     TagChip,
+    TextInput,
     Toggle,
     ToneChip,
     type SelectOption,
 } from "@/components/design/ui";
-import { OnlineAddModal, PlanListModal, type ListFocus } from "@/components/features/convert-modals";
+import { DirPickerModal, OnlineAddModal, PlanListModal, type ListFocus } from "@/components/features/convert-modals";
 import { cn } from "@/lib/utils";
 
 /** VersionOption → 下拉项（group/recommended 透传，供分组与「推荐」标记） */
@@ -68,6 +71,20 @@ const CARD_RISE: Variants = {
     show: { opacity: 1, y: 0, transition: { type: "spring", stiffness: 320, damping: 28 } },
 };
 
+const GAMEMODE_OPTIONS: SelectOption[] = [
+    { value: "survival", label: "生存" },
+    { value: "creative", label: "创造" },
+    { value: "adventure", label: "冒险" },
+    { value: "spectator", label: "旁观" },
+];
+
+const DIFFICULTY_OPTIONS: SelectOption[] = [
+    { value: "peaceful", label: "和平" },
+    { value: "easy", label: "简单" },
+    { value: "normal", label: "普通" },
+    { value: "hard", label: "困难" },
+];
+
 export function ConvertPage() {
     const { entry, navigate, switchPrimary } = useNavigation();
     const manifest = entry.params?.manifest as PackManifest | undefined;
@@ -87,6 +104,11 @@ export function ConvertPage() {
     const [listFocus, setListFocus] = useState<ListFocus | null>(null);
     const [onlineOpen, setOnlineOpen] = useState(false);
     const [starting, setStarting] = useState(false);
+    /** 全局设置：摘要卡展示默认输出目录（本次覆写为空时回落它） */
+    const [settings, setSettings] = useState<AppSettings | null>(null);
+    /** 包内可保留的顶层目录（目录勾选弹窗数据源） */
+    const [packDirs, setPackDirs] = useState<PackDirEntry[]>([]);
+    const [dirModalOpen, setDirModalOpen] = useState(false);
 
     // 进入页面：默认选项（以包的 MC 版本为准）+ 模组方案 + 版本下拉数据
     useEffect(() => {
@@ -97,6 +119,8 @@ export function ConvertPage() {
         void api.getPlan().then(setPlan);
         void api.listMcVersions().then((l) => setMcOptions(l.map(toOption)));
         void api.listJavaVersions().then((l) => setJavaOptions(l.map(toOption)));
+        void api.getSettings().then(setSettings);
+        void api.listPackDirs().then(setPackDirs);
     }, [manifest]);
 
     // MC 版本变更 → 重新拉取该版本可用的加载器版本
@@ -122,6 +146,24 @@ export function ConvertPage() {
         [mods]
     );
 
+    /** 反向依赖警告：保留/新增项依赖了被剔除的行（mrpack depends 元数据，按缺失项聚合） */
+    const depWarnings = useMemo(() => {
+        const byId = new Map(mods.map((m) => [m.id, m]));
+        const groups = new Map<string, { missing: PlanMod; hosts: PlanMod[] }>();
+        for (const m of mods) {
+            if (m.disposition === "remove") continue;
+            for (const d of m.depends ?? []) {
+                const t = byId.get(d);
+                if (t && t.disposition === "remove") {
+                    const g = groups.get(d) ?? { missing: t, hosts: [] };
+                    g.hosts.push(m);
+                    groups.set(d, g);
+                }
+            }
+        }
+        return [...groups.values()];
+    }, [mods]);
+
     /** 本地 .jar 添加的模组 id（徽章显示「本地」而非「推荐」） */
     const localIds = useMemo(
         () => new Set(extras.filter((m) => m.id.startsWith("local-")).map((m) => m.id)),
@@ -130,6 +172,11 @@ export function ConvertPage() {
 
     const setDisposition = (id: string, d: ModDisposition) =>
         setOverrides((o) => ({ ...o, [id]: d }));
+
+    /** 卡片行内移除单个保留目录（批量增删走 DirPickerModal 应用回写） */
+    const removeDir = (name: string) => {
+        patch({ keepDirs: (options?.keepDirs ?? []).filter((d) => d !== name) });
+    };
 
     /** 新增项取消勾选 = 从方案移除，并留下可撤销的提示条 */
     const dropAdded = (m: PlanMod) => {
@@ -213,6 +260,15 @@ export function ConvertPage() {
     const rows = mods.filter((m) => m.disposition === tab).slice(0, PREVIEW_ROWS);
     const loader = loaderLabel(manifest.loader);
     const patch = (p: Partial<ConversionOptions>) => setOptions((o) => (o ? { ...o, ...p } : o));
+
+    /** 本次输出目录 = 单包覆写 ?? 全局设置 */
+    const outputOverride = options?.outputOverride?.trim() ?? "";
+    const effectiveOutputDir = outputOverride || settings?.outputDir || "";
+
+    const chooseOutputDir = async () => {
+        const dir = await api.pickDirectory();
+        if (dir) patch({ outputOverride: dir });
+    };
 
     return (
         <motion.div
@@ -363,6 +419,45 @@ export function ConvertPage() {
                                 )}
                             </AnimatePresence>
 
+                            {/* 反向依赖警告：保留项依赖了被剔除模组，一键恢复缺失项即消警 */}
+                            <AnimatePresence initial={false}>
+                                {depWarnings.length > 0 && (
+                                    <motion.div
+                                        key="dep-warn"
+                                        initial={{ opacity: 0, y: -8 }}
+                                        animate={{ opacity: 1, y: 0 }}
+                                        exit={{ opacity: 0, y: -8 }}
+                                        transition={{ duration: 0.18, ease: "easeOut" }}
+                                        className="flex shrink-0 flex-col gap-1 rounded-lg bg-gold-dim px-3 py-2"
+                                    >
+                                        {depWarnings.slice(0, 2).map(({ missing, hosts }) => (
+                                            <div key={missing.id} className="flex items-center gap-2">
+                                                <AlertTriangle className="size-3.5 shrink-0 text-gold" />
+                                                <span className="min-w-0 flex-1 truncate text-[11px] leading-[16px] text-gold">
+                                                    {hosts
+                                                        .slice(0, 2)
+                                                        .map((h) => h.name)
+                                                        .join("、")}
+                                                    {hosts.length > 2 ? ` 等 ${hosts.length} 项` : ""} 依赖被剔除的{" "}
+                                                    {missing.name}
+                                                </span>
+                                                <LinkBtn
+                                                    size="sm"
+                                                    onClick={() => setDisposition(missing.id, "keep")}
+                                                >
+                                                    恢复
+                                                </LinkBtn>
+                                            </div>
+                                        ))}
+                                        {depWarnings.length > 2 && (
+                                            <span className="pl-[22px] text-[10px] leading-[14px] text-gold">
+                                                … 另有 {depWarnings.length - 2} 组依赖冲突，可逐项恢复处理
+                                            </span>
+                                        )}
+                                    </motion.div>
+                                )}
+                            </AnimatePresence>
+
                             {/* 底部出口区：剔除/保留 → 查看清单链接；新增 → 两枚添加按钮 */}
                             <div className="flex shrink-0 flex-col">
                                 <AnimatePresence mode="wait" initial={false}>
@@ -425,7 +520,78 @@ export function ConvertPage() {
                         </Panel>
                     </motion.div>
 
-                    {/* ---- 启动参数：内存步进器 + 两枚开关 ---- */}
+                    {/* ---- 客户端保留目录：默认空态，「添加目录」弹窗主动勾选 ---- */}
+                    <motion.div variants={CARD_RISE} className="min-w-0">
+                        <Panel gap={14}>
+                            <PanelHead
+                                title="客户端保留目录"
+                                right={
+                                    <Btn
+                                        size="sm"
+                                        icon={Plus}
+                                        disabled={packDirs.length === 0}
+                                        onClick={() => setDirModalOpen(true)}
+                                    >
+                                        添加目录
+                                    </Btn>
+                                }
+                            />
+                            {(options?.keepDirs ?? []).length === 0 ? (
+                                <p className="w-full py-3 text-center text-[11px] text-text-3">
+                                    {packDirs.length === 0
+                                        ? "包内未检测到可保留的目录（mods 之外没有资源文件）"
+                                        : "尚未选择目录 · 点击上方「添加目录」从包内勾选"}
+                                </p>
+                            ) : (
+                                <div className="flex w-full flex-col gap-1">
+                                    <AnimatePresence initial={false} mode="popLayout">
+                                        {(options?.keepDirs ?? []).map((name) => {
+                                            const dir = packDirs.find(
+                                                (d) => d.name.toLowerCase() === name.toLowerCase()
+                                            );
+                                            return (
+                                                <motion.div
+                                                    key={name}
+                                                    layout
+                                                    initial={{ opacity: 0, y: -6 }}
+                                                    animate={{ opacity: 1, y: 0 }}
+                                                    exit={{ opacity: 0, y: -6 }}
+                                                    transition={{
+                                                        type: "spring",
+                                                        stiffness: 320,
+                                                        damping: 28,
+                                                    }}
+                                                    className="flex min-w-0 items-center gap-2.5 rounded-lg px-1.5 py-1 transition-colors hover:bg-surface-2"
+                                                >
+                                                    <Folder className="size-3.5 shrink-0 text-accent" />
+                                                    <span className="min-w-0 flex-1 truncate font-mono text-[12px] leading-[18px] font-medium text-text-1">
+                                                        {dir?.name ?? name}/
+                                                    </span>
+                                                    {dir && (
+                                                        <span className="shrink-0 font-mono text-[11px] leading-[16px] tabular-nums text-emerald">
+                                                            {dir.fileCount} 文件
+                                                        </span>
+                                                    )}
+                                                    <button
+                                                        onClick={() => removeDir(name)}
+                                                        title="移除"
+                                                        className="flex size-6 shrink-0 items-center justify-center rounded-md text-text-3 transition-colors hover:bg-redstone-dim hover:text-redstone"
+                                                    >
+                                                        <X className="size-3" />
+                                                    </button>
+                                                </motion.div>
+                                            );
+                                        })}
+                                    </AnimatePresence>
+                                </div>
+                            )}
+                            <NoteRow icon={Info}>
+                                勾选的目录从源包原样复制到服务端根目录；模组配置在 config 目录，不勾选则不带入
+                            </NoteRow>
+                        </Panel>
+                    </motion.div>
+
+                    {/* ---- 启动参数：内存步进器 + 开关 + JVM 参数扩展 ---- */}
                     <motion.div variants={CARD_RISE} className="min-w-0">
                         <Panel gap={14}>
                             <PanelHead title="启动参数" />
@@ -447,6 +613,94 @@ export function ConvertPage() {
                                     onChange={(v) => patch({ agreeEula: v })}
                                 />
                             </InlineRow>
+                            <InlineRow label="Aikar's flags 优化参数组（G1GC 推荐）">
+                                <Toggle
+                                    checked={options?.useAikarFlags ?? false}
+                                    onChange={(v) => patch({ useAikarFlags: v })}
+                                />
+                            </InlineRow>
+                            <InlineRow label="附加 JVM 参数">
+                                <TextInput
+                                    className="w-[240px]"
+                                    value={options?.extraJvmArgs ?? ""}
+                                    onChange={(e) => patch({ extraJvmArgs: e.target.value })}
+                                    placeholder="原样拼入 start 脚本"
+                                    spellCheck={false}
+                                />
+                            </InlineRow>
+                        </Panel>
+                    </motion.div>
+
+                    {/* ---- 服务端设置：server.properties 高频字段（包内自带同名文件时不覆盖） ---- */}
+                    <motion.div variants={CARD_RISE} className="min-w-0">
+                        <Panel gap={14}>
+                            <PanelHead title="服务端设置" />
+                            <div className="flex w-full gap-3">
+                                <SearchSelect
+                                    className="flex-1"
+                                    label="游戏模式"
+                                    value={options?.gamemode ?? "survival"}
+                                    options={GAMEMODE_OPTIONS}
+                                    onChange={(v) =>
+                                        patch({ gamemode: v as ConversionOptions["gamemode"] })
+                                    }
+                                />
+                                <SearchSelect
+                                    className="flex-1"
+                                    label="难度"
+                                    value={options?.difficulty ?? "easy"}
+                                    options={DIFFICULTY_OPTIONS}
+                                    onChange={(v) =>
+                                        patch({ difficulty: v as ConversionOptions["difficulty"] })
+                                    }
+                                />
+                            </div>
+                            <div className="grid w-full grid-cols-2 gap-3">
+                                <Field label="服务器端口">
+                                    <NumField
+                                        value={options?.serverPort ?? 25565}
+                                        min={1}
+                                        max={65535}
+                                        onCommit={(v) => patch({ serverPort: v })}
+                                    />
+                                </Field>
+                                <Field label="最大人数">
+                                    <NumField
+                                        value={options?.maxPlayers ?? 20}
+                                        min={1}
+                                        max={1000}
+                                        onCommit={(v) => patch({ maxPlayers: v })}
+                                    />
+                                </Field>
+                            </div>
+                            <Field label="服务器描述（MOTD）">
+                                <TextInput
+                                    className="w-full"
+                                    value={options?.motd ?? ""}
+                                    onChange={(e) => patch({ motd: e.target.value })}
+                                    placeholder="显示在服务器列表中的一行描述"
+                                    spellCheck={false}
+                                />
+                            </Field>
+                            <Field label="世界种子（留空 = 随机生成）">
+                                <TextInput
+                                    className="w-full"
+                                    value={options?.levelSeed ?? ""}
+                                    onChange={(e) => patch({ levelSeed: e.target.value })}
+                                    placeholder="如 4045151867437057206"
+                                    spellCheck={false}
+                                />
+                            </Field>
+                            <Divider />
+                            <InlineRow label="正版验证（online-mode）">
+                                <Toggle
+                                    checked={options?.onlineMode ?? true}
+                                    onChange={(v) => patch({ onlineMode: v })}
+                                />
+                            </InlineRow>
+                            <NoteRow icon={Info}>
+                                以上字段写入包内 server.properties；整合包自带该文件时保留原文件
+                            </NoteRow>
                         </Panel>
                     </motion.div>
                 </div>
@@ -463,6 +717,19 @@ export function ConvertPage() {
                             预计下载 {formatSize((counts.keep + counts.add) * 1_200_000)}
                         </NoteRow>
                         <NoteRow icon={Archive}>输出 {outputNameOf(manifest.fileName)}</NoteRow>
+                        <NoteRow icon={Folder}>
+                            {effectiveOutputDir ? truncateMiddle(effectiveOutputDir, 26) : "默认输出目录"}
+                        </NoteRow>
+                        <div className="flex w-full items-center justify-between gap-2">
+                            <LinkBtn size="sm" onClick={() => void chooseOutputDir()}>
+                                {outputOverride ? "更换本次目录…" : "本次改用其他目录…"}
+                            </LinkBtn>
+                            {!!outputOverride && (
+                                <LinkBtn size="sm" onClick={() => patch({ outputOverride: "" })}>
+                                    恢复全局
+                                </LinkBtn>
+                            )}
+                        </div>
                         <Btn
                             variant="primary"
                             full
@@ -500,6 +767,13 @@ export function ConvertPage() {
                 mcVersion={options?.mcVersion ?? manifest.mcVersion}
                 loader={manifest.loader}
                 onAdd={addOnline}
+            />
+            <DirPickerModal
+                open={dirModalOpen}
+                onClose={() => setDirModalOpen(false)}
+                dirs={packDirs}
+                selected={options?.keepDirs ?? []}
+                onApply={(next) => patch({ keepDirs: next })}
             />
         </motion.div>
     );
@@ -544,4 +818,45 @@ function badgeFor(mod: PlanMod, local: boolean): React.ReactNode {
     if (mod.clientOnly) return <TagChip>客户端专属</TagChip>;
     if (mod.disposition === "add") return <TagChip className="text-gold">推荐</TagChip>;
     return undefined;
+}
+
+/* ---------------- 服务端设置卡的字段小件 ---------------- */
+
+function Field({ label, children }: { label: string; children: React.ReactNode }) {
+    return (
+        <label className="flex min-w-0 flex-1 flex-col gap-1.5">
+            <span className="text-[11px] leading-[16px] font-medium text-text-2">{label}</span>
+            {children}
+        </label>
+    );
+}
+
+/** 数字输入：本地草稿允许瞬时空串/半成品，失焦时 clamp 提交回 options */
+function NumField({
+    value,
+    min,
+    max,
+    onCommit,
+}: {
+    value: number;
+    min: number;
+    max: number;
+    onCommit: (v: number) => void;
+}) {
+    const [draft, setDraft] = useState(String(value));
+    useEffect(() => setDraft(String(value)), [value]);
+    return (
+        <TextInput
+            className="w-full"
+            inputMode="numeric"
+            value={draft}
+            onChange={(e) => setDraft(e.target.value.replace(/\D/g, "").slice(0, 6))}
+            onBlur={() => {
+                const n = parseInt(draft, 10);
+                const c = Number.isFinite(n) ? Math.min(max, Math.max(min, n)) : value;
+                setDraft(String(c));
+                onCommit(c);
+            }}
+        />
+    );
 }

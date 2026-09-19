@@ -149,7 +149,10 @@ function TaskCard({ task }: { task: ConversionTask }) {
         if (id) navigate("task", { taskId: id });
     };
 
-    const openOutput = () => void api.resolveOutputPath(outName).then((p) => void api.openDir(api.dirOf(p)));
+    const openOutput = () =>
+        void api
+            .resolveOutputPath(outName, task.options.outputOverride)
+            .then((p) => void api.openDir(api.dirOf(p)));
 
     return (
         <Panel gap={12}>

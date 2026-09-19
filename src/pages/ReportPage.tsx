@@ -40,7 +40,7 @@ export function ReportPage() {
         void Promise.all([api.getReport(taskId), api.getTask(taskId), api.getSettings()]).then(
             ([r, t, s]) => {
                 if (!alive) return;
-                setOutputDir(s.outputDir);
+                setOutputDir(t?.options.outputOverride?.trim() || s.outputDir);
                 if (t) setTask(t);
                 if (r) setReport(r);
             }
