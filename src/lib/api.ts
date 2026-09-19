@@ -148,15 +148,16 @@ export async function listModVersions(
 
 /* ---------------- 任务生命周期 ---------------- */
 
-/** 创建并开始转换（Rust: start_conversion(options, manifest) -> taskId） */
+/** 创建并开始转换（Rust: start_conversion(options, manifest, plan) -> taskId）；plan 为前端确认过的最终方案 */
 export async function startConversion(
     options: ConversionOptions,
-    pack: PackManifest
+    pack: PackManifest,
+    plan: PlanMod[]
 ): Promise<string> {
     if (!isTauri) return mock.mockStartTask(options, pack);
     return invokeOrMock(
         "start_conversion",
-        { options, manifest: pack },
+        { options, manifest: pack, plan },
         () => mock.mockStartTask(options, pack)
     );
 }

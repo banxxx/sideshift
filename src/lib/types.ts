@@ -25,6 +25,8 @@ export interface PackManifest {
     /** 解析是否成功；失败时 error 描述原因 */
     parsed: boolean;
     error?: string;
+    /** 源包绝对路径（后端下发、创建任务时原样带回） */
+    sourcePath?: string;
 }
 
 /** 单个模组在转换方案中的处置（对应 Convert 模组方案三行） */
@@ -45,6 +47,8 @@ export interface PlanMod {
     needsReview: boolean;
     /** 自动补齐的依赖项（移除时给依赖警告） */
     autoSupplement: boolean;
+    /** 「从本地添加」的 .jar 绝对路径（真实后端直接取本地文件） */
+    localPath?: string;
 }
 
 /** 转换可选项（对应 Convert 启动参数 + 运行环境） */

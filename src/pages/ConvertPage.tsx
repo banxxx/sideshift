@@ -143,6 +143,7 @@ export function ConvertPage() {
                 clientOnly: false,
                 needsReview: false,
                 autoSupplement: false,
+                localPath: path,
             },
         ]);
         setTab("add");
@@ -174,7 +175,7 @@ export function ConvertPage() {
         if (!manifest || !options || starting) return;
         setStarting(true);
         try {
-            const taskId = await api.startConversion(options, manifest);
+            const taskId = await api.startConversion(options, manifest, mods);
             navigate("task", { taskId });
         } catch {
             setStarting(false);
