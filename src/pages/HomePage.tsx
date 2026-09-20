@@ -33,21 +33,32 @@ const IDLE_BRANCH: Variants = {
 
 export function HomePage() {
     const { navigate } = useNavigation();
-    const { manifest, parsing, error, errorName, parse, pickByDialog, reset } =
+    const { manifest, parsing, error, errorName, selectedAt, parse, pickByDialog, reset } =
         usePackStore();
     const { active } = useActiveTask();
 
     // Tauri 下 OS 拖入 → 直接解析第一个文件；拖拽悬停标志用于拖放卡高亮
     const fileDragging = useTauriFileDrop((paths) => void parse(paths[0]));
 
-    const converting = !!active && (active.status === "running" || active.status === "queued");
+    /**
+     * 轨道/卡片该反映哪条任务：
+     * - 排队或运行中 → 一律反映（轨道是全局实况小窗，同一时刻只有一条在动）；
+     * - 已结束（成功/失败/取消）→ 只有「本次选包之后创建」的任务才算数。
+     *   重新拖入整合包时 selectedAt 会刷新，于是上一套构建的进度与日志立刻归零，
+     *   哪怕两次是同名同路径的包——按文件名比对无法区分，所以比对创建时刻。
+     */
+    const live = !!active && (active.status === "running" || active.status === "queued");
+    const shown = active && (live || active.createdAt >= selectedAt) ? active : null;
+    const converting =
+        !!shown && (shown.status === "running" || shown.status === "queued");
     // 解析失败也要停留在卡片布局，把错误显式呈现出来（不能闪回 idle 装作无事发生）
-    // 注意：历史任务（已完成/失败/取消）不算活跃，否则一进首页就会被拽进卡片布局。
+    // 注意：与本次选包无关的历史任务（已完成/失败/取消）不算活跃，
+    // 否则一进首页就会被拽进卡片布局。
     const view = !manifest && !parsing && !converting && !error
         ? "idle"
         : parsing || (!manifest && converting)
           ? "parsing"
-          : converting || (!!active && manifest?.fileName === active.pack.fileName)
+          : converting || (!!shown && !!manifest)
             ? "converting"
             : "ready";
 
@@ -59,7 +70,7 @@ export function HomePage() {
             ? "converting"
             : "ready";
 
-    const rail = view === "converting" && active ? taskToRail(active) : null;
+    const rail = view === "converting" && shown ? taskToRail(shown) : null;
 
     return (
         // overflow-hidden：进出场时 PackCard 右移 64px / ShiftRail 下移 72px 属于
@@ -122,14 +133,14 @@ export function HomePage() {
                                 transition={{ type: "spring", stiffness: 260, damping: 28 }}
                             >
                                 <PackCard
-                                    manifest={manifest ?? active?.pack ?? null}
+                                    manifest={manifest ?? shown?.pack ?? null}
                                     status={cardStatus}
                                     error={error}
                                     fileName={errorName ?? undefined}
                                     onChangeFile={reset}
                                     onPrimary={() =>
-                                        converting && active
-                                            ? navigate("task", { taskId: active.id })
+                                        converting && shown
+                                            ? navigate("task", { taskId: shown.id })
                                             : navigate("convert", { manifest })
                                     }
                                 />
@@ -152,7 +163,7 @@ export function HomePage() {
                                 statuses={
                                     rail
                                         ? rail.statuses
-                                        : /* 设计稿 i1k2jT：未开始时第 1 站即为金色"当前站" */
+                                        : /* 未开始：第 1 站是"当前站"（灰底 + 很淡的光环） */
                                           { parser: "active" }
                                 }
                                 status={
@@ -163,10 +174,11 @@ export function HomePage() {
                                           : { label: "已检测 · 待转换", tone: "emerald" }
                                 }
                                 logs={rail?.logs ?? []}
+                                runFrac={rail?.runFrac}
                                 subs={rail?.subs}
                                 clipHeader={
-                                    active
-                                        ? `SideShift 日志 · ${active.pack.fileName} · ${active.id} · ${active.status}`
+                                    shown
+                                        ? `SideShift 日志 · ${shown.pack.fileName} · ${shown.id} · ${shown.status}`
                                         : undefined
                                 }
                                 waiting={
@@ -176,7 +188,7 @@ export function HomePage() {
                                     }
                                 }
                                 onOpenTask={
-                                    active ? () => navigate("task", { taskId: active.id }) : undefined
+                                    shown ? () => navigate("task", { taskId: shown.id }) : undefined
                                 }
                             />
                         </motion.div>

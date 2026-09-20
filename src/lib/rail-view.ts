@@ -1,9 +1,11 @@
 /**
  * ConversionTask → ShiftRail 展示映射（Home 实况小窗 / Task 详情页共用）
  *
- * 设计口径（v11 定稿）：轨道反映任务真实进度——已越过的站点 emerald、
- * 当前站点 gold 激活、未达站点灰色；失败站 redstone；成功=四站全绿；
- * 取消=停在原地（不标错）。
+ * 设计口径（v20 修订）：轨道反映任务真实进度——已越过的站点 emerald、
+ * 未完成的站点一律灰色（当前站只多一圈很淡的光环），"正在走"由轨道上的
+ * accent 进行中腿表达（runFrac = 当前阶段在自身区间内的完成度）；
+ * 失败站 redstone；成功=四站全绿；取消=停在原地（不标错）。
+ * 金色不再出现在轨道上（芯片/进度条仍可带 gold）。
  */
 import { Check, RefreshCw, X, type LucideIcon } from "lucide-react";
 import type { ConversionTask, FetchTally, PipelineStage, TaskStatus } from "@/lib/types";
@@ -75,9 +77,29 @@ export interface TaskRailView {
     statuses: Partial<Record<PipelineStage, RailStageStatus>>;
     status: { label: string; tone: RailTone };
     logs: RailLog[];
+    /** 当前阶段在「上一站 → 当前站」这条腿上的完成度 0..1（仅运行态） */
+    runFrac?: number;
     /** 站点副标题覆写（零联网任务：下载站如实写成整合包/本地取件） */
     subs?: Partial<Record<PipelineStage, string>>;
     waiting?: { title: string; detail?: string };
+}
+
+/**
+ * 各阶段在总进度里占的区间（与 Rust task_engine 的写值一一对应：
+ * parser 8→15、detector →30、downloader 30+52·done/total、builder build_progress 84→99）。
+ */
+const STAGE_BAND: Record<PipelineStage, [number, number]> = {
+    parser: [0, 15],
+    detector: [15, 30],
+    downloader: [30, 82],
+    builder: [84, 99],
+};
+
+/** 当前阶段自身区间内的完成度，用于驱动轨道上的进行中腿 */
+export function runFraction(task: ConversionTask): number | undefined {
+    if (task.status !== "running" || !task.stage) return undefined;
+    const [lo, hi] = STAGE_BAND[task.stage];
+    return Math.max(0, Math.min(1, (task.progress - lo) / (hi - lo)));
 }
 
 export function taskToRail(task: ConversionTask): TaskRailView {
@@ -116,12 +138,13 @@ export function taskToRail(task: ConversionTask): TaskRailView {
               ? "排队中"
               : FINISHED_LABEL[task.status];
 
-    const logs: RailLog[] = taskLogs(task).slice(-3);
+    const logs: RailLog[] = taskLogs(task);
 
     return {
         statuses,
         status: { label, tone },
         logs,
+        runFrac: runFraction(task),
         subs: needsNetwork(task) ? undefined : { downloader: "整合包与本地取件" },
         waiting: logs.length === 0 ? { title: "等待开始转换" } : undefined,
     };
@@ -129,7 +152,8 @@ export function taskToRail(task: ConversionTask): TaskRailView {
 
 /**
  * 任务日志 → 轨道控制台行（全量）。
- * Home 缩略小窗只取末 3 行（taskToRail），任务详情页传全量——控制台高度随行数增长。
+ * Home 缩略小窗与任务详情页读同一份日志尾（Home 侧数据来自 list_tasks，
+ * 后端已裁到末 8 行），控制台框定高滚动，行数不再影响卡片高度。
  */
 export function taskLogs(task: ConversionTask): RailLog[] {
     const finished = task.status !== "queued" && task.status !== "running";

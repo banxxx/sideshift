@@ -239,6 +239,44 @@
   scrollbar-gutter: stable;
 }
 
+/* ============ Shift Rail 进行中腿 ============ */
+/* accent 实底 + 一圈很淡的外发光，上面跑一条「暗→亮→暗」的高光带（sheen）。
+ * 位移用 background-position 而不是 transform：width 过渡占着几何，两者会互相抢。 */
+.rail-flow {
+  background-color: var(--accent);
+  background-image: linear-gradient(
+    90deg,
+    rgba(255, 255, 255, 0) 0%,
+    rgba(255, 255, 255, 0.7) 50%,
+    rgba(255, 255, 255, 0) 100%
+  );
+  background-size: 46% 100%;
+  background-repeat: no-repeat;
+  box-shadow: 0 0 10px -2px var(--dz-glow);
+  animation: rail-sheen 1.8s cubic-bezier(0.45, 0, 0.55, 1) infinite;
+}
+
+@keyframes rail-sheen {
+  from {
+    background-position-x: -46%;
+  }
+  to {
+    background-position-x: 146%;
+  }
+}
+
+/* 腿端亮点：同色光晕，指示"正往前推的前沿" */
+.rail-head {
+  box-shadow: 0 0 8px 1px var(--dz-glow);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .rail-flow {
+    animation: none;
+    background-size: 100% 100%;
+  }
+}
+
 @layer base {
   * {
     @apply border-border outline-ring/50;

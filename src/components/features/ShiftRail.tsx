@@ -5,13 +5,18 @@
  * 不感知业务数据来源——调用方把 TaskStatus/PipelineStage 映射成 stations/logs 传入，
  * 因此 Home 实况小窗、Task 详情页、任务列表都能复用同一份轨道。
  *
- * 站点四态（设计稿定稿）：
+ * 站点三态（用户定稿：未完成一律灰，轨道上不用黄色）：
  * - done    $emerald-dim 底 + $emerald 描边/图标（图标固定 check）
- * - active  $gold-dim 底 + $gold 描边/图标（图标为站点自身图标）
- * - error   $redstone-dim 底 + $redstone 描边/图标（x）
+ * - active  与 pending 同灰底灰图标，只加一圈很淡的品牌色光环 + 呼吸
  * - pending $surface-2 底 + $stroke 描边 + $text-3 图标
- * 轨道线只有两态（用户定稿，无金色进行中段）：底轨 $rail-track，
- * 已完成段 $emerald，宽度按"上一站中心→当前站中心"逐段推进。
+ * - error   $redstone-dim 底 + $redstone 描边/图标（x）
+ * 轨道三段：底轨 $rail-track，已完成段 $emerald（按"上一站中心→当前站中心"逐段推进），
+ * **进行中腿** $accent——按当前阶段的真实完成度填充，上面跑一条高光带（rail-flow）
+ * 并在前沿放一颗带光晕的亮点，解决「只有图标在变、线不动」。
+ *
+ * 纵向几何很紧（默认 1200×800 下首页不能再高）：rail-body 106 = 站点顶留位 26 + 盒 38
+ * + 10 + 名称 16 + 2 + 副标题 14，日志盒 80 = padding 20 + 3×16 行 + 2×6 间距。
+ * 所有 11/10px 小字都显式写 leading——html 的 line-height:24px 会白撑高每一行。
  */
 import { useRef } from "react";
 import {
@@ -56,6 +61,8 @@ interface ShiftRailProps {
     subs?: Partial<Record<PipelineStage, string>>;
     /** 复制日志时的首行上下文（包名/任务号） */
     clipHeader?: string;
+    /** 当前阶段在「上一站中心 → 当前站中心」这条腿上的完成度 0..1；非运行态不传 */
+    runFrac?: number;
     /** 是否显示底部"查看任务详情"链接 */
     onOpenTask?: () => void;
     className?: string;
@@ -80,7 +87,8 @@ const STATION_STYLE: Record<
     { box: string; iconColor: string }
 > = {
     done: { box: "bg-emerald-dim border-emerald", iconColor: "text-emerald" },
-    active: { box: "bg-gold-dim border-gold", iconColor: "text-gold" },
+    // 未完成就是灰：进行中靠轨道上跑动的那段表达，站点不再涂金（用户定稿：轨道上不要黄色）
+    active: { box: "bg-surface-2 border-stroke ring-2 ring-accent/25", iconColor: "text-text-3" },
     error: { box: "bg-redstone-dim border-redstone", iconColor: "text-redstone" },
     pending: { box: "bg-surface-2 border-stroke", iconColor: "text-text-3" },
 };
@@ -131,7 +139,7 @@ const LABEL_WIDTH = (190 / RAIL_W) * 100;
 /**
  * 已完成段宽度（占底轨比例）：推进到"最后一个 done 站"的中心，与设计稿一致
  * （Home 帧 parser+detector 完成 → 213/640；Ready 帧无完成站 → 0）。
- * 用户定稿"轨道线只有两态、无金色进行中段"，故站内的实时进度不画在线上。
+ * 已完成段只用 $emerald（无金色），站内的实时进度交给「进行中腿」表达。
  */
 function doneLineFraction(statuses: RailStageStatus[]): number {
     let k = 0;
@@ -142,6 +150,21 @@ function doneLineFraction(statuses: RailStageStatus[]): number {
     return (STATION_CENTERS[k - 1] - STATION_CENTERS[0]) / LINE_WIDTH;
 }
 
+/**
+ * 进行中腿：从已完成段前沿走到「第一个未完成站」中心。
+ * 底轨本身覆盖了整段，所以这里只需给出起终点的百分比即可。
+ */
+function runningLeg(
+    statuses: RailStageStatus[],
+    doneFrac: number
+): { left: number; width: number } | null {
+    const nextIdx = statuses.findIndex((s) => s !== "done");
+    if (nextIdx === -1) return null;
+    const left = LINE_LEFT + LINE_WIDTH * doneFrac;
+    const width = STATION_CENTERS[nextIdx] - left;
+    return width > 0.5 ? { left, width } : null;
+}
+
 export function ShiftRail({
                               statuses,
                               status,
@@ -149,11 +172,14 @@ export function ShiftRail({
                               waiting,
                               subs,
                               clipHeader,
+                              runFrac,
                               onOpenTask,
                               className,
                           }: ShiftRailProps) {
     const list = RAIL_STAGES.map((s) => statuses[s.stage] ?? "pending");
     const doneFrac = doneLineFraction(list);
+    const leg = runningLeg(list, doneFrac);
+    const runPct = leg ? leg.width * Math.max(0, Math.min(1, runFrac ?? 0)) : 0;
     const logBoxRef = useRef<HTMLDivElement>(null);
     useLogFollow(logBoxRef, logs.length);
 
@@ -164,15 +190,15 @@ export function ShiftRail({
                 className
             )}
         >
-            {/* 头部：轨道标题 + 状态芯片 */}
+            {/* 头部：轨道标题 + 状态芯片（显式 leading，否则继承 html 的 24px 行高白撑高） */}
             <header className="flex items-center justify-between">
-                <span className="font-mono text-[11px] font-semibold tracking-[1.2px] text-text-3">
+                <span className="font-mono text-[11px] leading-[16px] font-semibold tracking-[1.2px] text-text-3">
                     SHIFT RAIL · 转换轨道
                 </span>
                 {status && (
                     <span
                         className={cn(
-                            "flex items-center rounded-full px-2.5 py-1 font-mono text-[11px] font-semibold",
+                            "flex items-center rounded-full px-2.5 py-1 font-mono text-[11px] leading-[14px] font-semibold",
                             CHIP_TONE[status.tone]
                         )}
                     >
@@ -181,8 +207,9 @@ export function ShiftRail({
                 )}
             </header>
 
-            {/* 轨道主体：设计稿为固定几何（w884 h126），这里等比用 px 布局 */}
-            <div className="relative h-[126px]">
+            {/* 轨道主体：设计稿 rail-body 内宽 884，纵向按「站点盒 38 + 10 + 名称 16 + 2 + 副标题 14
+                + 顶部留位 26」精确收到 106（原 126 的 20px 是标签行继承 24px 行高白撑出来的） */}
+            <div className="relative h-[106px]">
                 {/* 端点芯片 */}
                 <EndChip icon={Archive} label="客户端包" className="left-1.5 top-[29px]" />
                 <EndChip
@@ -192,20 +219,50 @@ export function ShiftRail({
                     className="right-1.5 top-[29px]"
                 />
 
-                {/* 底轨 + 已完成段（几何按设计稿折算为百分比） */}
+                {/* 底轨 + 已完成段（几何按设计稿折算为百分比，一律圆头收边） */}
                 <span
-                    className="absolute h-[3px] rounded-sm bg-rail-track"
+                    className="absolute h-[3px] rounded-full bg-rail-track"
                     style={{ left: `${LINE_LEFT}%`, top: 44, width: `${LINE_WIDTH}%` }}
                 />
                 {doneFrac > 0 && (
                     <span
-                        className="absolute h-[3px] rounded-sm bg-emerald transition-[width] duration-500"
+                        className="absolute h-[3px] rounded-full bg-emerald transition-[width] duration-500"
                         style={{
                             left: `${LINE_LEFT}%`,
                             top: 44,
                             width: `${LINE_WIDTH * doneFrac}%`,
                         }}
                     />
+                )}
+
+                {/* 进行中腿：淡色待走路 + accent 流动段（宽度 = 当前阶段完成度）+ 头部亮点。
+                    这是「线在走动」的唯一载体——站点盒保持灰色，不靠涂色表意 */}
+                {leg && runFrac != null && (
+                    <>
+                        <span
+                            className="absolute h-[3px] rounded-full bg-accent/12"
+                            style={{
+                                left: `${leg.left}%`,
+                                top: 44,
+                                width: `${leg.width}%`,
+                            }}
+                        />
+                        <span
+                            className="rail-flow absolute h-[3px] rounded-full transition-[width] duration-700 ease-linear"
+                            style={{
+                                left: `${leg.left}%`,
+                                top: 44,
+                                width: `${runPct}%`,
+                            }}
+                        />
+                        <span
+                            className="rail-head absolute size-[7px] -translate-x-1/2 -translate-y-1/2 rounded-full bg-accent transition-[left] duration-700 ease-linear"
+                            style={{
+                                left: `${leg.left + runPct}%`,
+                                top: 45.5,
+                            }}
+                        />
+                    </>
                 )}
 
                 {/* 四站：站点盒 + 名称/副标题，整列以轨道中心对齐 */}
@@ -242,13 +299,13 @@ export function ShiftRail({
                             <div className="flex flex-col items-center gap-0.5 w-full">
                                 <span
                                     className={cn(
-                                        "text-xs font-semibold text-center",
+                                        "text-xs leading-[16px] font-semibold text-center",
                                         st === "pending" ? "text-text-2" : "text-text-1"
                                     )}
                                 >
                                     {s.label}
                                 </span>
-                                <span className="font-mono text-[10px] text-text-3 text-center w-full">
+                                <span className="font-mono text-[10px] leading-[14px] font-normal text-text-3 text-center w-full">
                                     {subs?.[s.stage] ?? s.sub}
                                 </span>
                             </div>
@@ -262,19 +319,20 @@ export function ShiftRail({
                 <footer className="flex justify-end">
                     <button
                         onClick={onOpenTask}
-                        className="text-[11px] font-semibold text-accent hover:underline"
+                        className="text-[11px] leading-[16px] font-semibold text-accent hover:underline"
                     >
                         查看任务详情 →
                     </button>
                 </footer>
             )}
 
-            {/* 日志控制台：定高 5 行 + 框内滚动（日志增多不再顶高整卡），
-                滚动条样式见 App.css，新行自动贴底；完整日志去任务详情页看 */}
+            {/* 日志控制台：定高 3 行（80px）+ 框内滚动，与任务详情页读同一份日志尾。
+                高度按 1200×800 默认窗口纵向预算锁死：页面 712 可用 − 头部/上半行/间距
+                后只剩 ~80px，再高就会顶出滚动条。滚动条样式见 App.css，新行自动贴底 */}
             <div className="relative">
                 <div
                     ref={logBoxRef}
-                    className="log-scroll h-[124px] overflow-y-auto rounded-lg border border-stroke-soft bg-bg-app px-4 py-2.5 flex flex-col gap-1.5"
+                    className="log-scroll h-[100px] overflow-y-auto rounded-lg border border-stroke-soft bg-bg-app px-4 py-2.5 flex flex-col gap-1.5"
                 >
                     {logs.length === 0 && waiting ? (
                         <p className="flex items-center gap-2 font-mono text-[11px]">
