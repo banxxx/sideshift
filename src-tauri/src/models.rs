@@ -47,13 +47,14 @@ pub enum ModDisposition {
     Add,
 }
 
-/// 端信息的证据来源（前端据此显示「依据什么判定」，可信度从高到低）
+/// 端信息的证据来源（前端据此显示「依据什么判定」）。
+/// 可信度顺序见 `env::rank`：jar 自证 > 平台按构建 > 平台按项目 > 整合包声明 > 名称启发
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, Default, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub enum EnvSource {
-    /// mrpack files[].env——整合包作者显式声明，最权威
+    /// mrpack files[].env——打包者填的第二手声明，整表无区分度时整层作废
     Mrpack,
-    /// jar 内 fabric.mod.json / quilt.mod.json 的 environment 字段
+    /// jar 内 fabric.mod.json / quilt.mod.json 的 environment 与 entrypoints 段
     JarMetadata,
     /// Modrinth 按文件 sha1 反查构建（POST /v2/version_files）
     ModrinthHash,
@@ -64,6 +65,18 @@ pub enum EnvSource {
     /// 无任何证据
     #[default]
     Unknown,
+}
+
+/// jar 字节码扫描给出的结构提示。它**不是**证据层级的一员：实测「引用了哪些 MC 类」
+/// 区分不了两端（纯客户端模组照样大量引用 `net/minecraft/world/`），只有加载器 API 的
+/// 注册形状可用，而它只够用来「少删一点」和「提示一句」，不够用来判定剔除。
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum BytecodeHint {
+    /// jar 里确有服务端注册（common setup / 注册表 / 网络 payload…）：名称关键字层被这道闸按住，未剔
+    ServerCode,
+    /// jar 只见客户端生命周期注册、不见任何服务端注册：形状像纯客户端，本轮不自动剔，只提示
+    ClientOnlyShape,
 }
 
 /// 某端的支持程度：required 必需 / optional 可选（能装但无收益）/ unsupported 不支持
@@ -109,6 +122,10 @@ pub struct PlanMod {
     /// 本次处置的证据来源（Unknown = 未判定）；前端据此给出「依据 X 判定」的可信度标注
     #[serde(default)]
     pub env_source: EnvSource,
+    /// 更高可信层与整合包 `files[].env` 的裁决不一致：结论取高可信层，
+    /// 冲突只作标注（打包者声明与模组作者声明本来就常互相打脸，得让人看得见）
+    #[serde(default)]
+    pub env_conflict: bool,
     /// 客户端支持度；None = 无证据
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub client_side: Option<SideFlag>,
@@ -116,6 +133,9 @@ pub struct PlanMod {
     /// None = 无证据：行默认保留，且不标「待人工确认」（多留不炸服，误删才会）
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub server_side: Option<SideFlag>,
+    /// 字节码结构提示（只影响提示文案与名称层是否获准剔除，不改裁决口径）
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bytecode_hint: Option<BytecodeHint>,
 }
 
 /// 自动分类结果事件载荷（`plan://classified`）：离线层与在线层各推一次
@@ -132,6 +152,10 @@ pub struct PlanClassified {
     pub done: bool,
     /// false = 在线层有请求失败，结论可能不完整（前端提示可重跑）
     pub complete: bool,
+    /// 整包 `files[].env` 无区分度（第三方工具刷成全表 required）→ 该层已作废，
+    /// 本包结论来自 jar 自证与平台反查。前端要写明为什么没采信打包者的声明
+    #[serde(default)]
+    pub pack_env_untrusted: bool,
 }
 
 /// `classify_pack` 的同步返回：离线层结论 + 在线层还会不会再推一次事件。
@@ -141,6 +165,9 @@ pub struct PlanClassified {
 pub struct PlanClassification {
     pub plan: Vec<PlanMod>,
     pub online_pending: bool,
+    /// 见 `PlanClassified::pack_env_untrusted`
+    #[serde(default)]
+    pub pack_env_untrusted: bool,
 }
 
 /// 取件构成（阶段 3 计划确定后写入）：网络 / 包内 / 本地 / 缓存命中四类来源的诚实汇总。

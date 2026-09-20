@@ -56,7 +56,7 @@ export function mockParsePack(path: string): PackManifest {
  */
 const REMOVE_SAMPLES: PlanMod[] = [
     { id: "optifine", name: "OptiFine", version: "F9M2+1.20.1", disposition: "remove", clientOnly: true, needsReview: false, autoSupplement: false, envSource: "mrpack", clientSide: "required", serverSide: "unsupported" },
-    { id: "xaeros-minimap", name: "Xaero's Minimap", version: "23.10.0", loader: "Fabric", disposition: "remove", clientOnly: true, needsReview: false, autoSupplement: false, envSource: "modrinthHash", clientSide: "required", serverSide: "optional" },
+    { id: "xaeros-minimap", name: "Xaero's Minimap", version: "23.10.0", loader: "Fabric", disposition: "remove", clientOnly: true, needsReview: false, autoSupplement: false, envSource: "modrinthHash", envConflict: true, clientSide: "required", serverSide: "optional" },
     { id: "viafabricplus", name: "ViaFabricPlus", version: "3.4.11", loader: "客户端/服务端两可用", disposition: "remove", clientOnly: false, needsReview: true, autoSupplement: false, envSource: "modrinthProject", clientSide: "required", serverSide: "optional" },
     { id: "geckolib", name: "GeckoLib", version: "4.4.7", loader: "Fabric", disposition: "remove", clientOnly: false, needsReview: true, autoSupplement: false, envSource: "jarMetadata", clientSide: "unsupported", serverSide: "required" },
 ];
@@ -101,6 +101,10 @@ function buildKept(count: number): PlanMod[] {
         envSource: (i % 6 === 5 ? "unknown" : "jarMetadata") as PlanMod["envSource"],
         clientSide: i % 6 === 5 ? undefined : ("required" as const),
         serverSide: i % 6 === 5 ? undefined : ("required" as const),
+        // 无证据行各演示一种字节码提示：文件名像客户端但 jar 里有服务端注册（按住没删），
+        // 以及形状像纯客户端（只提示、不剔）
+        bytecodeHint:
+            i % 6 === 5 ? (i % 12 === 5 ? "serverCode" : "clientOnlyShape") : undefined,
     }));
 }
 
@@ -189,7 +193,7 @@ export async function mockClassify(plan: PlanMod[]): Promise<PlanClassification>
         };
     });
     // 浏览器预览没有联网层，一次到位
-    return { plan: rows, onlinePending: false };
+    return { plan: rows, onlinePending: false, packEnvUntrusted: false };
 }
 
 /** MC 版本下拉 */

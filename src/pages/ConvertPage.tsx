@@ -127,6 +127,8 @@ export function ConvertPage() {
     const [classifying, setClassifying] = useState(false);
     /** 「清空我的修改」两段式确认（弹窗纪律：不用遮罩/确认框，第二次点击才执行） */
     const [confirmClear, setConfirmClear] = useState(false);
+    /** 整包 files[].env 无区分度（打包工具刷成全表 required）→ 该层已被作废 */
+    const [packEnvUntrusted, setPackEnvUntrusted] = useState(false);
 
     /** 自动分类主入口：进页默认执行，「重新自动分类」手动再跑一次。
      *  手动处置存在 overrides，方案整体替换也不会覆盖用户改动。
@@ -136,6 +138,7 @@ export function ConvertPage() {
         try {
             const res = await api.classifyPack();
             setPlan(res.plan);
+            setPackEnvUntrusted(res.packEnvUntrusted ?? false);
             setClassifying(res.onlinePending);
             if (manual) {
                 const remove = res.plan.filter((m) => m.disposition === "remove").length;
@@ -183,6 +186,7 @@ export function ConvertPage() {
                 if (!alive) return;
                 if (e.fileName && packName && e.fileName !== packName) return;
                 setPlan(e.plan);
+                setPackEnvUntrusted(e.packEnvUntrusted ?? false);
                 // 离线那次推送只是先给结论，本轮结束（done）才停「分类中」
                 if (!e.done) return;
                 setClassifying(false);
@@ -672,6 +676,11 @@ export function ConvertPage() {
                                                 {/* 自动分类出口：进页已默认跑过，这里只给重跑与回退手动改动的入口；
                                                     无证据行数以一行汇总提示，不逐行标「待确认」 */}
                                                 <div className="flex min-w-0 items-center gap-2.5">
+                                                    {packEnvUntrusted && (
+                                                        <span className="truncate text-[10px] leading-[14px] text-text-3">
+                                                            打包者声明全表同值 · 本包按 jar 与平台证据判定
+                                                        </span>
+                                                    )}
                                                     {unresolved > 0 && (
                                                         <span className="truncate text-[10px] leading-[14px] text-text-3">
                                                             {unresolved} 项无依据 · 默认保留

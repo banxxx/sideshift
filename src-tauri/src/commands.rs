@@ -186,6 +186,17 @@ fn evidence_of<'a>(
     }
 }
 
+/// 字节码结构事实只随 env_evidence 一起写入、一起作废，所以共用同一个包名闸门
+fn code_of(inner: &task_engine::Inner) -> &env::CodeMap {
+    if inner.env_evidence_file.is_some() && inner.env_evidence_file == inner.last_file {
+        &inner.env_code
+    } else {
+        // 作废态要的是空表：&HashMap::default() 生命周期不够，用静态空表兜住
+        static EMPTY: std::sync::OnceLock<env::CodeMap> = std::sync::OnceLock::new();
+        EMPTY.get_or_init(env::CodeMap::new)
+    }
+}
+
 /// 最近一次解析包的方案（用户勾改在前端本地模型中，start_conversion 回传最终版）
 fn current_plan(state: &S<'_>) -> Vec<PlanMod> {
     let inner = lock(&state);
@@ -195,6 +206,7 @@ fn current_plan(state: &S<'_>) -> Vec<PlanMod> {
             &p,
             inner.settings.strip_client_only,
             evidence_of(&inner, &empty),
+            code_of(&inner),
         ),
         None => Vec::new(),
     }
@@ -221,25 +233,35 @@ pub async fn classify_pack(app: AppHandle, state: S<'_>) -> Result<PlanClassific
                 return Ok(PlanClassification {
                     plan: Vec::new(),
                     online_pending: false,
+                    pack_env_untrusted: false,
                 })
             }
         }
     };
 
-    // 离线层 1：包内 jar 自证（Fabric/Quilt 的 environment）+ 自报身份与哈希（重 CPU → _blocking）
+    // 离线层 1：包内 jar 自证（Fabric/Quilt 的 environment + entrypoints）与自报身份/哈希
+    // （重 CPU → _blocking）。不再被 mrpack env 挡住：jar 是最高可信层，本地扫描零请求成本，
+    // 而且只有查了才知道打包者的声明有没有说谎（冲突要在行上标出来）
     let src = parsed
         .manifest
         .source_path
         .clone()
         .unwrap_or_default();
+    // mrpack 声明层整包有没有区分度：全表刷 required/required 的默认值包要照常联网反查
+    let informative = detector::mrpack_env_informative(&parsed.mod_files);
+    let index = env::EnvIndex::load(&cache_dir);
     let need_jar: Vec<env::ProbeReq> = parsed
         .mod_files
         .iter()
-        .filter(|f| f.in_pack && f.env_server.is_none() && f.env_client.is_none())
+        .filter(|f| f.in_pack)
         .map(|f| env::ProbeReq {
             path: f.path.clone(),
             // index 没给哈希的行才需要整包算 sha1（裸 zip 大包的额外开销就省在这一步）
             want_sha1: f.sha1.is_none(),
+            // 字节码扫描只补「上面几层都答不上」的行：mrpack 有区分度地声明过、
+            // 或本地索引已按哈希存过结论的，没必要再逐 class 走一遍常量池
+            want_code: !detector::env_declared(f, informative)
+                && !f.sha1.as_deref().is_some_and(|h| index.has_sha1(h)),
         })
         .collect();
     let probes = if src.is_empty() || need_jar.is_empty() {
@@ -255,17 +277,24 @@ pub async fn classify_pack(app: AppHandle, state: S<'_>) -> Result<PlanClassific
         .iter()
         .filter_map(|(path, p)| p.env.map(|e| (path.clone(), e)))
         .collect();
+    // 结构事实单独一张表：不进证据阶梯，只在 detector 里当名称层的闸门
+    let code: env::CodeMap = probes
+        .iter()
+        .filter(|(_, p)| p.code != env::CodeFacts::default())
+        .map(|(path, p)| (path.clone(), p.code))
+        .collect();
     // 反查目标：index 未给哈希的行（裸 zip、手动塞入的 jar）用扫描算出的 sha1 补上——
     // 中文改名包只剩哈希与包内 id 这两条路能对上平台
-    let mut targets = env::targets_for(&parsed.mod_files);
+    let mut targets = env::targets_for(&parsed.mod_files, informative);
     env::apply_probes(&probes, &mut targets);
     // 离线层 2：上次联网查到的本地索引（有则免去在线请求）
-    let pending = env::apply_index(&env::EnvIndex::load(&cache_dir), &targets, &mut ev);
+    let pending = env::apply_index(&index, &targets, &mut ev);
 
-    let plan = detector::build_plan(&parsed, strip, &ev);
+    let plan = detector::build_plan(&parsed, strip, &ev, &code);
     {
         let mut inner = lock(&state);
         inner.env_evidence = ev.clone();
+        inner.env_code = code;
         inner.env_evidence_file = Some(file_name.clone());
     }
     // 离线那次推送：还有在线层要跑就说明本轮没结束（done=false，前端继续转圈）
@@ -276,6 +305,7 @@ pub async fn classify_pack(app: AppHandle, state: S<'_>) -> Result<PlanClassific
         plan.clone(),
         &ev,
         &parsed,
+        informative,
         offline_final,
         offline_final,
     );
@@ -311,18 +341,28 @@ pub async fn classify_pack(app: AppHandle, state: S<'_>) -> Result<PlanClassific
                 g.env_evidence = ev.clone();
                 let parsed = last_parsed_of(&g);
                 let plan = parsed.as_ref().map(|p| {
-                    detector::build_plan(p, g.settings.strip_client_only, &ev)
+                    detector::build_plan(p, g.settings.strip_client_only, &ev, &g.env_code)
                 });
                 (plan, file_name.clone(), parsed)
             };
             if let (Some(plan), Some(parsed)) = (plan, parsed) {
-                emit_classified(&app, &file, plan, &ev, &parsed, true, complete);
+                emit_classified(
+                    &app,
+                    &file,
+                    plan,
+                    &ev,
+                    &parsed,
+                    informative,
+                    true,
+                    complete,
+                );
             }
         });
     }
     Ok(PlanClassification {
         plan,
         online_pending: !offline_final,
+        pack_env_untrusted: !informative,
     })
 }
 
@@ -333,16 +373,16 @@ fn emit_classified(
     plan: Vec<PlanMod>,
     ev: &env::EvidenceMap,
     parsed: &ParsedPack,
+    informative: bool,
     done: bool,
     complete: bool,
 ) {
-    // 无证据 = 既没查到端声明、也没落进名称兜底的行；按包内条目对齐
+    // 无证据 = 既没可信的整合包声明、没有 jar/平台证据、也没落进名称兜底的行
     let unresolved = parsed
         .mod_files
         .iter()
         .filter(|f| {
-            !(f.env_server.is_some()
-                || f.env_client.is_some()
+            !(detector::env_declared(f, informative)
                 || ev.contains_key(&f.path)
                 || detector::name_heuristic_hit(&f.file_name))
         })
@@ -355,6 +395,7 @@ fn emit_classified(
             unresolved,
             done,
             complete,
+            pack_env_untrusted: !informative,
         },
     );
 }

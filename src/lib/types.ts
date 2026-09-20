@@ -82,6 +82,14 @@ export interface PlanMod {
     srcPath?: string;
     /** 本行处置的证据来源；unknown = 没判定出来（默认保留） */
     envSource?: EnvSource;
+    /** 更高可信层与整合包 files[].env 结论相反：处置按高可信层走，这里只作标注 */
+    envConflict?: boolean;
+    /**
+     * jar 字节码结构提示（不是证据层级，只影响「要不要靠文件名猜」）：
+     * serverCode = jar 内确有服务端注册，名称关键字层被按住没删它；
+     * clientOnlyShape = 只订阅客户端注册、形状像纯客户端（仅提示，处置不变）
+     */
+    bytecodeHint?: "serverCode" | "clientOnlyShape";
     /** 客户端支持度；缺省 = 无证据 */
     clientSide?: SideFlag;
     /** 服务端支持度；与 clientSide 一起给出「客户端必需 / 服务端可选」这一直白证据 */
@@ -395,6 +403,8 @@ export interface PlanClassified {
     done: boolean;
     /** 在线层是否全部成功（有请求失败 = false，前端提示可重试） */
     complete: boolean;
+    /** 整包 files[].env 无区分度（打包工具刷成全表 required）→ 该层已作废，结论来自 jar 与平台 */
+    packEnvUntrusted?: boolean;
 }
 
 /** classify_pack 的同步返回：离线层结论 + 在线层还会不会再推一次事件 */
@@ -402,6 +412,8 @@ export interface PlanClassification {
     plan: PlanMod[];
     /** true = 联网反查已在后台起跑，最终结论走 plan://classified */
     onlinePending: boolean;
+    /** 同 PlanClassified.packEnvUntrusted */
+    packEnvUntrusted?: boolean;
 }
 
 /** 流水线进度事件载荷（Rust app.emit("conversion://progress", payload)） */

@@ -59,7 +59,7 @@ export function loaderLabel(loader: LoaderKind): string {
 /** 端判定依据的直白说法：Convert 卡行与「查看全部」弹窗共用同一口径，别两处各写一份 */
 export function evidenceLabel(source: EnvSource = "unknown"): string {
     return {
-        mrpack: "作者声明",
+        mrpack: "整合包声明",
         jarMetadata: "jar 自证",
         modrinthHash: "平台构建",
         modrinthProject: "平台项目",

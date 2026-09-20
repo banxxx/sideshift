@@ -54,6 +54,8 @@ pub struct Inner {
     pub env_evidence: env::EvidenceMap,
     /// env_evidence 归属的包名（换包即作废）
     pub env_evidence_file: Option<String>,
+    /// 最近一次离线扫描的字节码结构事实（路径 → 事实）；与 env_evidence 同期写、同包作废
+    pub env_code: env::CodeMap,
 }
 
 pub struct AppState {

@@ -86,7 +86,11 @@ function stripReason(m: PlanMod): string {
               : m.clientSide === "required"
                 ? "仅声明客户端必需"
                 : "客户端专属";
-    return `剔除原因：${why} · 依据：${evidenceLabel(m.envSource)}${m.needsReview ? " · 待人工确认" : ""}`;
+    return (
+        `剔除原因：${why} · 依据：${evidenceLabel(m.envSource)}` +
+        `${m.envConflict ? " · 与整合包声明不一致" : ""}` +
+        `${m.needsReview ? " · 待人工确认" : ""}`
+    );
 }
 
 /** 保留行的原因：没有端证据时必须说「无依据」，不能替模组宣称服务端可用 */
@@ -101,8 +105,14 @@ function keepReason(m: PlanMod): string {
                 ? "服务端不支持，本行未自动剔除"
                 : null;
     return why
-        ? `保留原因：${why} · 依据：${evidenceLabel(m.envSource)}`
-        : "无端证据 · 默认保留，可手动剔除";
+        ? `保留原因：${why} · 依据：${evidenceLabel(m.envSource)}${m.envConflict ? " · 与整合包声明不一致" : ""}`
+        : `无端证据 · 默认保留，可手动剔除${
+              m.bytecodeHint === "serverCode"
+                  ? " · jar 内确有服务端注册，未按文件名剔除"
+                  : m.bytecodeHint === "clientOnlyShape"
+                    ? " · 字节码形状像纯客户端（未自动剔除）"
+                    : ""
+          }`;
 }
 
 /** 处于该清单处置下的行说明（一律由证据推导，无证据就承认无证据） */
