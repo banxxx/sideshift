@@ -13,6 +13,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import type {
+    AddedModSide,
     AppSettings,
     ConversionOptions,
     ConversionReport,
@@ -165,6 +166,14 @@ export function onClassified(
 }
 
 /* ---------------- 在线添加 ---------------- */
+
+/** 本地 jar 添加取证（Rust: inspect_added_mod(path)）：阶梯同整包分类，索引命中即零请求 */
+export async function inspectAddedMod(path: string): Promise<AddedModSide> {
+    if (!isTauri) return mock.mockInspectAdded(path);
+    return invokeOrMock("inspect_added_mod", { path }, () =>
+        mock.mockInspectAdded(path)
+    );
+}
 
 /** 搜索模组（Rust: search_mods(query) -> ModSearchPage） */
 export async function searchMods(query: ModSearchQuery): Promise<ModSearchPage> {

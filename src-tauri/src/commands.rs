@@ -233,7 +233,6 @@ pub async fn classify_pack(app: AppHandle, state: S<'_>) -> Result<PlanClassific
                 return Ok(PlanClassification {
                     plan: Vec::new(),
                     online_pending: false,
-                    pack_env_untrusted: false,
                 })
             }
         }
@@ -303,9 +302,6 @@ pub async fn classify_pack(app: AppHandle, state: S<'_>) -> Result<PlanClassific
         &app,
         &file_name,
         plan.clone(),
-        &ev,
-        &parsed,
-        informative,
         offline_final,
         offline_final,
     );
@@ -332,37 +328,26 @@ pub async fn classify_pack(app: AppHandle, state: S<'_>) -> Result<PlanClassific
                 &mut ev,
             )
             .await;
-            let (plan, file, parsed) = {
+            let (plan, file) = {
                 let mut g = lock(&state);
                 // 反查期间用户可能换了包：不是同一个包就不落库、不推事件
                 if g.env_evidence_file.as_deref() != Some(file_name.as_str()) {
                     return;
                 }
                 g.env_evidence = ev.clone();
-                let parsed = last_parsed_of(&g);
-                let plan = parsed.as_ref().map(|p| {
-                    detector::build_plan(p, g.settings.strip_client_only, &ev, &g.env_code)
+                let plan = last_parsed_of(&g).map(|p| {
+                    detector::build_plan(&p, g.settings.strip_client_only, &ev, &g.env_code)
                 });
-                (plan, file_name.clone(), parsed)
+                (plan, file_name.clone())
             };
-            if let (Some(plan), Some(parsed)) = (plan, parsed) {
-                emit_classified(
-                    &app,
-                    &file,
-                    plan,
-                    &ev,
-                    &parsed,
-                    informative,
-                    true,
-                    complete,
-                );
+            if let Some(plan) = plan {
+                emit_classified(&app, &file, plan, true, complete);
             }
         });
     }
     Ok(PlanClassification {
         plan,
         online_pending: !offline_final,
-        pack_env_untrusted: !informative,
     })
 }
 
@@ -371,33 +356,74 @@ fn emit_classified(
     app: &AppHandle,
     file_name: &str,
     plan: Vec<PlanMod>,
-    ev: &env::EvidenceMap,
-    parsed: &ParsedPack,
-    informative: bool,
     done: bool,
     complete: bool,
 ) {
-    // 无证据 = 既没可信的整合包声明、没有 jar/平台证据、也没落进名称兜底的行
-    let unresolved = parsed
-        .mod_files
-        .iter()
-        .filter(|f| {
-            !(detector::env_declared(f, informative)
-                || ev.contains_key(&f.path)
-                || detector::name_heuristic_hit(&f.file_name))
-        })
-        .count() as u32;
     let _ = app.emit(
         task_engine::EVENT_CLASSIFIED,
         PlanClassified {
             file_name: file_name.to_string(),
             plan,
-            unresolved,
             done,
             complete,
-            pack_env_untrusted: !informative,
         },
     );
+}
+
+/// 「从本地添加」的单个 jar 取证：阶梯与整包分类完全一致（jar 自证 → 本地索引 → 联网反查），
+/// 所以同一份 jar 第二次添加、或它本来就在包里时都是零请求。探测走 spawn_blocking：
+/// 读文件 + 可能解几千个 class，不能占住 async 运行时
+#[tauri::command]
+pub async fn inspect_added_mod(state: S<'_>, path: String) -> Result<AddedModSide, String> {
+    let (cache_dir, online, concurrency) = {
+        let inner = lock(&state);
+        (
+            PathBuf::from(&inner.settings.cache_dir),
+            inner.settings.auto_classify_online,
+            inner.settings.concurrency.max(1) as usize,
+        )
+    };
+    let p = PathBuf::from(&path);
+    let file_name = p
+        .file_name()
+        .and_then(|s| s.to_str())
+        .unwrap_or_default()
+        .to_string();
+    let size_bytes = std::fs::metadata(&p).ok().map(|m| m.len());
+    let probe = tauri::async_runtime::spawn_blocking({
+        let p = p.clone();
+        move || env::probe_local_jar(&p)
+    })
+    .await
+    .unwrap_or_default();
+    let ev = env::resolve_local_jar(
+        &Downloader::new(cache_dir.clone(), concurrency),
+        &cache_dir,
+        &file_name,
+        &probe,
+        online,
+    )
+    .await;
+    let (client_side, server_side, env_source) = match ev {
+        Some(e) => (e.client, e.server, e.source),
+        None => (None, None, EnvSource::Unknown),
+    };
+    Ok(AddedModSide {
+        client_side,
+        server_side,
+        env_source,
+        // 提示口径同 detector：服务端确有注册优先，否则才看纯客户端形状
+        bytecode_hint: if probe.code.server_code {
+            Some(BytecodeHint::ServerCode)
+        } else if probe.code.client_only_shape {
+            Some(BytecodeHint::ClientOnlyShape)
+        } else {
+            None
+        },
+        size_bytes,
+        mod_id: probe.mod_id,
+        title: probe.title,
+    })
 }
 
 #[tauri::command]

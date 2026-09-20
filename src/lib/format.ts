@@ -4,7 +4,7 @@
  * 这些格式化在 Home/Task/Tasks/Report 多页复用（设计稿中统一为 mono 风格），
  * 抽到公共模块避免各页各写一份导致文案格式漂移。
  */
-import type { EnvSource, LoaderKind } from "./types";
+import type { EnvSource, LoaderKind, PlanMod, SideFlag } from "./types";
 
 /** 84.0 MB / 512 MB / 1.2 GB —— ≥1024 才进阶单位，保留一位小数 */
 export function formatSize(bytes: number): string {
@@ -66,6 +66,41 @@ export function evidenceLabel(source: EnvSource = "unknown"): string {
         nameHeuristic: "名称推断",
         unknown: "无依据",
     }[source];
+}
+
+/**
+ * 「需人工确认」的行置顶，其余保持原顺序（sort 稳定）：
+ * 模组方案卡的预览行与「全部清单」弹窗共用同一口径，两处看到的第一批行必须一致。
+ */
+export function reviewFirst<T extends { needsReview: boolean }>(rows: T[]): T[] {
+    return rows.slice().sort((a, b) => Number(b.needsReview) - Number(a.needsReview));
+}
+
+/** 端标签四态：客户端专属 / 服务端专属 / 两端都要 / 判不出来 */
+export type SideTag = "client" | "server" | "both" | "review";
+
+const SIDE_TAG_LABEL: Record<SideTag, string> = {
+    client: "客户端",
+    server: "服务端",
+    both: "两端",
+    review: "需人工确认",
+};
+
+/**
+ * 两侧支持度 → 端标签。保留行不能再一概写「服务端」：绝大多数是两端都要，
+ * 写成服务端等于谎报它是服务端专属。两个轴都没证据才是「需人工确认」。
+ */
+export function sideTagOf(m: Pick<PlanMod, "clientSide" | "serverSide">): SideTag {
+    const on = (f?: SideFlag) => f === "required" || f === "optional";
+    if (on(m.clientSide) && on(m.serverSide)) return "both";
+    if (on(m.serverSide)) return "server";
+    if (on(m.clientSide)) return "client";
+    return "review";
+}
+
+/** 端标签文案（三张清单与卡内共用，别各处再抄一份字符串） */
+export function sideTagLabel(tag: SideTag): string {
+    return SIDE_TAG_LABEL[tag];
 }
 
 /** 由整合包文件名推导服务端输出名：xxx.mrpack → xxx-server.zip */

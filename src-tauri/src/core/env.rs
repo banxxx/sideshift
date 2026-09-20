@@ -67,50 +67,13 @@ pub fn put(map: &mut EvidenceMap, path: &str, ev: Evidence) {
     map.insert(path.to_string(), ev);
 }
 
-/// Modrinth `environment` 枚举 → 两侧支持度（project 与 version 同枚举，实测六值）
-fn sides_from_environment(env: &str) -> Option<(SideFlag, SideFlag)> {
-    use SideFlag::{Optional, Required, Unsupported};
-    let norm = env.trim().to_lowercase().replace('-', "_");
-    Some(match norm.as_str() {
-        "client_only" => (Required, Unsupported),
-        "client_only_server_optional" => (Required, Optional),
-        "server_only" => (Unsupported, Required),
-        "server_only_client_optional" => (Optional, Required),
-        "client_and_server" => (Required, Required),
-        "client_or_server" | "client_or_server_prefers_both" => (Optional, Optional),
-        _ => return None,
-    })
-}
-
-fn side_flag(v: &str) -> Option<SideFlag> {
-    Some(match v.trim().to_lowercase().as_str() {
-        "required" => SideFlag::Required,
-        "optional" => SideFlag::Optional,
-        "unsupported" => SideFlag::Unsupported,
-        _ => return None,
-    })
-}
-
-/// Modrinth 端信息 → 证据：优先精确的 client_side/server_side，回落 environment 枚举
+/// Modrinth 端信息 → 证据（两侧映射见 `ModrinthEnv::sides`，在线添加的端标签共用）
 fn evidence_from_modrinth(m: &ModrinthEnv, source: EnvSource) -> Option<Evidence> {
-    if let (Some(c), Some(s)) = (
-        m.client_side.as_deref().and_then(side_flag),
-        m.server_side.as_deref().and_then(side_flag),
-    ) {
-        return Some(Evidence {
-            client: Some(c),
-            server: Some(s),
-            source,
-        });
-    }
-    m.environment
-        .as_deref()
-        .and_then(sides_from_environment)
-        .map(|(c, s)| Evidence {
-            client: Some(c),
-            server: Some(s),
-            source,
-        })
+    m.sides().map(|(client, server)| Evidence {
+        client: Some(client),
+        server: Some(server),
+        source,
+    })
 }
 
 /* ---------------- 第 2 层：包内 jar 元数据（离线） ---------------- */
@@ -267,6 +230,24 @@ fn sha1_hex(bytes: &[u8]) -> String {
     let mut h = Sha1::new();
     h.update(bytes);
     hex(&h.finalize())
+}
+
+/// 用户「从本地添加」的单个 jar：整文件当 zip 解，取证口径与包内条目完全一致
+/// （自证端 + 自报身份 + 字节 sha1 + 字节码提示）。超大 jar 只算哈希，不整包解元数据。
+pub fn probe_local_jar(path: &Path) -> JarProbe {
+    let mut probe = JarProbe::default();
+    let Ok(bytes) = std::fs::read(path) else {
+        return probe;
+    };
+    probe.sha1 = Some(sha1_hex(&bytes));
+    if bytes.len() as u64 <= JAR_MAX_UNCOMPRESSED {
+        read_meta(&bytes, &mut probe);
+        // 同包内条目：加载器元数据已自证端就不必再解 class
+        if probe.env.is_none() {
+            probe.code = read_code_facts(&bytes);
+        }
+    }
+    probe
 }
 
 fn hex(bytes: &[u8]) -> String {
@@ -758,6 +739,39 @@ pub async fn resolve_online(
     ok
 }
 
+/// 单个本地 jar 的端取证阶梯（用户手动添加的行走这条路），口径与整包分类完全一致：
+/// jar 自证 → 本地索引（离线即答）→ 联网按 sha1/项目/显示名反查并落盘。
+/// 返回 `None` = 三层都没结论（前端标「需人工确认」，绝不猜）
+pub async fn resolve_local_jar(
+    dl: &Downloader,
+    cache_dir: &Path,
+    file_name: &str,
+    probe: &JarProbe,
+    online: bool,
+) -> Option<Evidence> {
+    let key = file_name.to_string();
+    let mut out: EvidenceMap = HashMap::new();
+    if let Some(ev) = probe.env {
+        put(&mut out, &key, ev);
+    }
+    let mut targets = vec![Target {
+        path: key.clone(),
+        sha1: probe.sha1.clone(),
+        project_id: None,
+        slugs: slugs_from_file_name(file_name),
+        title: None,
+    }];
+    let mut probes = HashMap::new();
+    probes.insert(key.clone(), probe.clone());
+    apply_probes(&probes, &mut targets);
+    let mut index = EnvIndex::load(cache_dir);
+    let pending = apply_index(&index, &targets, &mut out);
+    if online && !pending.is_empty() {
+        resolve_online(dl, &mut index, cache_dir, &targets, &pending, &mut out).await;
+    }
+    out.get(&key).copied()
+}
+
 /// 结论挂在哪些键下：返回项目的 slug/id + 本次查询用的键，下次离线即答
 fn resolved_key(m: &ModrinthEnv, queried: &str) -> Vec<String> {
     let mut keys: Vec<String> = [m.slug.as_deref(), Some(queried)]
@@ -955,6 +969,63 @@ displayName = 'GeckoLib'
         // 注册段存在但空数组不算注册；两段都没有 → 无证据（宁可留不剔）
         assert_eq!(entrypoint_sides(&parse(r#"{"entrypoints":{"client":[]}}"#)), None);
         assert_eq!(entrypoint_sides(&parse(r#"{"id":"x"}"#)), None);
+    }
+
+    #[test]
+    fn probe_local_jar_reads_a_standalone_file_the_same_way() {
+        // 用户「从本地添加」的 jar 不在任何包里：同一个探测口径要能直接吃单个文件
+        let jar = zip_bytes(&[(
+            "fabric.mod.json",
+            br#"{"id":"ksyxis","name":"Ksyxis","environment":"server"}"#,
+        )]);
+        let dir = std::env::temp_dir().join(format!(
+            "sideshift-env-local-{}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("ksyxis-1.2.jar");
+        std::fs::write(&path, &jar).unwrap();
+
+        let p = probe_local_jar(&path);
+        assert_eq!(p.sha1.as_deref(), Some(sha1_hex(&jar).as_str()));
+        assert_eq!(p.mod_id.as_deref(), Some("ksyxis"));
+        let ev = p.env.expect("fabric environment=server 应自证");
+        assert_eq!(ev.client, Some(SideFlag::Unsupported));
+        assert_eq!(ev.server, Some(SideFlag::Required));
+        assert_eq!(ev.source, EnvSource::JarMetadata);
+
+        // 读不到的文件不该把命令层炸掉：静默出空探测，前端落「需人工确认」
+        assert_eq!(
+            probe_local_jar(&dir.join("missing.jar")).sha1,
+            None
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn local_jar_without_any_side_proof_stays_undecided_offline() {
+        // Forge 的 mods.toml 没有端字段（实测）：离线三层全空时返回 None，
+        // 由前端标「需人工确认」——绝不拿文件名猜一个新添加的模组
+        let jar = zip_bytes(&[(
+            "META-INF/mods.toml",
+            br#"modId = "obscure-lib"
+displayName = "Obscure Lib"
+"#,
+        )]);
+        let dir = std::env::temp_dir().join(format!(
+            "sideshift-env-unknown-{}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("obscure-lib-1.0.jar");
+        std::fs::write(&path, &jar).unwrap();
+
+        let dl = Downloader::new(dir.clone(), 1);
+        let ev =
+            resolve_local_jar(&dl, &dir, "obscure-lib-1.0.jar", &probe_local_jar(&path), false)
+                .await;
+        assert!(ev.is_none(), "离线无证据时必须留空，不能编一个来源");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

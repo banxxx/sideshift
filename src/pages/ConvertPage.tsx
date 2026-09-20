@@ -15,11 +15,12 @@ import { AnimatePresence, motion, type Variants } from "motion/react";
 import * as api from "@/lib/api";
 import { useNavigation } from "@/lib/navigation";
 import { notify } from "@/lib/notify";
-import { evidenceLabel, formatSize, loaderLabel, outputNameOf, truncateMiddle } from "@/lib/format";
+import { formatSize, loaderLabel, outputNameOf, reviewFirst, sideTagOf, truncateMiddle } from "@/lib/format";
 import type {
     AppSettings,
     ConversionOptions,
     DownloadEstimate,
+    EnvSource,
     ModDisposition,
     ModSearchResult,
     ModVersionEntry,
@@ -48,7 +49,7 @@ import {
     ToneChip,
     type SelectOption,
 } from "@/components/design/ui";
-import { DirPickerModal, OnlineAddModal, PlanListModal, type ListFocus } from "@/components/features/convert-modals";
+import { DirPickerModal, OnlineAddModal, PlanListModal, SideChip, type ListFocus } from "@/components/features/convert-modals";
 import { cn } from "@/lib/utils";
 
 /** 服务端推荐保留目录：包树顶层探测到即预勾选（小写比对） */
@@ -127,8 +128,6 @@ export function ConvertPage() {
     const [classifying, setClassifying] = useState(false);
     /** 「清空我的修改」两段式确认（弹窗纪律：不用遮罩/确认框，第二次点击才执行） */
     const [confirmClear, setConfirmClear] = useState(false);
-    /** 整包 files[].env 无区分度（打包工具刷成全表 required）→ 该层已被作废 */
-    const [packEnvUntrusted, setPackEnvUntrusted] = useState(false);
 
     /** 自动分类主入口：进页默认执行，「重新自动分类」手动再跑一次。
      *  手动处置存在 overrides，方案整体替换也不会覆盖用户改动。
@@ -138,7 +137,6 @@ export function ConvertPage() {
         try {
             const res = await api.classifyPack();
             setPlan(res.plan);
-            setPackEnvUntrusted(res.packEnvUntrusted ?? false);
             setClassifying(res.onlinePending);
             if (manual) {
                 const remove = res.plan.filter((m) => m.disposition === "remove").length;
@@ -186,7 +184,6 @@ export function ConvertPage() {
                 if (!alive) return;
                 if (e.fileName && packName && e.fileName !== packName) return;
                 setPlan(e.plan);
-                setPackEnvUntrusted(e.packEnvUntrusted ?? false);
                 // 离线那次推送只是先给结论，本轮结束（done）才停「分类中」
                 if (!e.done) return;
                 setClassifying(false);
@@ -237,14 +234,18 @@ export function ConvertPage() {
             // add = 生效新增数（停用不计）；addTotal = 清单行数（弹窗「查看全部」口径）
             add: activeMods.filter((m) => m.disposition === "add").length,
             addTotal: mods.filter((m) => m.disposition === "add").length,
+            // 新增行里的客户端专属项：只提示不改判（用户显式添加的，删除动作留给他自己）
+            addClientOnly: activeMods.filter(
+                (m) => m.disposition === "add" && sideTagOf(m) === "client"
+            ).length,
         }),
         [activeMods, mods]
     );
 
-    /** 无任何端证据的行：默认保留（多留不炸服、误删才会），只在卡底给一句汇总，不逐行标噪音 */
-    const unresolved = useMemo(
-        () => plan.filter((m) => (m.envSource ?? "unknown") === "unknown").length,
-        [plan]
+    /** 判不出两端、被归进剔除清单等人工确认的行（卡底一句汇总，不逐行写长文） */
+    const pendingReview = useMemo(
+        () => mods.filter((m) => m.needsReview && m.disposition === "remove").length,
+        [mods]
     );
 
     /** 本地兜底聚合（后端答不上来时展示）：联网行按源 fileSize 求和 */
@@ -404,10 +405,36 @@ export function ConvertPage() {
             return next;
         });
         setTab("add");
+        // 端取证异步回填：行先落地（选完立刻看得见），阶梯跑完再补端标签与真实体积。
+        // 行若在这期间被删掉，下面的 map 匹配不上即自然丢弃
+        void api.inspectAddedMod(path).then((side) =>
+            setExtras((e) =>
+                e.map((m) =>
+                    m.id === id
+                        ? {
+                              ...m,
+                              clientSide: side.clientSide,
+                              serverSide: side.serverSide,
+                              envSource: side.envSource,
+                              bytecodeHint: side.bytecodeHint,
+                              sizeBytes: side.sizeBytes ?? m.sizeBytes,
+                          }
+                        : m
+                )
+            )
+        );
     };
 
     /** 在线添加：选中某个构建版本后回写新增列表；同模组再次添加 = 就地换版本（mods/ 不允许双版本并存） */
     const addOnline = (mod: ModSearchResult, version: ModVersionEntry) => {
+        // 端标签跟着用户所选的那一份构建走：构建级 environment 精确到文件，
+        // 项目级 client_side/server_side 只在构建没给时兜底（依据文案也随之换口径）
+        const buildSides = version.clientSide || version.serverSide;
+        const sides = {
+            clientSide: buildSides ? version.clientSide : mod.clientSide,
+            serverSide: buildSides ? version.serverSide : mod.serverSide,
+            envSource: (buildSides ? "modrinthHash" : "modrinthProject") as EnvSource,
+        };
         // 钉住用户此刻所选构建：构建时按此下载，版本与所选严格一致
         const row: PlanMod = {
             id: mod.id,
@@ -420,6 +447,7 @@ export function ConvertPage() {
             autoSupplement: false,
             sizeBytes: version.sizeBytes,
             needsDownload: true,
+            ...sides,
             pinned: {
                 url: version.url,
                 sha1: version.sha1,
@@ -481,7 +509,8 @@ export function ConvertPage() {
         );
     }
 
-    const rows = mods.filter((m) => m.disposition === tab).slice(0, PREVIEW_ROWS);
+    // 预览行：待人工确认的行永远排在最前（与「全部清单」弹窗同一口径）
+    const rows = reviewFirst(mods.filter((m) => m.disposition === tab)).slice(0, PREVIEW_ROWS);
     const loader = loaderLabel(manifest.loader);
     const patch = (p: Partial<ConversionOptions>) => setOptions((o) => (o ? { ...o, ...p } : o));
 
@@ -674,16 +703,11 @@ export function ConvertPage() {
                                                     {tab === "remove" ? "剔除" : "保留"}清单
                                                 </LinkBtn>
                                                 {/* 自动分类出口：进页已默认跑过，这里只给重跑与回退手动改动的入口；
-                                                    无证据行数以一行汇总提示，不逐行标「待确认」 */}
+                                                    判不出两端的行已归进剔除清单，这里给一句汇总 */}
                                                 <div className="flex min-w-0 items-center gap-2.5">
-                                                    {packEnvUntrusted && (
+                                                    {pendingReview > 0 && (
                                                         <span className="truncate text-[10px] leading-[14px] text-text-3">
-                                                            打包者声明全表同值 · 本包按 jar 与平台证据判定
-                                                        </span>
-                                                    )}
-                                                    {unresolved > 0 && (
-                                                        <span className="truncate text-[10px] leading-[14px] text-text-3">
-                                                            {unresolved} 项无依据 · 默认保留
+                                                            {pendingReview} 项无法判定 · 已放入剔除清单待确认
                                                         </span>
                                                     )}
                                                     {classifying ? (
@@ -729,11 +753,19 @@ export function ConvertPage() {
                                         )}
                                         {tab === "add" && (
                                             <>
-                                                {counts.addTotal > 0 && (
-                                                    <LinkBtn chevron onClick={() => setListFocus("add")}>
-                                                        查看全部 {counts.addTotal} 项新增清单
-                                                    </LinkBtn>
-                                                )}
+                                                <div className="flex min-w-0 items-center gap-2.5">
+                                                    {counts.addTotal > 0 && (
+                                                        <LinkBtn chevron onClick={() => setListFocus("add")}>
+                                                            查看全部 {counts.addTotal} 项新增清单
+                                                        </LinkBtn>
+                                                    )}
+                                                    {/* 误添加防线：只说清哪几行是客户端专属，改不改由用户决定 */}
+                                                    {counts.addClientOnly > 0 && (
+                                                        <span className="truncate text-[10px] leading-[14px] text-text-3">
+                                                            {counts.addClientOnly} 项判为客户端模组 · 服务端包通常不需要
+                                                        </span>
+                                                    )}
+                                                </div>
                                                 {/* 两枚 h32 添加按钮：有清单时居右，空方案时整行居中 */}
                                                 <div
                                                     className={cn(
@@ -1084,13 +1116,14 @@ function PlanModRow({
     );
 }
 
-/** 徽章优先级：自动补齐 > 需人工确认 > 本地 > 客户端专属（附判定依据，剔除是破坏性操作，必须说清凭什么） */
+/** 卡内行右侧徽章只放「这行有什么特别的」：
+ *  剔除/保留行 = 自动补齐 > 需人工确认 > 本地，端标签交给「全部清单」弹窗，卡内不重复占宽；
+ *  新增行 = 用户自己塞进来的（误下载、本地乱拿都在这一步），所以当场就要看到它是哪一端 */
 function badgeFor(mod: PlanMod, local: boolean): React.ReactNode {
     if (mod.autoSupplement) return <TagChip>自动补齐</TagChip>;
     if (mod.needsReview) return <ToneChip tone="gold" size="sm">需人工确认</ToneChip>;
+    if (mod.disposition === "add") return <SideChip sides={mod} warnClient />;
     if (local) return <TagChip>本地</TagChip>;
-    if (mod.clientOnly)
-        return <TagChip>{`客户端专属 · ${evidenceLabel(mod.envSource)}`}</TagChip>;
     return undefined;
 }
 

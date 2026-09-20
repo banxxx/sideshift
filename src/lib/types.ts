@@ -328,6 +328,9 @@ export interface ModSearchResult {
     compatible: boolean;
     /** 是否已在新增列表中 */
     alreadyAdded: boolean;
+    /** 项目级两侧支持度（Rust 由 Modrinth client_side/server_side 换算）：添加前端标签用 */
+    clientSide?: SideFlag;
+    serverSide?: SideFlag;
 }
 
 /** 某模组的一个可下载构建版本（对应 Mod Detail 版本行，整行点击下载） */
@@ -345,6 +348,23 @@ export interface ModVersionEntry {
     sha1?: string;
     /** 服务端下载文件名 */
     fileName: string;
+    /** 构建级 environment 换算出的两侧支持度：这一份构建要不要进服务端包 */
+    clientSide?: SideFlag;
+    serverSide?: SideFlag;
+}
+
+/** 「从本地添加」单个 jar 的取证返回（Rust inspect_added_mod） */
+export interface AddedModSide {
+    clientSide?: SideFlag;
+    serverSide?: SideFlag;
+    /** 结论出自哪一层；unknown = 三层都没答上（前端标需人工确认） */
+    envSource: EnvSource;
+    bytecodeHint?: "serverCode" | "clientOnlyShape";
+    /** 实际字节数（补上本地添加行原本缺失的体积） */
+    sizeBytes?: number;
+    /** jar 内自报 id / 显示名：文件名被改成中文时这才是可读名字 */
+    modId?: string;
+    title?: string;
 }
 
 /** 在线搜索结果分页（对应 Online Add 分页页脚） */
@@ -397,14 +417,10 @@ export interface PlanClassified {
     fileName: string;
     /** 带全部证据层的完整方案（前端只套用用户未手动改过的行） */
     plan: PlanMod[];
-    /** 仍无任何端证据的行数 */
-    unresolved: number;
     /** false = 本轮还没跑完（离线那次推送），true 才是最后一次事件 */
     done: boolean;
     /** 在线层是否全部成功（有请求失败 = false，前端提示可重试） */
     complete: boolean;
-    /** 整包 files[].env 无区分度（打包工具刷成全表 required）→ 该层已作废，结论来自 jar 与平台 */
-    packEnvUntrusted?: boolean;
 }
 
 /** classify_pack 的同步返回：离线层结论 + 在线层还会不会再推一次事件 */
@@ -412,8 +428,6 @@ export interface PlanClassification {
     plan: PlanMod[];
     /** true = 联网反查已在后台起跑，最终结论走 plan://classified */
     onlinePending: boolean;
-    /** 同 PlanClassified.packEnvUntrusted */
-    packEnvUntrusted?: boolean;
 }
 
 /** 流水线进度事件载荷（Rust app.emit("conversion://progress", payload)） */

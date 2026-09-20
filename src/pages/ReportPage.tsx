@@ -184,7 +184,7 @@ export function ReportPage() {
                             <div className="flex w-full items-center gap-2.5">
                                 <span className="size-2 shrink-0 rounded-full bg-gold" />
                                 <span className="min-w-0 flex-1 truncate text-[12px] leading-[18px] font-normal text-text-2">
-                                    待人工确认：{report.pendingReview.join("、")} 客户端/服务端两用，已默认保留
+                                    待人工确认：{report.pendingReview.join("、")} 未判定出两端，请核对服务端是否需要
                                 </span>
                                 <TagChip className="py-0.5 text-gold">
                                     {report.pendingReview.length} 项

@@ -27,6 +27,7 @@ pub fn run() {
             commands::list_pack_dirs,
             commands::get_plan,
             commands::classify_pack,
+            commands::inspect_added_mod,
             commands::list_excluded_mods,
             commands::search_mods,
             commands::list_mod_versions,

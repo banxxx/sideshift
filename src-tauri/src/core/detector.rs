@@ -48,7 +48,7 @@ enum Verdict {
     Strip,
     /// 服务端需要，或客户端非必需
     Keep,
-    /// 没有任何端证据：默认保留（多留一个模组不会炸服，误删才会）
+    /// 没有任何端证据：判不出两端（归入剔除分组等人工确认，见 build_plan 的 `pending`）
     NoEvidence,
 }
 
@@ -89,7 +89,8 @@ pub fn env_declared(f: &PackFile, informative: bool) -> bool {
 }
 
 /// 生成转换方案。
-/// - `strip_client_only=false`：只给证据、不自动剔除（全部保留），供「关掉自动」的场景
+/// - `strip_client_only=false`：只给证据、不自动剔除（全部保留），供「关掉自动」的场景；
+///   「判不出两端」的待人工确认分组同样归它管（手动模式不满屏标红）
 /// - `ev`：包内条目 → 端证据（jar 自证 / Modrinth 反查 / 本地索引），键为条目路径。
 ///   它与 mrpack env 一起进同一个可信度排序（jar > 构建 > 项目 > mrpack > 名称），
 ///   mrpack 层仅在整包声明有区分度时参与；两者裁决不一致的行标 `env_conflict`
@@ -137,6 +138,9 @@ pub fn build_plan(
             // 名称表是这台机器上唯一会「凭空删模组」的层。jar 里确有服务端注册时不让它删：
             // 前者是解出来的结构事实，后者只是文件名像不像
             let vetoed = chosen.is_none() && name_hit && facts.server_code;
+            // 「判不出来」= 证据阶梯全空且名称层也没给出结论。被 veto 的那行有 server_code
+            // 这条结构事实（服务端确有代码会跑），属于有依据的保留，不算进来
+            let undecidable = chosen.is_none() && !name_hit;
             let (client, server, source) = match chosen {
                 Some(e) => (e.client, e.server, e.source),
                 None => {
@@ -162,18 +166,23 @@ pub fn build_plan(
 
             let strip = verdict(client, server) == Verdict::Strip;
             let client_only = strip && strip_client_only;
+            // 判不出两端的行（上面每层都没答上、名称表也没猜中）：不悄悄留在服务端包里，
+            // 归进剔除分组并强制人工确认——要它的服主自己勾回来，比默认塞进包里安全。
+            // 例外：关键字表（Via* 那类）本身就是「有服务端价值、默认保留」的口径，不并进来；
+            // 自动剔除关掉时整条不生效（那是手动模式，不该满屏标待确认）。
+            let pending = undecidable && !needs_review && strip_client_only;
             PlanMod {
                 id,
                 name: title_from_id(&lower_file_stem(&f.file_name)),
                 version,
                 loader: Some(loader_label.clone()),
-                disposition: if client_only && !needs_review {
+                disposition: if (client_only && !needs_review) || pending {
                     ModDisposition::Remove
                 } else {
                     ModDisposition::Keep
                 },
                 client_only,
-                needs_review,
+                needs_review: needs_review || pending,
                 auto_supplement: false,
                 size_bytes: f.size_bytes,
                 // 只有「有 URL 可下且物理不在包内」才是真联网下载；
@@ -504,8 +513,10 @@ mod tests {
         assert_eq!(plan[0].disposition, ModDisposition::Remove);
         assert_eq!(plan[0].env_source, EnvSource::JarMetadata);
         assert!(!plan[0].env_conflict);
-        // jar 也没答上的行：落回无证据 → 保留且不标待确认
-        assert_eq!(plan[1].disposition, ModDisposition::Keep);
+        // jar 也没答上的行：落回「判不出两端」→ 进剔除分组等人工确认
+        assert_eq!(plan[1].disposition, ModDisposition::Remove);
+        assert!(plan[1].needs_review);
+        assert!(!plan[1].client_only, "没证据的行不该被说成客户端专属");
         assert_eq!(plan[1].env_source, EnvSource::Unknown);
     }
 
@@ -591,13 +602,15 @@ mod tests {
     }
 
     #[test]
-    fn no_evidence_keeps_row_without_review_flag() {
-        // 未判定 = 保留且不制造「待人工确认」噪音（多留模组不炸服，误删才会）
+    fn undecidable_row_is_flagged_for_review() {
+        // 「没证据」不再等于「静默保留」：标出来让人看一眼，分组落在剔除侧
         let parsed = pack(vec![file("some-obscure-lib-1.0.jar", (None, None))]);
         let plan = build_plan(&parsed, true, &EvidenceMap::new(), &CodeMap::new());
-        assert_eq!(plan[0].disposition, ModDisposition::Keep);
-        assert!(!plan[0].needs_review);
+        assert_eq!(plan[0].disposition, ModDisposition::Remove);
+        assert!(plan[0].needs_review);
         assert_eq!(plan[0].env_source, EnvSource::Unknown);
+        assert_eq!(plan[0].client_side, None);
+        assert_eq!(plan[0].server_side, None);
     }
 
     #[test]
@@ -635,13 +648,17 @@ mod tests {
             &facts("mods/continuity-3.0.jar", true, false),
         );
         assert_eq!(plan[0].disposition, ModDisposition::Keep);
+        // 有服务端结构事实 = 有依据的保留，不该跟「判不出来」混进待确认分组
+        assert!(!plan[0].needs_review);
         // 被按住的是「猜的」那层，所以来源仍是无证据，不能冒充有证据
         assert_eq!(plan[0].env_source, EnvSource::Unknown);
         assert_eq!(plan[0].bytecode_hint, Some(BytecodeHint::ServerCode));
     }
 
     #[test]
-    fn client_only_shape_only_hints_and_never_strips() {
+    fn client_only_shape_lands_in_review_not_as_a_client_only_strip() {
+        // 形状提示 + 判不出两端：行进的是「待人工确认」，不是「客户端专属」——
+        // 前者可以被勾回，后者对外宣称的是结论
         let parsed = pack(vec![file("some-obscure-lib-1.0.jar", (None, None))]);
         let plan = build_plan(
             &parsed,
@@ -649,9 +666,45 @@ mod tests {
             &EvidenceMap::new(),
             &facts("mods/some-obscure-lib-1.0.jar", false, true),
         );
-        assert_eq!(plan[0].disposition, ModDisposition::Keep);
+        assert_eq!(plan[0].disposition, ModDisposition::Remove);
+        assert!(plan[0].needs_review);
         assert!(!plan[0].client_only);
         assert_eq!(plan[0].bytecode_hint, Some(BytecodeHint::ClientOnlyShape));
+    }
+
+    #[test]
+    fn undecidable_rows_park_in_remove_for_review_not_silently_kept() {
+        // 判不出两端的行不悄悄留在服务端包里（用户 2026-09-21 拍板）：进剔除分组 + 标待确认
+        let parsed = pack(vec![
+            file("some-obscure-lib-1.0.jar", (None, None)),
+            file("sodium-0.5.13.jar", (None, None)),
+        ]);
+        let plan = build_plan(&parsed, true, &EvidenceMap::new(), &CodeMap::new());
+        assert_eq!(plan[0].disposition, ModDisposition::Remove);
+        assert!(plan[0].needs_review);
+        assert_eq!(plan[0].env_source, EnvSource::Unknown);
+        // 名称表猜出来的那行照旧按名称层走，不算「判不出」（也别改标待确认，会满屏噪音）
+        assert_eq!(plan[1].disposition, ModDisposition::Remove);
+        assert!(!plan[1].needs_review);
+        assert_eq!(plan[1].env_source, EnvSource::NameHeuristic);
+    }
+
+    #[test]
+    fn review_keyword_rows_stay_kept_even_without_evidence() {
+        // Via* 那类关键字表的口径是「有服务端价值、默认保留」，不被新规则一并卷进剔除分组
+        let parsed = pack(vec![file("viafabricplus-3.4.11.jar", (None, None))]);
+        let plan = build_plan(&parsed, true, &EvidenceMap::new(), &CodeMap::new());
+        assert_eq!(plan[0].disposition, ModDisposition::Keep);
+        assert!(plan[0].needs_review);
+    }
+
+    #[test]
+    fn auto_off_leaves_undecidable_rows_in_keep_without_review_noise() {
+        // 关掉自动剔除 = 手动模式：不逐行标待确认，分组也不动
+        let parsed = pack(vec![file("some-obscure-lib-1.0.jar", (None, None))]);
+        let plan = build_plan(&parsed, false, &EvidenceMap::new(), &CodeMap::new());
+        assert_eq!(plan[0].disposition, ModDisposition::Keep);
+        assert!(!plan[0].needs_review);
     }
 
     #[test]

@@ -146,16 +146,10 @@ pub struct PlanClassified {
     pub file_name: String,
     /// 带全部证据层的完整方案（前端只套用到用户未手动改过的行）
     pub plan: Vec<PlanMod>,
-    /// 仍无任何端证据的行数（前端据此提示「N 个模组未判定，已默认保留」）
-    pub unresolved: u32,
     /// false = 在线层还没跑完（离线那次推送用），true 才是本轮最后一次事件
     pub done: bool,
     /// false = 在线层有请求失败，结论可能不完整（前端提示可重跑）
     pub complete: bool,
-    /// 整包 `files[].env` 无区分度（第三方工具刷成全表 required）→ 该层已作废，
-    /// 本包结论来自 jar 自证与平台反查。前端要写明为什么没采信打包者的声明
-    #[serde(default)]
-    pub pack_env_untrusted: bool,
 }
 
 /// `classify_pack` 的同步返回：离线层结论 + 在线层还会不会再推一次事件。
@@ -165,9 +159,6 @@ pub struct PlanClassified {
 pub struct PlanClassification {
     pub plan: Vec<PlanMod>,
     pub online_pending: bool,
-    /// 见 `PlanClassified::pack_env_untrusted`
-    #[serde(default)]
-    pub pack_env_untrusted: bool,
 }
 
 /// 取件构成（阶段 3 计划确定后写入）：网络 / 包内 / 本地 / 缓存命中四类来源的诚实汇总。
@@ -463,6 +454,11 @@ pub struct ModSearchResult {
     pub source: ModSource,
     pub compatible: bool,
     pub already_added: bool,
+    /// 项目级两侧支持度（Modrinth `client_side`/`server_side`）：在线添加行的端标签
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub client_side: Option<SideFlag>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub server_side: Option<SideFlag>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -506,6 +502,34 @@ pub struct ModVersionEntry {
     pub sha1: Option<String>,
     /// 服务端下载文件名（与方案行展示版本对应）
     pub file_name: String,
+    /// 构建级 `environment` 换算出的两侧支持度：这个构建进服务端包要不要，添加前就能看到
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub client_side: Option<SideFlag>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub server_side: Option<SideFlag>,
+}
+
+/// 「从本地添加」单个 jar 的取证结果（在线/离线各层跑完后的两侧支持度）
+#[derive(Serialize, Deserialize, Clone, Debug, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct AddedModSide {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub client_side: Option<SideFlag>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub server_side: Option<SideFlag>,
+    pub env_source: EnvSource,
+    /// jar 字节码结构提示（同 `PlanMod::bytecode_hint` 口径）
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bytecode_hint: Option<BytecodeHint>,
+    /// 探测到的实际字节数（本地添加行补体积，摘要才不算空）
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub size_bytes: Option<u64>,
+    /// jar 内自报的模组 id（`fabric.mod.json:id` / `mods.toml:modId`）
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mod_id: Option<String>,
+    /// 自报显示名：文件名被改成中文时这才是可读名字
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]

@@ -3,6 +3,7 @@
  * Phase 2 Rust 侧实现真实 command 后，api.ts 门面自动切换，本文件仅供浏览器 dev 模式使用。
  */
 import type {
+    AddedModSide,
     AppSettings,
     ConversionOptions,
     ConversionReport,
@@ -15,6 +16,7 @@ import type {
     PackManifest,
     PlanClassification,
     PlanMod,
+    SideFlag,
     StartResult,
     TaskLogLine,
     VersionOption,
@@ -97,12 +99,11 @@ function buildKept(count: number): PlanMod[] {
         clientOnly: false,
         needsReview: false,
         autoSupplement: false,
-        // 每 6 行留 1 行「无证据」，演示未判定态（保留、不标待确认）
+        // 每 6 行留 1 行「无证据」，各演示一种字节码提示：serverCode 那行属于「名称层被 jar
+        // 事实按住」的有依据保留；clientOnlyShape 那行经 mockClassify 落进剔除分组标待确认
         envSource: (i % 6 === 5 ? "unknown" : "jarMetadata") as PlanMod["envSource"],
         clientSide: i % 6 === 5 ? undefined : ("required" as const),
         serverSide: i % 6 === 5 ? undefined : ("required" as const),
-        // 无证据行各演示一种字节码提示：文件名像客户端但 jar 里有服务端注册（按住没删），
-        // 以及形状像纯客户端（只提示、不剔）
         bytecodeHint:
             i % 6 === 5 ? (i % 12 === 5 ? "serverCode" : "clientOnlyShape") : undefined,
     }));
@@ -185,6 +186,11 @@ export async function mockClassify(plan: PlanMod[]): Promise<PlanClassification>
             s === "unsupported" ||
             (c === "required" && (s === "optional" || s === undefined));
         const source = m.envSource ?? "unknown";
+        // 判不出两端 → 进剔除分组等人工确认；但 jar 内有服务端注册的行（名称层被字节码
+        // 按住的那批）算有依据的保留，不落进待确认（与 detector 的 undecidable 同一条）
+        if (source === "unknown" && m.bytecodeHint !== "serverCode") {
+            return { ...m, disposition: "remove" as const, clientOnly: false, needsReview: true };
+        }
         return {
             ...m,
             disposition: strip && source !== "unknown" ? ("remove" as const) : ("keep" as const),
@@ -193,7 +199,7 @@ export async function mockClassify(plan: PlanMod[]): Promise<PlanClassification>
         };
     });
     // 浏览器预览没有联网层，一次到位
-    return { plan: rows, onlinePending: false, packEnvUntrusted: false };
+    return { plan: rows, onlinePending: false };
 }
 
 /** MC 版本下拉 */
@@ -218,16 +224,16 @@ export const mockJavaVersions: VersionOption[] = [
     { value: "17", label: "Java 17" },
 ];
 
-/** Online Add 搜索结果（四页数据，与设计稿行对齐） */
+/** Online Add 搜索结果（四页数据，与设计稿行对齐；两侧支持度按 Modrinth 实测值） */
 const searchPool = [
-    { id: "krypton", name: "Krypton", description: "轻量级协议层优化，显著降低服务端网络开销", author: "modmuss50", downloads: 12_040_000 },
-    { id: "c2me", name: "C2ME", description: "并发化区块生成与写入，提升跑图性能", author: "ishland", downloads: 3_820_000 },
-    { id: "ferritecore", name: "FerriteCore", description: "内存占用优化，适合大型整合包", author: "malte0612", downloads: 9_150_000 },
-    { id: "spark", name: "spark", description: "服务端性能分析器，火焰图与内存采样", author: "lucko", downloads: 15_600_000 },
-    { id: "ksyxis", name: "Ksyxis", description: "跳过原版世界生成的无效区域加载", author: "Dreeya", downloads: 2_100_000 },
-    { id: "moreculling", name: "More Culling", description: "更激进的实体与方块剔除，提高帧数", author: "fxmorin", downloads: 4_500_000 },
-    { id: "noisemax", name: "Noisemax", description: "生物群系与噪声生成优化", author: "thegggg", downloads: 980_000 },
-    { id: "voxelmap", name: "VoxelMap", description: "客户端小地图（服务端转换将剔除）", author: "wover", downloads: 6_700_000 },
+    { id: "krypton", name: "Krypton", description: "轻量级协议层优化，显著降低服务端网络开销", author: "modmuss50", downloads: 12_040_000, clientSide: "unsupported", serverSide: "required" },
+    { id: "c2me", name: "C2ME", description: "并发化区块生成与写入，提升跑图性能", author: "ishland", downloads: 3_820_000, clientSide: "optional", serverSide: "required" },
+    { id: "ferritecore", name: "FerriteCore", description: "内存占用优化，适合大型整合包", author: "malte0612", downloads: 9_150_000, clientSide: "required", serverSide: "required" },
+    { id: "spark", name: "spark", description: "服务端性能分析器，火焰图与内存采样", author: "lucko", downloads: 15_600_000, clientSide: "unsupported", serverSide: "required" },
+    { id: "ksyxis", name: "Ksyxis", description: "跳过原版世界生成的无效区域加载", author: "Dreeya", downloads: 2_100_000, clientSide: "unsupported", serverSide: "required" },
+    { id: "moreculling", name: "More Culling", description: "更激进的实体与方块剔除，提高帧数", author: "fxmorin", downloads: 4_500_000, clientSide: "required", serverSide: "unsupported" },
+    { id: "noisemax", name: "Noisemax", description: "生物群系与噪声生成优化", author: "thegggg", downloads: 980_000, clientSide: "required", serverSide: "optional" },
+    { id: "voxelmap", name: "VoxelMap", description: "客户端小地图（服务端转换将剔除）", author: "wover", downloads: 6_700_000, clientSide: "required", serverSide: "unsupported" },
 ];
 
 export function mockSearch(query: ModSearchQuery): ModSearchPage {
@@ -244,6 +250,8 @@ export function mockSearch(query: ModSearchQuery): ModSearchPage {
         pageSize,
         results: filtered.slice(start, start + pageSize).map((m) => ({
             ...m,
+            clientSide: m.clientSide as SideFlag,
+            serverSide: m.serverSide as SideFlag,
             iconUrl: undefined,
             source: query.source,
             compatible: true,
@@ -259,13 +267,32 @@ export const mockModCategories: string[] = [
     "storage", "technology", "transportation", "utility", "worldgen",
 ];
 
-/** Mod Detail：Krypton 的版本行（整行点击下载） */
+/** Mod Detail：Krypton 的版本行（整行点击下载；构建级端声明随版本一起返回） */
 export const mockModVersions: ModVersionEntry[] = [
-    { id: "v-0.2.3", versionNumber: "0.2.3", mcVersion: "1.20.1", loader: "fabric", date: "2023-11-02", sizeBytes: 412_000, recommended: true, url: "https://cdn.modrinth.com/data/fabric-krypton/versions/v-0.2.3/krypton-0.2.3.jar", sha1: "a3d5f1c09b7e2d46c8a05e1f3b7d9c2e4a6c8e01", fileName: "krypton-0.2.3.jar" },
-    { id: "v-0.2.2", versionNumber: "0.2.2", mcVersion: "1.20.1", loader: "fabric", date: "2023-08-19", sizeBytes: 410_500, recommended: false, url: "https://cdn.modrinth.com/data/fabric-krypton/versions/v-0.2.2/krypton-0.2.2.jar", sha1: "b4e6a2d10c8f3e57d9b16f2a4c8e0d3f5b7d9e02", fileName: "krypton-0.2.2.jar" },
-    { id: "v-0.2.1", versionNumber: "0.2.1", mcVersion: "1.20", loader: "fabric", date: "2023-06-07", sizeBytes: 408_100, recommended: false, url: "https://cdn.modrinth.com/data/fabric-krypton/versions/v-0.2.1/krypton-0.2.1.jar", sha1: "c5f7b3e21d9a4f68e0c27a3b5d9f1e4a6c8e0f03", fileName: "krypton-0.2.1.jar" },
-    { id: "v-0.2.0", versionNumber: "0.2.0", mcVersion: "1.19.4", loader: "fabric", date: "2023-02-14", sizeBytes: 402_900, recommended: false, url: "https://cdn.modrinth.com/data/fabric-krypton/versions/v-0.2.0/krypton-0.2.0.jar", fileName: "krypton-0.2.0.jar" },
+    { id: "v-0.2.3", versionNumber: "0.2.3", mcVersion: "1.20.1", loader: "fabric", date: "2023-11-02", sizeBytes: 412_000, recommended: true, url: "https://cdn.modrinth.com/data/fabric-krypton/versions/v-0.2.3/krypton-0.2.3.jar", sha1: "a3d5f1c09b7e2d46c8a05e1f3b7d9c2e4a6c8e01", fileName: "krypton-0.2.3.jar", clientSide: "unsupported", serverSide: "required" },
+    { id: "v-0.2.2", versionNumber: "0.2.2", mcVersion: "1.20.1", loader: "fabric", date: "2023-08-19", sizeBytes: 410_500, recommended: false, url: "https://cdn.modrinth.com/data/fabric-krypton/versions/v-0.2.2/krypton-0.2.2.jar", sha1: "b4e6a2d10c8f3e57d9b16f2a4c8e0d3f5b7d9e02", fileName: "krypton-0.2.2.jar", clientSide: "unsupported", serverSide: "required" },
+    { id: "v-0.2.1", versionNumber: "0.2.1", mcVersion: "1.20", loader: "fabric", date: "2023-06-07", sizeBytes: 408_100, recommended: false, url: "https://cdn.modrinth.com/data/fabric-krypton/versions/v-0.2.1/krypton-0.2.1.jar", sha1: "c5f7b3e21d9a4f68e0c27a3b5d9f1e4a6c8e0f03", fileName: "krypton-0.2.1.jar", clientSide: "optional", serverSide: "required" },
+    { id: "v-0.2.0", versionNumber: "0.2.0", mcVersion: "1.19.4", loader: "fabric", date: "2023-02-14", sizeBytes: 402_900, recommended: false, url: "https://cdn.modrinth.com/data/fabric-krypton/versions/v-0.2.0/krypton-0.2.0.jar", fileName: "krypton-0.2.0.jar", clientSide: "optional", serverSide: "required" },
 ];
+
+/**
+ * 本地 jar 取证（浏览器 dev 兜底）：按文件名演示三种结局——
+ * 纯客户端（误下载的典型）、服务端可用、以及中文改名/陌生包三层取证全空。
+ */
+export function mockInspectAdded(path: string): AddedModSide {
+    const name = (path.split(/[\\/]/).pop() ?? path).toLowerCase();
+    const sizeBytes = 320_000 + (name.length % 7) * 210_000;
+    if (/(sodium|iris|voxelmap|moreculling|litematica|minihud)/.test(name)) {
+        return { clientSide: "required", serverSide: "unsupported", envSource: "modrinthHash", sizeBytes };
+    }
+    if (/(spark|krypton|c2me|ferrite|fabric-api|server)/.test(name)) {
+        return { clientSide: "unsupported", serverSide: "required", envSource: "jarMetadata", sizeBytes };
+    }
+    if (/(journeymap|xaero|jei|create)/.test(name)) {
+        return { clientSide: "optional", serverSide: "required", envSource: "modrinthHash", sizeBytes };
+    }
+    return { envSource: "unknown", sizeBytes };
+}
 
 export const mockDefaultOptions: ConversionOptions = {
     mcVersion: "1.20.1",

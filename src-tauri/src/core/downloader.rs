@@ -12,7 +12,7 @@ use reqwest::Client;
 use serde_json::Value;
 use thiserror::Error;
 
-use crate::models::{LoaderKind, ModSearchPage, ModSearchQuery, ModSearchResult, ModSource, ModVersionEntry, VersionOption};
+use crate::models::{LoaderKind, ModSearchPage, ModSearchQuery, ModSearchResult, ModSource, ModVersionEntry, SideFlag, VersionOption};
 
 pub const MODRINTH_API: &str = "https://api.modrinth.com/v2";
 const PISTON_MANIFEST: &str = "https://piston-meta.mojang.com/mc/game/version_manifest_v2.json";
@@ -55,6 +55,38 @@ pub struct ModrinthEnv {
     /// 供 slug 猜测校验（文件名推的 id 是否真是这个项目）
     pub slug: Option<String>,
     pub title: Option<String>,
+}
+
+impl ModrinthEnv {
+    /// 两侧支持度：优先精确的 `client_side`/`server_side`（项目级、搜索结果也有），
+    /// 回落构建级 `environment` 枚举。取证层与「在线添加」的端标签共用这一份映射。
+    pub fn sides(&self) -> Option<(SideFlag, SideFlag)> {
+        use SideFlag::{Optional, Required, Unsupported};
+        let flag = |v: &str| {
+            Some(match v.trim().to_lowercase().as_str() {
+                "required" => Required,
+                "optional" => Optional,
+                "unsupported" => Unsupported,
+                _ => return None,
+            })
+        };
+        if let (Some(c), Some(s)) = (
+            self.client_side.as_deref().and_then(flag),
+            self.server_side.as_deref().and_then(flag),
+        ) {
+            return Some((c, s));
+        }
+        let norm = self.environment.as_deref()?.trim().to_lowercase().replace('-', "_");
+        Some(match norm.as_str() {
+            "client_only" => (Required, Unsupported),
+            "client_only_server_optional" => (Required, Optional),
+            "server_only" => (Unsupported, Required),
+            "server_only_client_optional" => (Optional, Required),
+            "client_and_server" => (Required, Required),
+            "client_or_server" | "client_or_server_prefers_both" => (Optional, Optional),
+            _ => return None,
+        })
+    }
 }
 
 /// 文件来源：远程 URL、本地 zip 包内条目（裸 zip 整合包免网络直提）、或本地单文件
@@ -742,6 +774,10 @@ impl Downloader {
         let mut results = Vec::new();
         if let Some(hits) = v["hits"].as_array() {
             for h in hits {
+                // 搜索命中项自带项目级两侧支持度：端标签在「添加之前」就该看得见
+                let sides = Self::modrinth_env(h).sides();
+                let client_side = sides.map(|(c, _)| c);
+                let server_side = sides.map(|(_, s)| s);
                 results.push(ModSearchResult {
                     id: h["slug"].as_str().unwrap_or_default().to_string(),
                     name: h["title"].as_str().unwrap_or_default().to_string(),
@@ -752,6 +788,8 @@ impl Downloader {
                     source: ModSource::Modrinth,
                     compatible: true,
                     already_added: false, // 由 commands 层按当前方案回填
+                    client_side,
+                    server_side,
                 });
             }
         }
@@ -805,6 +843,7 @@ impl Downloader {
                         _ => None,
                     })
                     .unwrap_or(LoaderKind::Fabric);
+                let sides = Self::modrinth_env(e).sides();
                 entries.push(ModVersionEntry {
                     id: e["id"].as_str().unwrap_or_default().to_string(),
                     version_number: e["version_number"].as_str().unwrap_or_default().to_string(),
@@ -819,6 +858,8 @@ impl Downloader {
                     url: file["url"].as_str().unwrap_or_default().to_string(),
                     sha1: file["hashes"]["sha1"].as_str().map(String::from),
                     file_name: file["filename"].as_str().unwrap_or("mod.jar").to_string(),
+                    client_side: sides.map(|(c, _)| c),
+                    server_side: sides.map(|(_, s)| s),
                 });
             }
         }
@@ -1572,5 +1613,42 @@ mod tests {
         }
         assert_eq!(leftovers, 0, "临时文件必须清干净");
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn modrinth_sides_prefers_project_flags_and_falls_back_to_environment() {
+        use SideFlag::{Optional, Required, Unsupported};
+        let env = |c: Option<&str>, s: Option<&str>, e: Option<&str>| ModrinthEnv {
+            client_side: c.map(str::to_string),
+            server_side: s.map(str::to_string),
+            environment: e.map(str::to_string),
+            slug: None,
+            title: None,
+        };
+        // 项目级两侧齐全：直接用，不看构建级
+        assert_eq!(
+            env(Some("required"), Some("unsupported"), Some("client_and_server")).sides(),
+            Some((Required, Unsupported))
+        );
+        // 只有一侧（大小写/空白都得吃下）：信息不完整，退回构建级
+        assert_eq!(
+            env(Some("Required"), None, Some("Server-Only")).sides(),
+            Some((Unsupported, Required))
+        );
+        // 构建级六个取值全覆盖
+        for (e, want) in [
+            ("client_only", (Required, Unsupported)),
+            ("client_only_server_optional", (Required, Optional)),
+            ("server_only", (Unsupported, Required)),
+            ("server_only_client_optional", (Optional, Required)),
+            ("client_and_server", (Required, Required)),
+            ("client_or_server", (Optional, Optional)),
+            ("client_or_server_prefers_both", (Optional, Optional)),
+        ] {
+            assert_eq!(env(None, None, Some(e)).sides(), Some(want), "{e}");
+        }
+        // 认不出来的新枚举值：宁缺毋滥
+        assert_eq!(env(None, None, Some("some_new_value")).sides(), None);
+        assert_eq!(env(None, None, None).sides(), None);
     }
 }

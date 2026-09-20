@@ -12,7 +12,7 @@ import { Check, ChevronDown, ChevronLeft, ChevronRight, Folder, MinusSquare, Puz
 import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { AnimatePresence, motion } from "motion/react";
 import * as api from "@/lib/api";
-import { evidenceLabel, formatSize, loaderLabel } from "@/lib/format";
+import { evidenceLabel, formatSize, loaderLabel, reviewFirst, sideTagLabel, sideTagOf } from "@/lib/format";
 import type {
     LoaderKind,
     ModDisposition,
@@ -52,7 +52,7 @@ const LIST_COPY: Record<
 > = {
     remove: {
         title: "剔除清单",
-        sub: "已剔除的客户端专属模组 · 可逐项恢复保留",
+        sub: "不进服务端包的模组（含判不出两端的待确认项）· 可逐项改回保留",
         toolbar: (on, off) => `已标记 ${on} · 改为保留 ${off}`,
         note: (on, off) => `${on} 项将剔除 · ${off} 项改为保留`,
         offBadge: "待恢复",
@@ -68,7 +68,7 @@ const LIST_COPY: Record<
     },
     add: {
         title: "新增清单",
-        sub: "本次转换新增的模组 · 取消勾选即停用，行保留可随时勾回",
+        sub: "本次转换新增的模组 · 右侧标注端归属，取消勾选即停用，行保留可随时勾回",
         toolbar: (on, off) => `生效 ${on} · 已停用 ${off}`,
         note: (on, off) => `${on} 项将新增 · ${off} 项停用`,
         offBadge: "已停用",
@@ -76,8 +76,44 @@ const LIST_COPY: Record<
     },
 };
 
+/**
+ * 端标签芯片（三张清单 + 卡内新增行共用）：客户端 / 服务端 / 两端 / 需人工确认。
+ * 两端都要的模组不再谎报成「服务端」；两侧都没证据才是金色待确认。
+ * warnClient = 新增清单里的客户端行标红——那是「误下载」最典型的一种
+ */
+export function SideChip({
+    sides,
+    square,
+    warnClient,
+}: {
+    sides: Pick<PlanMod, "clientSide" | "serverSide">;
+    square?: boolean;
+    warnClient?: boolean;
+}) {
+    const tag = sideTagOf(sides);
+    if (tag === "review") {
+        return (
+            <TagChip square={square} tone="gold">
+                {sideTagLabel(tag)}
+            </TagChip>
+        );
+    }
+    return (
+        <TagChip square={square} tone={warnClient && tag === "client" ? "redstone" : undefined}>
+            {sideTagLabel(tag)}
+        </TagChip>
+    );
+}
+
 /** 剔除行的原因：按实际两侧支持度说，并标出证据出处（不写死「env=client」） */
 function stripReason(m: PlanMod): string {
+    // 判不出两端：它不是「客户端专属」，是等人来定——措辞必须留出「勾回保留」这条路
+    if ((m.envSource ?? "unknown") === "unknown" && m.needsReview) {
+        return (
+            "无法判定 · 请人工确认：服务端需要就勾回保留" +
+            (m.bytecodeHint === "clientOnlyShape" ? " · 字节码形状像纯客户端" : "")
+        );
+    }
     const why =
         m.serverSide === "unsupported"
             ? "服务端不支持"
@@ -96,6 +132,12 @@ function stripReason(m: PlanMod): string {
 /** 保留行的原因：没有端证据时必须说「无依据」，不能替模组宣称服务端可用 */
 function keepReason(m: PlanMod): string {
     if (m.autoSupplement) return "自动补齐的服务端依赖 · 剔除可能导致启动失败";
+    const hint =
+        m.bytecodeHint === "serverCode"
+            ? " · jar 内确有服务端注册"
+            : m.bytecodeHint === "clientOnlyShape"
+              ? " · 字节码形状像纯客户端"
+              : "";
     const why =
         m.serverSide === "required"
             ? "服务端必需"
@@ -106,24 +148,22 @@ function keepReason(m: PlanMod): string {
                 : null;
     return why
         ? `保留原因：${why} · 依据：${evidenceLabel(m.envSource)}${m.envConflict ? " · 与整合包声明不一致" : ""}`
-        : `无端证据 · 默认保留，可手动剔除${
-              m.bytecodeHint === "serverCode"
-                  ? " · jar 内确有服务端注册，未按文件名剔除"
-                  : m.bytecodeHint === "clientOnlyShape"
-                    ? " · 字节码形状像纯客户端（未自动剔除）"
-                    : ""
-          }`;
+        : `无端证据 · 未自动判定，本行由你保留在包里${hint}`;
 }
 
 /** 处于该清单处置下的行说明（一律由证据推导，无证据就承认无证据） */
 function rowOnSub(m: PlanMod, focus: ListFocus): string {
     if (focus === "remove") return stripReason(m);
     if (focus === "add") {
-        return m.autoSupplement
+        const base = m.autoSupplement
             ? "自动补齐的服务端基础库 · 停用可能导致依赖它的模组失效"
             : m.localPath
               ? "本地 jar · 构建时直接复制"
               : "在线添加 · 已钉住所选构建";
+        // 误下载最常见的就是这条：把「服务端不需要」写在行上，而不是等人自己猜
+        return sideTagOf(m) === "client"
+            ? `${base} · 判为客户端模组，服务端包通常不需要`
+            : base;
     }
     return keepReason(m);
 }
@@ -158,8 +198,9 @@ export function PlanListModal({
         }
     }, [open]);
 
+    // 待人工确认的行永远在最前（与模组方案卡同一口径）
     const filtered = useMemo(
-        () => mods.filter((m) => !query || m.name.toLowerCase().includes(query.toLowerCase())),
+        () => reviewFirst(mods.filter((m) => !query || m.name.toLowerCase().includes(query.toLowerCase()))),
         [mods, query]
     );
 
@@ -270,15 +311,15 @@ export function PlanListModal({
                                 </span>
                             </span>
                             {isOn ? (
-                                focus === "remove" ? (
-                                    <TagChip square>{`客户端专属 · ${evidenceLabel(m.envSource)}`}</TagChip>
-                                ) : m.autoSupplement ? (
+                                focus === "add" && m.autoSupplement ? (
                                     <TagChip square>自动补齐</TagChip>
-                                ) : focus === "keep" ? (
-                                    <TagChip square>服务端保留</TagChip>
-                                ) : m.localPath ? (
-                                    <TagChip square>本地</TagChip>
-                                ) : undefined
+                                ) : m.needsReview ? (
+                                    <TagChip square tone="gold">
+                                        需人工确认
+                                    </TagChip>
+                                ) : (
+                                    <SideChip sides={m} square warnClient={focus === "add"} />
+                                )
                             ) : (
                                 <TagChip square outline className="text-gold">
                                     {copy.offBadge}
@@ -763,6 +804,10 @@ export function OnlineAddModal({
                                                     推荐
                                                 </ToneChip>
                                             )}
+                                            {/* 构建级端声明：点这一行就是下载这一份，标签必须在这一步给出 */}
+                                            {(v.clientSide || v.serverSide) && (
+                                                <SideChip sides={v} square warnClient />
+                                            )}
                                         </span>
                                         <span className="truncate text-[10px] leading-[14px] font-normal text-text-3">
                                             Minecraft {v.mcVersion} · {loaderLabel(v.loader)} ·{" "}
@@ -907,6 +952,10 @@ export function OnlineAddModal({
                                     <ToneChip tone="emerald" size="xs">
                                         已添加
                                     </ToneChip>
+                                )}
+                                {/* 端归属在点进详情之前就说清；平台没声明则不上牌（别整列表刷金色） */}
+                                {(m.clientSide || m.serverSide) && (
+                                    <SideChip sides={m} warnClient />
                                 )}
                                 <ChevronRight className="size-3.5 shrink-0 text-text-3" />
                             </ListRow>
