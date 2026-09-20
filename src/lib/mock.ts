@@ -295,23 +295,28 @@ const stagePlan: Array<{ stage: ConversionTask["stage"]; until: number; logs: st
         stage: "detector",
         until: 30,
         logs: [
-            "发现 fabric-loader 0.15.3 · 187 个模组 · 41 个客户端专属已标记剔除",
+            "包内内容：模组 187 个 · 其他文件 62 个 · 需联网补取 0 个",
             "方案确认：剔除 41 · 保留 146 · 新增 2",
+            "剔除名单：Sodium、Iris、Xaero's Minimap…等 41 个",
         ],
     },
     {
         stage: "downloader",
         until: 82,
         logs: [
-            "已复用缓存 38 个文件",
-            "fabric-api-0.92.2+1.20.1.jar 下载中 · 1.2 MB/s",
-            "队列剩余 105 个文件 · 预计剩余 50 秒",
+            "取件计划 146 项 · 需联网 24（≈128.0 MB）· 整合包 118 · 本地 0 · 缓存命中 4 · 并发 6",
+            "复用缓存 fabric-api-0.92.2+1.20.1.jar · 1.2 MB",
+            "联网获取 spark-1.10.60.jar · 2.4 MB",
+            "取件 · 模组 · 118 个 · 86.0 MB",
         ],
     },
     {
         stage: "builder",
         until: 100,
-        logs: ["写入服务端实例目录", "生成 start.sh / start.bat · 打包 -server.zip"],
+        logs: [
+            "生成包根文件：start.bat、start.sh、eula.txt、server.properties",
+            "打包 vault-hunters-2.4.1-server.zip · 148 个文件 · 96.4 MB",
+        ],
     },
 ];
 
@@ -348,6 +353,17 @@ const HISTORY: ConversionTask[] = [
         progress: 46,
         downloaded: 34,
         total: 74,
+        fetch: {
+            files: 74,
+            bytes: 208_000_000,
+            netFiles: 40,
+            netBytes: 164_000_000,
+            packFiles: 32,
+            localFiles: 0,
+            cachedFiles: 2,
+        },
+        netDone: 20,
+        doneBytes: 96_000_000,
         counts: { remove: 18, keep: 52, add: 4 },
         createdAt: Date.now() - 42 * MIN,
         startedAt: Date.now() - 42 * MIN,
@@ -391,6 +407,17 @@ const HISTORY: ConversionTask[] = [
         progress: 38,
         downloaded: 130,
         total: 342,
+        fetch: {
+            files: 342,
+            bytes: 690_000_000,
+            netFiles: 96,
+            netBytes: 402_000_000,
+            packFiles: 240,
+            localFiles: 0,
+            cachedFiles: 6,
+        },
+        netDone: 44,
+        doneBytes: 268_000_000,
         counts: { remove: 96, keep: 240, add: 6 },
         createdAt: Date.now() - 26 * 60 * MIN,
         startedAt: Date.now() - 26 * 60 * MIN,
@@ -478,8 +505,21 @@ function advance(id: string) {
         const seg = stagePlan.find((s) => task.progress <= s.until)!;
         task.stage = seg.stage;
         if (seg.stage === "downloader") {
-            task.downloaded = Math.round((task.progress / 100) * 146);
+            // 取件构成：与真实后端同一形态（146 项里只有 24 项真联网）
+            task.fetch ??= {
+                files: 146,
+                bytes: 412_000_000,
+                netFiles: 24,
+                netBytes: 128_000_000,
+                packFiles: 118,
+                localFiles: 0,
+                cachedFiles: 4,
+            };
+            const ratio = task.progress / 100;
+            task.downloaded = Math.round(ratio * 146);
             task.total = 146;
+            task.netDone = Math.round(ratio * task.fetch.netFiles);
+            task.doneBytes = Math.round(ratio * task.fetch.bytes);
         }
         // 每进入新阶段补一条日志（近似：按进度里程碑）
         if (task.progress % 15 === 2) {

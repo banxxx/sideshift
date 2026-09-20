@@ -163,6 +163,12 @@ export function HomePage() {
                                           : { label: "已检测 · 待转换", tone: "emerald" }
                                 }
                                 logs={rail?.logs ?? []}
+                                subs={rail?.subs}
+                                clipHeader={
+                                    active
+                                        ? `SideShift 日志 · ${active.pack.fileName} · ${active.id} · ${active.status}`
+                                        : undefined
+                                }
                                 waiting={
                                     rail?.waiting ?? {
                                         title: "等待开始转换",

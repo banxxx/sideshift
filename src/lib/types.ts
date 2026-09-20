@@ -56,10 +56,12 @@ export interface PlanMod {
     autoSupplement: boolean;
     /** 源文件大小（字节）；0 = 未知（外部新增行构建期才解析） */
     sizeBytes?: number;
-    /** 需联网下载（源声明带 URL）；false = 包内直取 */
+    /** 需联网下载（源声明带 URL）；false = 来自整合包或本地文件 */
     needsDownload?: boolean;
     /** 「从本地添加」的 .jar 绝对路径（真实后端直接取本地文件） */
     localPath?: string;
+    /** 行 ↔ 整合包内条目的精确锚（Rust 下发，前端原样回传）：同 id 多文件时锁定正确条目 */
+    srcPath?: string;
     /** 在线添加时钉住的构建；缺省 = 构建期解析最新兼容版（自动补行） */
     pinned?: PinnedVersion;
     /** 仅前端展示态：新增行被停用（行保留在清单、不参与构建与计数），下发前整行过滤 */
@@ -131,6 +133,27 @@ export interface DownloadEstimate {
 /** 流水线四阶段（Shift Rail 站点，对应 Rust core 四模块） */
 export type PipelineStage = "parser" | "detector" | "downloader" | "builder";
 
+/**
+ * 取件构成（Rust: 阶段 3 计划落定后写入）。只有 net* 走网络——
+ * 界面据此区分「下载中」（真联网）与「取件中」（包内/本地/缓存，零流量）
+ */
+export interface FetchTally {
+    /** 全部取件条目数 */
+    files: number;
+    /** 全部条目字节（大小未知条目计 0） */
+    bytes: number;
+    /** 需联网条目数 */
+    netFiles: number;
+    /** 需联网字节 */
+    netBytes: number;
+    /** 整合包内直取条目数 */
+    packFiles: number;
+    /** 本地文件复制条目数 */
+    localFiles: number;
+    /** 计划阶段就命中下载缓存的条目数 */
+    cachedFiles: number;
+}
+
 /** 任务状态 */
 export type TaskStatus =
     | "queued"
@@ -158,9 +181,15 @@ export interface ConversionTask {
     stage?: PipelineStage;
     /** 总进度 0-100 */
     progress: number;
-    /** 下载阶段计数（其余阶段可空） */
+    /** 取件阶段计数（其余阶段可空）：downloaded/total 是全部条目，含包内与本地 */
     downloaded?: number;
     total?: number;
+    /** 取件构成（阶段 3 计划落定后有值） */
+    fetch?: FetchTally;
+    /** 已完成的联网条目数（缓存命中不计） */
+    netDone?: number;
+    /** 已取回字节（含包内/本地/缓存） */
+    doneBytes?: number;
     /** 创建/开始/结束时间（epoch ms） */
     createdAt: number;
     startedAt?: number;

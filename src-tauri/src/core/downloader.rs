@@ -62,6 +62,33 @@ pub struct ItemSpec {
     pub size_bytes: u64,
 }
 
+/// 取件来源（界面据此区分「下载」与「取件」）
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FetchSource {
+    /// 需联网
+    Network,
+    /// 整合包内直取
+    Pack,
+    /// 本地 jar 复制
+    Local,
+}
+
+/// 单条目取件结果：联网项逐条报，离线项由流水线按落位目录聚合后再报
+#[derive(Debug, Clone)]
+pub struct ItemOutcome {
+    pub file_name: String,
+    pub source: FetchSource,
+    pub cached: bool,
+    pub bytes: u64,
+    /// 联网重试次数（0 = 一次成功）
+    pub retries: u32,
+    /// 实际落位绝对路径：流水线据此归入「模组 / 各保留目录」分组
+    pub dest: PathBuf,
+}
+
+/// 逐条完成回调：Arc 持有与借用两种传法共用同一签名
+type OnDone = dyn Fn(usize, usize, &ItemOutcome) + Send + Sync;
+
 impl ItemSpec {
     fn source_key(&self) -> String {
         match &self.fetch {
@@ -92,30 +119,40 @@ impl Downloader {
         }
     }
 
-    fn cache_path(&self, item: &ItemSpec) -> PathBuf {
-        let key = item
-            .sha1
-            .clone()
-            .unwrap_or_else(|| url_hash(&item.source_key()));
-        self.cache_dir.join("files").join(key).join(&item.file_name)
+    /// 缓存路径；`None` = 该项不落缓存。URL 项按 sha1（缺省按 URL 哈希，Modrinth 坐标与内容一一对应）
+    /// 缓存；包内 / 本地项只有在声明 sha1 时才缓存——否则源文件被替换后缓存键不变，会静默复用旧内容
+    fn cache_path_opt(&self, item: &ItemSpec) -> Option<PathBuf> {
+        cache_path_for(&self.cache_dir, item)
     }
 
-    /// 并发下载全部条目（各自带 dest 绝对路径）；cancel 置位后未开始的文件直接跳过；
-    /// 每完成一个文件回调 (done, total)
+    /// 并发取件（各自带 dest 绝对路径）；cancel 置位后未开始的文件直接跳过；
+    /// 每完成一个文件回调 (done, total, 本条结果)
+    ///
+    /// 两条通道：**联网项**走 reqwest 并发 + 重试；**离线项**（整合包条目 / 本地 jar / 缓存命中）
+    /// 走批量单遍解出——一个分片一个归档句柄（中央目录只解析一次）、条目流式直写目标文件，
+    /// 不再「每个文件重开一次包 + 整份读进内存 + 落两次盘」。保留目录动辄几百个小文件，
+    /// 旧写法的时间全花在重复开包上，而不是字节量。
     pub async fn download_all(
         &self,
         items: Vec<ItemSpec>,
         cancel: Arc<AtomicBool>,
-        on_done: impl Fn(usize, usize) + Send + Sync,
+        on_done: impl Fn(usize, usize, &ItemOutcome) + Send + Sync + 'static,
     ) -> Result<(), DownloadError> {
         let total = items.len();
         let done = Arc::new(AtomicUsize::new(0));
-        let on_done = Arc::new(on_done);
-
+        let on_done: Arc<OnDone> = Arc::new(on_done);
         let first_err: Arc<std::sync::Mutex<Option<DownloadError>>> =
             Arc::new(std::sync::Mutex::new(None));
 
-        stream::iter(items)
+        let (offline, net): (Vec<ItemSpec>, Vec<ItemSpec>) = items
+            .into_iter()
+            .partition(|i| !matches!(i.fetch, Fetch::Url(_)));
+        if !offline.is_empty() {
+            self.harvest_offline(offline, &cancel, &done, total, &on_done, &first_err)
+                .await;
+        }
+
+        stream::iter(net)
             .map(|item| {
                 let done = done.clone();
                 let on_done = on_done.clone();
@@ -127,12 +164,12 @@ impl Downloader {
                     }
                     let r = self.download_one(&item).await;
                     match r {
-                        Ok(()) => {
-                            let n = done.fetch_add(1, Ordering::Relaxed) + 1;
-                            on_done(n as usize, total);
-                        }
+                        Ok(outcome) => report(done.as_ref(), total, &*on_done, outcome),
                         Err(e) => {
-                            *first_err.lock().unwrap() = Some(e);
+                            let mut g = first_err.lock().unwrap();
+                            if g.is_none() {
+                                *g = Some(e);
+                            }
                         }
                     }
                 }
@@ -147,85 +184,216 @@ impl Downloader {
         Ok(())
     }
 
-    async fn download_one(&self, item: &ItemSpec) -> Result<(), DownloadError> {
-        let cache = self.cache_path(item);
-        // 缓存复用前提：声明了 sha1 就必须与内容一致（不一致视作缓存损坏，重新获取）
-        let cache_hit = cache.exists() && self.verify_cache(item, &cache);
-        if !cache_hit {
-            let bytes = match &item.fetch {
-                Fetch::ZipEntry { archive, entry } => read_zip_entry(archive, entry)?,
-                Fetch::Local(p) => std::fs::read(p).map_err(|e| DownloadError::Failed {
-                    file_name: item.file_name.clone(),
-                    attempts: 0,
-                    cause: format!("本地文件读取失败：{e}（{}）", p.display()),
-                })?,
-                Fetch::Url(url) => {
-                    let url = url.clone();
-                    let mut last_cause = String::from("unknown");
-                    let mut ok = None;
-                    for attempt in 1..=RETRIES {
-                        match self.fetch_bytes(&url).await {
-                            Ok(b) => {
-                                ok = Some(b);
-                                break;
-                            }
-                            Err(e) => {
-                                last_cause = e.to_string();
-                                if attempt < RETRIES {
-                                    tokio::time::sleep(std::time::Duration::from_millis(
-                                        500 * attempt as u64,
-                                    ))
-                                    .await;
-                                }
-                            }
-                        }
+    /// 离线取件总调度：分拣出「纯复制」（缓存 / 本地）与「包内条目」（按归档分组），
+    /// 再切成若干分片丢进 blocking 池——复制分片让多个小文件并行落盘，
+    /// 解包分片让 inflate 这种 CPU 活并行，同时把中央目录解析次数压到「每分片一次」。
+    async fn harvest_offline(
+        &self,
+        items: Vec<ItemSpec>,
+        cancel: &Arc<AtomicBool>,
+        done: &Arc<AtomicUsize>,
+        total: usize,
+        on_done: &Arc<dyn Fn(usize, usize, &ItemOutcome) + Send + Sync>,
+        first_err: &Arc<std::sync::Mutex<Option<DownloadError>>>,
+    ) {
+        let mut copies: Vec<CopyJob> = Vec::new();
+        let mut groups: Vec<(PathBuf, Vec<ItemSpec>)> = Vec::new();
+        for item in items {
+            let cache_hit = cache_path_for(&self.cache_dir, &item)
+                .filter(|c| c.exists() && verify_cache_for(&item, c));
+            match cache_hit {
+                Some(c) => copies.push(CopyJob {
+                    src: c,
+                    from_cache: true,
+                    item,
+                }),
+                None => match &item.fetch {
+                    Fetch::ZipEntry { archive, .. } => match groups.iter_mut().find(|(a, _)| a == archive) {
+                        Some(g) => g.1.push(item),
+                        None => groups.push((archive.clone(), vec![item])),
+                    },
+                    Fetch::Local(p) => copies.push(CopyJob {
+                        src: p.clone(),
+                        from_cache: false,
+                        item,
+                    }),
+                    Fetch::Url(_) => {} // 已按 URL 分区，理论不可达
+                },
+            }
+        }
+
+        let mut jobs: Vec<OfflineJob> = Vec::new();
+        for ch in copies.chunks(COPY_CHUNK) {
+            jobs.push(OfflineJob::Copy(ch.to_vec()));
+        }
+        for (archive, list) in groups {
+            let n = shard_count(list.len(), self.concurrency);
+            for s in 0..n {
+                let part: Vec<ItemSpec> = list
+                    .iter()
+                    .enumerate()
+                    .filter(|(i, _)| i % n == s)
+                    .map(|(_, it)| it.clone())
+                    .collect();
+                jobs.push(OfflineJob::Extract(archive.clone(), part));
+            }
+        }
+
+        let mut handles = Vec::with_capacity(jobs.len());
+        // 任一分片失败即叫停其余分片（否则一个坏条目会引来几百次无谓落盘）
+        let stop = Arc::new(AtomicBool::new(false));
+        for job in jobs {
+            let (cancel, done, on_done, first_err) =
+                (cancel.clone(), done.clone(), on_done.clone(), first_err.clone());
+            let stop2 = stop.clone();
+            handles.push(tokio::task::spawn_blocking(move || {
+                let r = match job {
+                    OfflineJob::Copy(list) => {
+                        run_copies(list, &cancel, &stop2, &done, total, &*on_done)
                     }
-                    ok.ok_or_else(|| DownloadError::Failed {
-                        file_name: item.file_name.clone(),
-                        attempts: RETRIES,
-                        cause: last_cause,
-                    })?
+                    OfflineJob::Extract(archive, list) => {
+                        run_extract(&archive, list, &cancel, &stop2, &done, total, &*on_done)
+                    }
+                };
+                if let Err(e) = r {
+                    stop2.store(true, Ordering::Relaxed);
+                    let mut g = first_err.lock().unwrap();
+                    if g.is_none() {
+                        *g = Some(e);
+                    }
                 }
-            };
-            if let Some(expect) = &item.sha1 {
-                let got = sha1_hex(&bytes);
-                if !got.eq_ignore_ascii_case(expect) {
-                    return Err(DownloadError::Failed {
-                        file_name: item.file_name.clone(),
+            }));
+        }
+        for h in handles {
+            if let Err(e) = h.await {
+                let mut g = first_err.lock().unwrap();
+                if g.is_none() {
+                    *g = Some(DownloadError::Failed {
+                        file_name: "离线取件".to_string(),
                         attempts: 0,
-                        cause: format!("sha1 校验不一致（期望 {expect} · 实际 {got}）"),
+                        cause: format!("取件线程异常：{e}"),
                     });
                 }
             }
-            if let Some(parent) = cache.parent() {
-                std::fs::create_dir_all(parent)?;
-            }
-            std::fs::write(&cache, &bytes)?;
         }
-        // 缓存 → 目标位置
+    }
+
+    async fn download_one(&self, item: &ItemSpec) -> Result<ItemOutcome, DownloadError> {
+        let source = match &item.fetch {
+            Fetch::Url(_) => FetchSource::Network,
+            Fetch::ZipEntry { .. } => FetchSource::Pack,
+            Fetch::Local(_) => FetchSource::Local,
+        };
         if let Some(parent) = item.dest.parent() {
             std::fs::create_dir_all(parent)?;
         }
-        std::fs::copy(&cache, &item.dest).map_err(|e| DownloadError::Failed {
+        // 缓存复用前提：声明了 sha1 就必须与内容一致（不一致视作缓存损坏，重新获取）
+        let cache = self.cache_path_opt(item).filter(|c| c.exists());
+        let cached = cache
+            .as_ref()
+            .is_some_and(|c| self.verify_cache(item, c));
+        if cached {
+            let c = cache.unwrap();
+            std::fs::copy(&c, &item.dest).map_err(|e| DownloadError::Failed {
+                file_name: item.file_name.clone(),
+                attempts: 0,
+                cause: format!("{e}（dest={}）", item.dest.display()),
+            })?;
+            let bytes = std::fs::metadata(&c).map(|m| m.len()).unwrap_or(0);
+            return Ok(ItemOutcome {
+                file_name: item.file_name.clone(),
+                source,
+                cached: true,
+                bytes,
+                retries: 0,
+                dest: item.dest.clone(),
+            });
+        }
+
+        let (bytes, retries) = self.fetch_bytes_of(item).await?;
+        if let Some(expect) = &item.sha1 {
+            let got = sha1_hex(&bytes);
+            if !got.eq_ignore_ascii_case(expect) {
+                return Err(DownloadError::Failed {
+                    file_name: item.file_name.clone(),
+                    attempts: 0,
+                    cause: format!("sha1 校验不一致（期望 {expect} · 实际 {got}）"),
+                });
+            }
+        }
+        if let Some(c) = cache.filter(|_| !cached) {
+            if let Some(parent) = c.parent() {
+                std::fs::create_dir_all(parent)?;
+            }
+            std::fs::write(&c, &bytes)?;
+        }
+        std::fs::write(&item.dest, &bytes).map_err(|e| DownloadError::Failed {
             file_name: item.file_name.clone(),
             attempts: 0,
             cause: format!("{e}（dest={}）", item.dest.display()),
         })?;
-        Ok(())
+        Ok(ItemOutcome {
+            file_name: item.file_name.clone(),
+            source,
+            cached: false,
+            bytes: bytes.len() as u64,
+            retries,
+            dest: item.dest.clone(),
+        })
+    }
+
+    /// 按来源取回内容；联网项最多重试 RETRIES 次（退避），返回 (字节, 已重试次数)
+    async fn fetch_bytes_of(&self, item: &ItemSpec) -> Result<(Vec<u8>, u32), DownloadError> {
+        match &item.fetch {
+            Fetch::ZipEntry { archive, entry } => {
+                read_zip_entry(archive, entry).map(|b| (b, 0)).map_err(|e| {
+                    DownloadError::Failed {
+                        file_name: item.file_name.clone(),
+                        attempts: 0,
+                        cause: format!("包内条目读取失败：{e}（{entry}）"),
+                    }
+                })
+            }
+            Fetch::Local(p) => std::fs::read(p)
+                .map(|b| (b, 0))
+                .map_err(|e| DownloadError::Failed {
+                    file_name: item.file_name.clone(),
+                    attempts: 0,
+                    cause: format!("本地文件读取失败：{e}（{}）", p.display()),
+                }),
+            Fetch::Url(url) => {
+                let mut last_cause = String::from("unknown");
+                for attempt in 1..=RETRIES {
+                    match self.fetch_bytes(url).await {
+                        Ok(b) => return Ok((b, attempt - 1)),
+                        Err(e) => {
+                            last_cause = e.to_string();
+                            if attempt < RETRIES {
+                                tokio::time::sleep(std::time::Duration::from_millis(
+                                    500 * attempt as u64,
+                                ))
+                                .await;
+                            }
+                        }
+                    }
+                }
+                Err(DownloadError::Failed {
+                    file_name: item.file_name.clone(),
+                    attempts: RETRIES,
+                    cause: last_cause,
+                })
+            }
+        }
     }
 
     /// 缓存文件与声明 sha1 是否一致（未声明视为可用；读取失败按不一致处理，触发重取）
     fn verify_cache(&self, item: &ItemSpec, cache: &Path) -> bool {
-        let Some(expect) = &item.sha1 else {
-            return true;
-        };
-        let bytes = std::fs::read(cache).unwrap_or_default();
-        sha1_hex(&bytes).eq_ignore_ascii_case(expect)
+        verify_cache_for(item, cache)
     }
 
     /// 该条目是否已在下载缓存（仅存在性判断，不重算哈希——预估宁可少扣不误报）
     pub fn is_cached(&self, item: &ItemSpec) -> bool {
-        self.cache_path(item).exists()
+        self.cache_path_opt(item).is_some_and(|c| c.exists())
     }
 
     /// HEAD 取 Content-Length（下载量预估的兜底大小来源）；进程级缓存，
@@ -770,4 +938,355 @@ fn read_zip_entry(archive: &Path, entry: &str) -> Result<Vec<u8>, DownloadError>
     let mut buf = Vec::new();
     rf.read_to_end(&mut buf)?;
     Ok(buf)
+}
+
+/* ---------------- 离线批量取件（download_all 的 harvest 通道） ---------------- */
+
+/// 一次纯复制型任务：缓存命中或本地 jar → 目标路径
+#[derive(Clone)]
+struct CopyJob {
+    src: PathBuf,
+    /// 区分日志动词与「是否算联网件」口径
+    from_cache: bool,
+    item: ItemSpec,
+}
+
+/// 离线分片：一批复制，或某个归档的一个条目分片（分片内共用一个包句柄）
+enum OfflineJob {
+    Copy(Vec<CopyJob>),
+    Extract(PathBuf, Vec<ItemSpec>),
+}
+
+/// 复制分片大小：小文件落盘在 Windows 上按次收费（含杀软拦截），分片才能并行
+const COPY_CHUNK: usize = 64;
+
+fn cache_path_for(cache_dir: &Path, item: &ItemSpec) -> Option<PathBuf> {
+    let key = match &item.sha1 {
+        Some(s) => s.clone(),
+        None => match &item.fetch {
+            Fetch::Url(_) => url_hash(&item.source_key()),
+            _ => return None,
+        },
+    };
+    Some(cache_dir.join("files").join(key).join(&item.file_name))
+}
+
+/// 缓存复用前提：声明了 sha1 就必须与内容一致（不一致视作缓存损坏，重新获取）
+fn verify_cache_for(item: &ItemSpec, cache: &Path) -> bool {
+    let Some(expect) = &item.sha1 else {
+        return true;
+    };
+    let bytes = std::fs::read(cache).unwrap_or_default();
+    sha1_hex(&bytes).eq_ignore_ascii_case(expect)
+}
+
+fn report(done: &AtomicUsize, total: usize, on_done: &OnDone, outcome: ItemOutcome) {
+    let n = done.fetch_add(1, Ordering::Relaxed) + 1;
+    on_done(n, total, &outcome);
+}
+
+/// 用户取消或任一分片已失败：本分片就地收摊
+fn aborted(cancel: &AtomicBool, stop: &AtomicBool) -> bool {
+    cancel.load(Ordering::Relaxed) || stop.load(Ordering::Relaxed)
+}
+
+/// 分片数：小批量单线程更省（每片都要解析一次中央目录），大批量才值得并行
+fn shard_count(n: usize, concurrency: usize) -> usize {
+    if n <= 16 {
+        return 1;
+    }
+    concurrency.clamp(1, 8).min(n.div_ceil(32)).max(1)
+}
+
+fn run_copies(
+    list: Vec<CopyJob>,
+    cancel: &AtomicBool,
+    stop: &AtomicBool,
+    done: &AtomicUsize,
+    total: usize,
+    on_done: &OnDone,
+) -> Result<(), DownloadError> {
+    for job in list {
+        if aborted(cancel, stop) {
+            return Ok(());
+        }
+        let CopyJob {
+            src,
+            from_cache,
+            item,
+        } = job;
+        let bytes = copy_to_dest(&src, &item)?;
+        let source = match &item.fetch {
+            Fetch::Url(_) => FetchSource::Network,
+            Fetch::ZipEntry { .. } => FetchSource::Pack,
+            Fetch::Local(_) => FetchSource::Local,
+        };
+        report(
+            done,
+            total,
+            on_done,
+            ItemOutcome {
+                file_name: item.file_name.clone(),
+                source,
+                cached: from_cache,
+                bytes,
+                retries: 0,
+                dest: item.dest.clone(),
+            },
+        );
+    }
+    Ok(())
+}
+
+fn copy_to_dest(src: &Path, item: &ItemSpec) -> Result<u64, DownloadError> {
+    if let Some(parent) = item.dest.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    std::fs::copy(src, &item.dest).map_err(|e| DownloadError::Failed {
+        file_name: item.file_name.clone(),
+        attempts: 0,
+        cause: format!("{e}（源={} · dest={}）", src.display(), item.dest.display()),
+    })
+}
+
+/// 单归档分片：开包与中央目录解析各一次，条目按序流式写入目标
+fn run_extract(
+    archive: &Path,
+    list: Vec<ItemSpec>,
+    cancel: &AtomicBool,
+    stop: &AtomicBool,
+    done: &AtomicUsize,
+    total: usize,
+    on_done: &OnDone,
+) -> Result<(), DownloadError> {
+    let open = |cause: String| DownloadError::Failed {
+        file_name: archive
+            .file_name()
+            .map(|s| s.to_string_lossy().to_string())
+            .unwrap_or_else(|| archive.display().to_string()),
+        attempts: 0,
+        cause,
+    };
+    let f = File::open(archive).map_err(|e| open(format!("打开整合包失败：{e}")))?;
+    let mut z = zip::ZipArchive::new(f).map_err(|e| open(format!("zip 读取失败：{e}")))?;
+
+    for item in list {
+        if aborted(cancel, stop) {
+            return Ok(());
+        }
+        let entry = match &item.fetch {
+            Fetch::ZipEntry { entry, .. } => entry.clone(),
+            _ => return Err(open("非包内条目分片".to_string())),
+        };
+        let mut rf = z
+            .by_name(&entry)
+            .map_err(|e| open(format!("包内条目缺失：{e}（{entry}）")))?;
+        let bytes = write_entry(&mut rf, &item)?;
+        report(
+            done,
+            total,
+            on_done,
+            ItemOutcome {
+                file_name: item.file_name.clone(),
+                source: FetchSource::Pack,
+                cached: false,
+                bytes,
+                retries: 0,
+                dest: item.dest.clone(),
+            },
+        );
+    }
+    Ok(())
+}
+
+/// 条目 → 目标文件流式落盘，边写边算 sha1（声明了才校验，不匹配则删掉半成品）
+fn write_entry<R: std::io::Read>(rf: &mut R, item: &ItemSpec) -> Result<u64, DownloadError> {
+    use sha1::{Digest, Sha1};
+    if let Some(parent) = item.dest.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let mut out = File::create(&item.dest).map_err(|e| DownloadError::Failed {
+        file_name: item.file_name.clone(),
+        attempts: 0,
+        cause: format!("{e}（dest={}）", item.dest.display()),
+    })?;
+    let expect = item.sha1.clone();
+    let mut hasher = expect.as_ref().map(|_| Sha1::new());
+    let mut buf = [0u8; 64 * 1024];
+    let mut written = 0u64;
+    loop {
+        let k = rf.read(&mut buf)?;
+        if k == 0 {
+            break;
+        }
+        if let Some(h) = hasher.as_mut() {
+            h.update(&buf[..k]);
+        }
+        std::io::Write::write_all(&mut out, &buf[..k])?;
+        written += k as u64;
+    }
+    drop(out);
+    if let (Some(h), Some(expect)) = (hasher, &expect) {
+        let got: String = h.finalize().iter().map(|b| format!("{b:02x}")).collect();
+        if !got.eq_ignore_ascii_case(expect) {
+            let _ = std::fs::remove_file(&item.dest);
+            return Err(DownloadError::Failed {
+                file_name: item.file_name.clone(),
+                attempts: 0,
+                cause: format!("sha1 校验不一致（期望 {expect} · 实际 {got}）"),
+            });
+        }
+    }
+    Ok(written)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// 造一个含指定条目的 zip，返回归档路径（放在独立临时目录里，便于同时放本地文件与输出）
+    fn temp_zip(entries: &[(&str, &[u8])]) -> PathBuf {
+        use std::io::Write;
+        let dir = std::env::temp_dir().join(format!("sideshift-dl-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("pack.zip");
+        let mut w = zip::ZipWriter::new(File::create(&path).unwrap());
+        let opts = zip::write::SimpleFileOptions::default();
+        for (name, bytes) in entries {
+            w.start_file(name.to_string(), opts).unwrap();
+            w.write_all(bytes).unwrap();
+        }
+        let _ = w.finish().unwrap();
+        path
+    }
+
+    fn zip_item(archive: &Path, entry: &str, dest: PathBuf, sha1: Option<String>) -> ItemSpec {
+        ItemSpec {
+            fetch: Fetch::ZipEntry {
+                archive: archive.to_path_buf(),
+                entry: entry.to_string(),
+            },
+            file_name: entry.rsplit('/').next().unwrap().to_string(),
+            sha1,
+            dest,
+            size_bytes: 0,
+        }
+    }
+
+    #[tokio::test]
+    async fn offline_items_land_without_network() {
+        let archive = temp_zip(&[("entries/a.txt", b"alpha".as_slice()), ("entries/b.txt", b"bravo".as_slice())]);
+        let root = archive.parent().unwrap().to_path_buf();
+        let out = root.join("out");
+        let local = root.join("local.jar");
+        std::fs::write(&local, b"local-bytes").unwrap();
+
+        let dl = Downloader::new(out.join("cache"), 4);
+        let items = vec![
+            zip_item(&archive, "entries/a.txt", out.join("a.txt"), None),
+            zip_item(
+                &archive,
+                "entries/b.txt",
+                out.join("b.txt"),
+                Some(sha1_hex(b"bravo")),
+            ),
+            ItemSpec {
+                fetch: Fetch::Local(local.clone()),
+                file_name: "local.jar".to_string(),
+                sha1: None,
+                dest: out.join("local.jar"),
+                size_bytes: 0,
+            },
+        ];
+        let seen = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let seen2 = seen.clone();
+        dl.download_all(items, Arc::new(AtomicBool::new(false)), move |_done, _tot, oc| {
+            seen2.lock().unwrap().push((oc.source, oc.bytes, oc.cached));
+        })
+        .await
+        .unwrap();
+
+        let got = seen.lock().unwrap();
+        assert_eq!(got.len(), 3, "每条都应回一次");
+        assert!(got.iter().all(|(_, _, cached)| !cached), "离线项不该报缓存命中");
+        assert_eq!(std::fs::read_to_string(out.join("a.txt")).unwrap(), "alpha");
+        assert_eq!(std::fs::read_to_string(out.join("b.txt")).unwrap(), "bravo");
+        assert_eq!(std::fs::read_to_string(out.join("local.jar")).unwrap(), "local-bytes");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[tokio::test]
+    async fn sha1_mismatch_fails_and_leaves_no_partial_file() {
+        let archive = temp_zip(&[("entries/a.txt", b"alpha".as_slice())]);
+        let root = archive.parent().unwrap().to_path_buf();
+        let out = root.join("out");
+        let dest = out.join("a.txt");
+        let dl = Downloader::new(out.join("cache"), 4);
+        let items = vec![zip_item(&archive, "entries/a.txt", dest.clone(), Some(sha1_hex(b"nope")))];
+        let r = dl
+            .download_all(items, Arc::new(AtomicBool::new(false)), |_, _, _| {})
+            .await;
+        assert!(matches!(r, Err(DownloadError::Failed { attempts: 0, .. })));
+        assert!(!dest.exists(), "校验失败的半成品必须删掉");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// 规模回归：复刻真实卡死场景的量级——保留目录命中后一次转换要取几千个包内小文件。
+    /// 只验两件事：**不挂起**（回调必须逐条收齐）与**内容正确**（带 sha1 的条目全部落位）。
+    #[tokio::test]
+    async fn bulk_offline_harvest_completes() {
+        const N: usize = 3000;
+        let entries: Vec<(String, Vec<u8>)> = (0..N)
+            .map(|i| {
+                let name = format!("overrides/config/mod-{i}/file-{i}.cfg");
+                (name, format!("content-{i}-{}", i * 37).into_bytes())
+            })
+            .collect();
+        let refs: Vec<(&str, &[u8])> = entries
+            .iter()
+            .map(|(n, b)| (n.as_str(), b.as_slice()))
+            .collect();
+        let archive = temp_zip(&refs);
+        let root = archive.parent().unwrap().to_path_buf();
+        let out = root.join("out");
+
+        let items: Vec<ItemSpec> = entries
+            .iter()
+            .map(|(name, bytes)| {
+                zip_item(
+                    &archive,
+                    name,
+                    out.join(name.rsplit('/').next().unwrap()),
+                    Some(sha1_hex(bytes)),
+                )
+            })
+            .collect();
+
+        let dl = Downloader::new(out.join("cache"), 6);
+        // 分片并行 → 回调到达顺序不保证与 done 同序，只能验「每个 done 恰好出现一次」
+        let seen = Arc::new(std::sync::Mutex::new(std::collections::BTreeSet::new()));
+        let seen2 = seen.clone();
+        let out2 = out.clone();
+        dl.download_all(items, Arc::new(AtomicBool::new(false)), move |done, total, oc| {
+            assert!(seen2.lock().unwrap().insert(done), "done={done} 重复回调");
+            assert_eq!(total, N);
+            assert!(!oc.cached && matches!(oc.source, FetchSource::Pack));
+            // 分组日志靠 dest 定位，批量解包路径也必须带上真实落位
+            assert_eq!(oc.dest.file_name().and_then(|s| s.to_str()), Some(oc.file_name.as_str()));
+            assert!(oc.dest.starts_with(&out2), "dest 应在取件目录内：{}", oc.dest.display());
+        })
+        .await
+        .unwrap();
+
+        let done_ids = seen.lock().unwrap();
+        assert_eq!(done_ids.len(), N, "每条都必须回调一次（卡死即少条）");
+        assert_eq!(done_ids.first().copied(), Some(1));
+        assert_eq!(done_ids.last().copied(), Some(N));
+        assert_eq!(std::fs::read_dir(&out).unwrap().count(), N);
+        assert_eq!(
+            std::fs::read_to_string(out.join("file-2999.cfg")).unwrap(),
+            format!("content-2999-{}", 2999 * 37)
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
 }

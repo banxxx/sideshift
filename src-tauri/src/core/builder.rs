@@ -33,18 +33,33 @@ pub struct BuildInput<'a> {
     pub readme_lines: Vec<String>,
 }
 
-pub fn build(input: &BuildInput) -> Result<(PathBuf, u64), BuilderError> {
-    write_root_files(input)?;
+/// 构建产物与可展示的步骤信息（流水线据此打日志）
+pub struct BuildReport {
+    pub path: PathBuf,
+    pub size: u64,
+    /// 写入包根的文件名（脚本/协议/属性/说明）
+    pub generated: Vec<String>,
+    /// 打进 zip 的文件数
+    pub entries: usize,
+}
+
+pub fn build(input: &BuildInput) -> Result<BuildReport, BuilderError> {
+    let generated = write_root_files(input)?;
     std::fs::create_dir_all(input.output_dir)?;
     let out_path = input.output_dir.join(&input.output_file_name);
     let file = File::create(&out_path)?;
     let mut zip = zip::ZipWriter::new(BufWriter::new(file));
     let opts: SimpleFileOptions =
         SimpleFileOptions::default().compression_method(CompressionMethod::Deflated);
-    zip_dir(&mut zip, input.staging, input.staging, &opts)?;
+    let entries = zip_dir(&mut zip, input.staging, input.staging, &opts)?;
     zip.finish()?;
     let size = out_path.metadata().map(|m| m.len()).unwrap_or(0);
-    Ok((out_path, size))
+    Ok(BuildReport {
+        path: out_path,
+        size,
+        generated,
+        entries,
+    })
 }
 
 /// Aikar's flags：官方推荐的 G1GC 调优参数组（4G+ 内存口径）
@@ -74,8 +89,9 @@ fn one_line(s: &str) -> String {
     s.replace('\\', "\\\\").replace(['\r', '\n'], " ")
 }
 
-/// 启动脚本、eula、server.properties、README
-fn write_root_files(input: &BuildInput) -> Result<(), BuilderError> {
+/// 启动脚本、eula、server.properties、README；返回本次实际生成的包根文件名
+fn write_root_files(input: &BuildInput) -> Result<Vec<String>, BuilderError> {
+    let mut generated: Vec<String> = Vec::new();
     let jvm = jvm_args(input.options);
     if input.options.generate_scripts {
         // 脚本先锚定自身目录：从任意 cwd 调用（终端/计划任务）相对 jar 路径仍然有效
@@ -93,6 +109,7 @@ fn write_root_files(input: &BuildInput) -> Result<(), BuilderError> {
             LoaderKind::Forge | LoaderKind::NeoForge => {
                 // JVM 参数经 user_jvm_args.txt 注入（installer 生成的 run 脚本以 @user_jvm_args.txt 引用）
                 std::fs::write(input.staging.join("user_jvm_args.txt"), format!("{jvm}\n"))?;
+                generated.push("user_jvm_args.txt".to_string());
                 let installer = input
                     .installer_jar_name
                     .as_deref()
@@ -110,6 +127,8 @@ fn write_root_files(input: &BuildInput) -> Result<(), BuilderError> {
         };
         std::fs::write(input.staging.join("start.bat"), bat)?;
         std::fs::write(input.staging.join("start.sh"), sh)?;
+        generated.push("start.bat".to_string());
+        generated.push("start.sh".to_string());
     }
     // eula.txt 恒生成：开关只决定值（false 时服务端拒启，用户按 README 手改 true）
     std::fs::write(
@@ -119,6 +138,7 @@ fn write_root_files(input: &BuildInput) -> Result<(), BuilderError> {
             if input.options.agree_eula { "true" } else { "false" }
         ),
     )?;
+    generated.push("eula.txt".to_string());
     if !input.staging.join("server.properties").exists() {
         let o = input.options;
         // 枚举字段白名单收口，防脏值写入属性文件
@@ -192,22 +212,26 @@ simulation-distance=10
             o.server_port
         ));
         std::fs::write(input.staging.join("server.properties"), props)?;
+        generated.push("server.properties".to_string());
     }
     if !input.readme_lines.is_empty() {
         std::fs::write(
             input.staging.join("README-SideShift.txt"),
             input.readme_lines.join("\n") + "\n",
         )?;
+        generated.push("README-SideShift.txt".to_string());
     }
-    Ok(())
+    Ok(generated)
 }
 
+/// 递归写入 zip；返回写入的文件数
 fn zip_dir(
     zip: &mut zip::ZipWriter<BufWriter<File>>,
     root: &Path,
     dir: &Path,
     opts: &SimpleFileOptions,
-) -> Result<(), BuilderError> {
+) -> Result<usize, BuilderError> {
+    let mut count = 0usize;
     for entry in std::fs::read_dir(dir)? {
         let path = entry?.path();
         let rel = path
@@ -216,7 +240,7 @@ fn zip_dir(
             .to_string_lossy()
             .replace('\\', "/");
         if path.is_dir() {
-            zip_dir(zip, root, &path, opts)?;
+            count += zip_dir(zip, root, &path, opts)?;
         } else {
             // zip 默认不携带 unix 权限（解压后 644），shell 脚本需补执行位
             let file_opts = if rel.to_lowercase().ends_with(".sh") {
@@ -227,7 +251,8 @@ fn zip_dir(
             zip.start_file(&rel, file_opts)?;
             let mut f = File::open(&path)?;
             std::io::copy(&mut f, zip)?;
+            count += 1;
         }
     }
-    Ok(())
+    Ok(count)
 }

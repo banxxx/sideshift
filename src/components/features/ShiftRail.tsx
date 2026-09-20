@@ -13,10 +13,22 @@
  * 轨道线只有两态（用户定稿，无金色进行中段）：底轨 $rail-track，
  * 已完成段 $emerald，宽度按"上一站中心→当前站中心"逐段推进。
  */
-import { Archive, Check, Download, FileSearch, Hammer, Radar, Server, X } from "lucide-react";
+import { useRef } from "react";
+import {
+    Archive,
+    Check,
+    Download,
+    FileSearch,
+    Hammer,
+    Radar,
+    Server,
+    X,
+} from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { PipelineStage } from "@/lib/types";
 import { formatClock } from "@/lib/format";
+import { useLogFollow } from "@/lib/log-view";
+import { LogCopyButton } from "@/components/features/LogCopyButton";
 
 /** 轨道站点状态 */
 export type RailStageStatus = "pending" | "active" | "done" | "error";
@@ -40,6 +52,10 @@ interface ShiftRailProps {
     logs?: RailLog[];
     /** 控制台占位文案（如"等待开始转换"） */
     waiting?: { title: string; detail?: string };
+    /** 站点副标题覆写：零联网任务把「拉取服务端依赖」换成如实文案（站名按设计稿不动） */
+    subs?: Partial<Record<PipelineStage, string>>;
+    /** 复制日志时的首行上下文（包名/任务号） */
+    clipHeader?: string;
     /** 是否显示底部"查看任务详情"链接 */
     onOpenTask?: () => void;
     className?: string;
@@ -131,11 +147,15 @@ export function ShiftRail({
                               status,
                               logs = [],
                               waiting,
+                              subs,
+                              clipHeader,
                               onOpenTask,
                               className,
                           }: ShiftRailProps) {
     const list = RAIL_STAGES.map((s) => statuses[s.stage] ?? "pending");
     const doneFrac = doneLineFraction(list);
+    const logBoxRef = useRef<HTMLDivElement>(null);
+    useLogFollow(logBoxRef, logs.length);
 
     return (
         <section
@@ -229,7 +249,7 @@ export function ShiftRail({
                                     {s.label}
                                 </span>
                                 <span className="font-mono text-[10px] text-text-3 text-center w-full">
-                                    {s.sub}
+                                    {subs?.[s.stage] ?? s.sub}
                                 </span>
                             </div>
                         </div>
@@ -249,36 +269,50 @@ export function ShiftRail({
                 </footer>
             )}
 
-            {/* 日志控制台：高度随行数自适应（设计稿无 min-height），底色 $bg-app */}
-            <div className="bg-bg-app border border-stroke-soft rounded-lg px-4 py-2.5 flex flex-col gap-1.5">
-                {logs.length === 0 && waiting ? (
-                    <p className="flex items-center gap-2 font-mono text-[11px]">
-                        <span className="font-semibold text-text-3">{waiting.title}</span>
-                        {waiting.detail && (
-                            <span className="text-text-3">{waiting.detail}</span>
-                        )}
-                    </p>
-                ) : (
-                    logs.map((l, i) => (
-                        <p key={i} className="flex items-center gap-2 font-mono min-w-0">
-                            <span className="text-[10px] text-text-3 shrink-0">
-                                {l.time ?? formatClock()}
-                            </span>
-                            {l.stage && (
-                                <span className="text-[10px] font-semibold text-amethyst shrink-0">
-                                    [{l.stage}]
-                                </span>
+            {/* 日志控制台：定高 5 行 + 框内滚动（日志增多不再顶高整卡），
+                滚动条样式见 App.css，新行自动贴底；完整日志去任务详情页看 */}
+            <div className="relative">
+                <div
+                    ref={logBoxRef}
+                    className="log-scroll h-[124px] overflow-y-auto rounded-lg border border-stroke-soft bg-bg-app px-4 py-2.5 flex flex-col gap-1.5"
+                >
+                    {logs.length === 0 && waiting ? (
+                        <p className="flex items-center gap-2 font-mono text-[11px]">
+                            <span className="font-semibold text-text-3">{waiting.title}</span>
+                            {waiting.detail && (
+                                <span className="text-text-3">{waiting.detail}</span>
                             )}
-                            <span
-                                className={cn(
-                                    "text-[11px] truncate",
-                                    LOG_LEVEL_COLOR[l.level ?? "info"]
-                                )}
-                            >
-                                {l.message}
-                            </span>
                         </p>
-                    ))
+                    ) : (
+                        logs.map((l, i) => (
+                            <p key={i} className="flex items-center gap-2 font-mono min-w-0 leading-[16px]">
+                                <span className="text-[10px] text-text-3 shrink-0">
+                                    {l.time ?? formatClock()}
+                                </span>
+                                {l.stage && (
+                                    <span className="text-[10px] font-semibold text-amethyst shrink-0">
+                                        [{l.stage}]
+                                    </span>
+                                )}
+                                <span
+                                    className={cn(
+                                        "text-[11px] truncate",
+                                        LOG_LEVEL_COLOR[l.level ?? "info"]
+                                    )}
+                                >
+                                    {l.message}
+                                </span>
+                            </p>
+                        ))
+                    )}
+                </div>
+                {logs.length > 0 && (
+                    <LogCopyButton
+                        variant="floating"
+                        logs={logs}
+                        header={clipHeader}
+                        className="absolute right-3 top-2.5 h-6 w-6 rounded-md border border-stroke-soft bg-surface text-text-3 hover:bg-surface-2 hover:text-text-1"
+                    />
                 )}
             </div>
         </section>

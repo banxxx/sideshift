@@ -1,6 +1,8 @@
 //! 转换方案生成：env 元数据优先，模组名启发式兜底；输出 PlanMod[] 与计数。
 
-use crate::core::parser::ParsedPack;
+use std::collections::HashSet;
+
+use crate::core::parser::{PackFile, ParsedPack};
 use crate::models::{LoaderKind, ModDisposition, PlanCounts, PlanMod};
 
 /// 客户端专属模组关键字（文件名小写子串匹配；仅在包内无 env 元数据时兜底）
@@ -73,6 +75,7 @@ pub fn build_plan(parsed: &ParsedPack, strip_client_only: bool) -> Vec<PlanMod> 
                 local_path: None,
                 pinned: None,
                 depends: Vec::new(),
+                src_path: Some(f.path.clone()),
             }
         })
         .collect();
@@ -113,6 +116,7 @@ pub fn build_plan(parsed: &ParsedPack, strip_client_only: bool) -> Vec<PlanMod> 
             local_path: None,
             pinned: None,
             depends: Vec::new(),
+            src_path: None,
         });
     }
     // 推荐项：服务端性能监控 spark
@@ -131,9 +135,32 @@ pub fn build_plan(parsed: &ParsedPack, strip_client_only: bool) -> Vec<PlanMod> 
             local_path: None,
             pinned: None,
             depends: Vec::new(),
+            src_path: None,
         });
     }
     plan
+}
+
+/// 方案行 → 包内条目下标：优先 src_path 精确锚定（同一 id 有多个文件时防张冠李戴），
+/// 回落「按文件名切 id + 先到先得」。构建 3.1 与预估共用，保证两侧取到同一个条目。
+pub fn match_pack_index(
+    files: &[PackFile],
+    row: &PlanMod,
+    used: &HashSet<usize>,
+) -> Option<usize> {
+    if let Some(p) = &row.src_path {
+        if let Some(i) = files
+            .iter()
+            .enumerate()
+            .position(|(i, f)| !used.contains(&i) && &f.path == p)
+        {
+            return Some(i);
+        }
+    }
+    files
+        .iter()
+        .enumerate()
+        .position(|(i, f)| !used.contains(&i) && split_mod_file(&f.file_name).0 == row.id)
 }
 
 pub fn count_plan(plan: &[PlanMod]) -> PlanCounts {

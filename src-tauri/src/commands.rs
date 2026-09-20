@@ -273,9 +273,25 @@ pub fn start_conversion(
     task_engine::create_task(&app, &state, options, manifest, plan)
 }
 
+/// 列表接口每条任务只带末尾这些行：进度事件到达时前端会全量重拉列表（Home 轨道取末 3 行、
+/// 任务行取末 1 行），而单任务日志上限是 600 行——多条任务全量搬运就是 MB 级载荷。
+/// 详情页与报告页走 getTask，仍是全量。
+const LIST_LOG_TAIL: usize = 8;
+
 #[tauri::command]
 pub fn list_tasks(state: S<'_>) -> Vec<ConversionTask> {
-    let mut v: Vec<ConversionTask> = lock(&state).tasks.values().cloned().collect();
+    let mut v: Vec<ConversionTask> = lock(&state)
+        .tasks
+        .values()
+        .cloned()
+        .map(|mut t| {
+            if t.logs.len() > LIST_LOG_TAIL {
+                let cut = t.logs.len() - LIST_LOG_TAIL;
+                t.logs.drain(..cut);
+            }
+            t
+        })
+        .collect();
     v.sort_by_key(|t| std::cmp::Reverse(t.created_at));
     v
 }
@@ -320,6 +336,8 @@ pub fn delete_task(app: AppHandle, state: S<'_>, id: String) {
     inner.plans.remove(&id);
     inner.cancel.remove(&id);
     task_engine::save_tasks(&app, &inner);
+    // 行都删了，暂存目录没有留下的理由
+    task_engine::remove_task_staging(&state, &id);
 }
 
 #[tauri::command]

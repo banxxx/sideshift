@@ -4,7 +4,7 @@
 
 use std::collections::HashSet;
 
-use crate::core::detector::split_mod_file;
+use crate::core::detector;
 use crate::core::downloader::{Downloader, Fetch, ItemSpec};
 use crate::core::parser::{self, ParsedPack};
 use crate::models::{ConversionOptions, DownloadEstimate, LoaderKind, ModDisposition, PlanMod};
@@ -71,11 +71,8 @@ pub async fn estimate(
             }
             continue;
         }
-        let matched = parsed
-            .mod_files
-            .iter()
-            .enumerate()
-            .find(|(i, f)| !used.contains(i) && split_mod_file(&f.file_name).0 == row.id);
+        let matched = detector::match_pack_index(&parsed.mod_files, row, &used)
+            .map(|i| (i, &parsed.mod_files[i]));
         if let Some((i, f)) = matched {
             used.insert(i);
             // 与构建一致：物理在包内 → 直取；仅残缺条目回落 URL

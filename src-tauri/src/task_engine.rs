@@ -2,7 +2,7 @@
 //! 阶段进度口径与前端 mock 引擎一致：parser≤15 · detector≤30 · downloader≤82 · builder≤100。
 
 use std::collections::{HashMap, HashSet};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
@@ -10,8 +10,8 @@ use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager};
 
 use crate::core::builder::{self, BuildInput};
-use crate::core::detector::{self, split_mod_file};
-use crate::core::downloader::{DownloadError, Downloader, Fetch, ItemSpec};
+use crate::core::detector;
+use crate::core::downloader::{DownloadError, Downloader, Fetch, FetchSource, ItemSpec};
 use crate::core::parser::{self, ParsedPack};
 use crate::models::*;
 
@@ -58,6 +58,7 @@ impl AppState {
             ..Default::default()
         };
         load_tasks(app, &mut inner);
+        sweep_task_staging(&inner);
         Self {
             inner: Mutex::new(inner),
         }
@@ -134,6 +135,8 @@ fn load_tasks(app: &AppHandle, inner: &mut Inner) {
             });
             t.finished_at = Some(now_ms());
         }
+        // 旧版本没有日志上限，存档里可能躺着几千行（曾把界面卡死）——回灌时就裁掉
+        trim_logs(&mut t.logs);
         inner.tasks.insert(id, t);
     }
     inner.plans = v.plans;
@@ -185,6 +188,9 @@ pub fn create_task(
         progress: 0,
         downloaded: None,
         total: None,
+        fetch: None,
+        net_done: None,
+        done_bytes: None,
         created_at: now_ms(),
         started_at: None,
         finished_at: None,
@@ -245,10 +251,32 @@ fn spawn_pipeline(app: &AppHandle, state: &Arc<AppState>, id: String) {
     let (a, s) = (app.clone(), state.clone());
     tauri::async_runtime::spawn(async move {
         run_pipeline(a.clone(), s.clone(), id.clone()).await;
+        // 失败与取消不走成功收尾，暂存目录统一在这里回收
+        remove_task_staging(&s, &id);
         if let Some(next) = release_and_next(&a, &s, &id) {
             spawn_pipeline(&a, &s, next);
         }
     });
+}
+
+/// 回收某个任务的暂存目录（cache/tasks/<id>），文件本体留在 cache/files 供跨任务复用
+pub fn remove_task_staging(state: &AppState, id: &str) {
+    let cache_dir = state.inner.lock().unwrap().settings.cache_dir.clone();
+    let _ = std::fs::remove_dir_all(PathBuf::from(cache_dir).join("tasks").join(id));
+}
+
+/// 启动回收：上次进程被强杀时来不及清理的暂存目录（注册表里已无此任务即删）
+fn sweep_task_staging(inner: &Inner) {
+    let dir = PathBuf::from(&inner.settings.cache_dir).join("tasks");
+    let Ok(entries) = std::fs::read_dir(&dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let name = entry.file_name().to_string_lossy().to_string();
+        if !inner.tasks.contains_key(&name) {
+            let _ = std::fs::remove_dir_all(entry.path());
+        }
+    }
 }
 
 pub fn cancel(app: &AppHandle, state: &Arc<AppState>, id: &str) {
@@ -262,7 +290,7 @@ pub fn cancel(app: &AppHandle, state: &Arc<AppState>, id: &str) {
                 t.status = TaskStatus::Cancelled;
                 t.finished_at = Some(now_ms());
                 let stage = t.stage.unwrap_or(PipelineStage::Parser);
-                t.logs.push(log_line(stage, LogLevel::Warn, "任务已被用户取消"));
+                push_line(t, log_line(stage, LogLevel::Warn, "任务已被用户取消"));
             }
         }
         save_tasks(app, &inner);
@@ -284,6 +312,33 @@ fn log_line(stage: PipelineStage, level: LogLevel, message: &str) -> TaskLogLine
         message: message.to_string(),
         level,
     }
+}
+
+/// 单任务日志上限：保留目录命中 kubejs/资源包这类目录时条目数以千计，日志不设上限会把
+/// tasks.json 撑到 MB 级、并让每次进度事件都全量搬运日志给前端 —— 实测 7340 行直接把界面卡死。
+/// 超限后只留最近这些条（含一条截断标记），复制与存档口径一致。
+const MAX_LOG_LINES: usize = 600;
+
+/// 超限时裁到最近 MAX_LOG_LINES 条，并在头部放一条截断说明（旧头已被裁掉，所以永远只有一条）
+fn trim_logs(logs: &mut Vec<TaskLogLine>) {
+    if logs.len() <= MAX_LOG_LINES {
+        return;
+    }
+    let stage = logs.last().map(|l| l.stage).unwrap_or(PipelineStage::Parser);
+    logs.drain(..logs.len() - (MAX_LOG_LINES - 1));
+    logs.insert(
+        0,
+        log_line(
+            stage,
+            LogLevel::Warn,
+            &format!("（日志过长，仅保留最近 {} 条）", MAX_LOG_LINES - 1),
+        ),
+    );
+}
+
+fn push_line(t: &mut ConversionTask, line: TaskLogLine) {
+    t.logs.push(line);
+    trim_logs(&mut t.logs);
 }
 
 fn emit_progress(app: &AppHandle, t: &ConversionTask) {
@@ -315,10 +370,218 @@ fn push_log(app: &AppHandle, state: &Arc<AppState>, id: &str, stage: PipelineSta
         state,
         id,
         |t| {
-            t.logs.push(log_line(stage, level, msg));
+            push_line(t, log_line(stage, level, msg));
         },
         true,
     );
+}
+
+/// 追加日志并更新任务：同一把锁、一次事件（日志与进度成对出现时用）
+fn log_update(app: &AppHandle, state: &Arc<AppState>, id: &str, stage: PipelineStage, level: LogLevel, msg: &str, f: impl FnOnce(&mut ConversionTask)) {
+    update(
+        app,
+        state,
+        id,
+        |t| {
+            push_line(t, log_line(stage, level, msg));
+            f(t);
+        },
+        true,
+    );
+}
+
+/// 离线取件的分组账本：整合包 / 本地 / 缓存条目成百上千，逐条打日志会同时打爆
+/// 进度事件（前端每事件刷一次列表）与 tasks.json 落盘 —— 这正是"取件慢"的一半成因。
+/// 口径改成一目录一条：按落位目录（模组 / 各保留目录）攒，取满该目录预设数量才出日志，
+/// 取的过程中只按间隔发「不含日志」的进度心跳，保证进度条持续走动。
+#[derive(Clone, Default)]
+struct GroupTally {
+    label: String,
+    /// 本目录应取件总数，建取件计划时按与回调同一套路由口径算出
+    expected: u32,
+    files: u32,
+    bytes: u64,
+    done: usize,
+    total: usize,
+    flushed: bool,
+}
+
+impl GroupTally {
+    fn new(label: String, expected: u32) -> Self {
+        Self { label, expected, ..Default::default() }
+    }
+}
+
+/// 分目录账本 + 进度心跳窗口（窗口起点记在结构体上，取走条目时不可连带清零）
+#[derive(Default)]
+struct FetchGroups {
+    rows: Vec<GroupTally>,
+    last_beat: Option<std::time::Instant>,
+}
+
+/// 距上次心跳超过这么久才推进度（日志仍只在目录取满时出）
+const BEAT_INTERVAL: std::time::Duration = std::time::Duration::from_millis(250);
+
+impl FetchGroups {
+    fn new(plan: Vec<(String, u32)>) -> Self {
+        Self {
+            rows: plan
+                .into_iter()
+                .map(|(label, expected)| GroupTally::new(label, expected))
+                .collect(),
+            last_beat: None,
+        }
+    }
+
+    /// 记一笔离线条目；返回 Some(快照) 表示该目录刚取满，应当出一条日志
+    fn record(&mut self, label: &str, bytes: u64, done: usize, total: usize) -> Option<GroupTally> {
+        if self.rows.iter().all(|r| r.label != label) {
+            // 计划外的落位（理论上到不了这里）：按单条目成组，取到即算完成
+            self.rows.push(GroupTally::new(label.to_string(), 1));
+        }
+        let r = self.rows.iter_mut().find(|r| r.label == label)?;
+        r.files += 1;
+        r.bytes += bytes;
+        r.done = done;
+        r.total = total;
+        if r.flushed || r.files < r.expected {
+            return None;
+        }
+        r.flushed = true;
+        Some(r.clone())
+    }
+
+    /// 兜底：整轮取件结束后，仍有进账却没出过日志的目录各补一条（预设数对不上时不至于静默）
+    fn pending(&mut self) -> Vec<GroupTally> {
+        let mut out = Vec::new();
+        for r in self.rows.iter_mut() {
+            if !r.flushed && r.files > 0 {
+                r.flushed = true;
+                out.push(r.clone());
+            }
+        }
+        out
+    }
+
+    /// 心跳是否该发，并在该发时重开窗口
+    fn beat_due(&mut self) -> bool {
+        let due = self
+            .last_beat
+            .map(|t| t.elapsed() >= BEAT_INTERVAL)
+            .unwrap_or(true);
+        if due {
+            self.last_beat = Some(std::time::Instant::now());
+        }
+        due
+    }
+}
+
+/// 分组完成日志（心跳日志同口径，只是不带完成结论）
+fn group_line(g: &GroupTally) -> String {
+    format!("取件 · {} · {} 个 · {}", g.label, g.files, fmt_size(g.bytes))
+}
+
+/// 该条目是否逐条上报。真正联网（未命中缓存）或重试过的才值得单列一条；
+/// 其余（包内 / 本地 / 缓存命中）都是磁盘搬运，按落位目录攒成一条。
+/// 建计划与取件回调共用此判定，两边口径不可能走偏。
+fn reports_per_line(network: bool, cached: bool, retries: u32) -> bool {
+    (network && !cached) || retries > 0
+}
+
+/// 分目录账本计划：每个落位目录预设取件多少条。
+/// 「是否入组」直接走 reports_per_line，与取件回调同源，两边口径不会走偏。
+fn group_plan_of(items: &[ItemSpec], staging: &Path, cached: &[bool]) -> Vec<(String, u32)> {
+    let mut plan: Vec<(String, u32)> = Vec::new();
+    for (it, c) in items.iter().zip(cached) {
+        if reports_per_line(matches!(&it.fetch, Fetch::Url(_)), *c, 0) {
+            continue;
+        }
+        let label = fetch_group_label(&it.dest, staging);
+        match plan.iter_mut().find(|(l, _)| *l == label) {
+            Some(g) => g.1 += 1,
+            None => plan.push((label, 1)),
+        }
+    }
+    plan
+}
+
+/// 落位路径 → 分组名：staging 下第一层目录就是一个取件目录（mods/ 说「模组」），
+/// 根下散件只有加载器 jar
+fn fetch_group_label(dest: &Path, staging: &Path) -> String {
+    let rel = dest.strip_prefix(staging).unwrap_or(dest);
+    let mut comps = rel.components();
+    let Some(first) = comps.next() else {
+        return "加载器".to_string();
+    };
+    if comps.next().is_none() {
+        return "加载器".to_string();
+    }
+    let name = first.as_os_str().to_string_lossy().to_lowercase();
+    if name == "mods" {
+        "模组".to_string()
+    } else {
+        name
+    }
+}
+
+fn apply_fetch_counts(
+    t: &mut ConversionTask,
+    done: usize,
+    total: usize,
+    net: &std::sync::atomic::AtomicU32,
+    bytes: &std::sync::atomic::AtomicU64,
+) {
+    t.downloaded = Some(done as u32);
+    t.total = Some(total as u32);
+    t.net_done = Some(net.load(Ordering::Relaxed));
+    t.done_bytes = Some(bytes.load(Ordering::Relaxed));
+    t.progress = 30 + (52 * done as u32).checked_div(total as u32).unwrap_or(0).max(1);
+}
+
+/// 兜底刷出仍未出过日志的分组：整轮取件成功结束后走一次，账本对不上时不至于静默
+fn flush_groups(
+    app: &AppHandle,
+    state: &Arc<AppState>,
+    id: &str,
+    groups: &Arc<Mutex<FetchGroups>>,
+    net: &Arc<std::sync::atomic::AtomicU32>,
+    bytes: &Arc<std::sync::atomic::AtomicU64>,
+) {
+    for g in groups.lock().unwrap().pending() {
+        let (net_u, bytes_u) = (net.clone(), bytes.clone());
+        log_update(
+            app,
+            state,
+            id,
+            PipelineStage::Downloader,
+            LogLevel::Info,
+            &group_line(&g),
+            move |t| apply_fetch_counts(t, g.done, g.total, &net_u, &bytes_u),
+        );
+    }
+}
+
+/// 人读体积（日志文案用；1MB = 1000KB 口径，与前端 formatSize 一致）
+fn fmt_size(bytes: u64) -> String {
+    const KB: f64 = 1000.0;
+    let b = bytes as f64;
+    if b >= KB * KB * KB {
+        format!("{:.2} GB", b / KB / KB / KB)
+    } else if b >= KB * KB {
+        format!("{:.1} MB", b / KB / KB)
+    } else if b >= KB {
+        format!("{:.0} KB", b / KB)
+    } else {
+        format!("{bytes} B")
+    }
+}
+
+/// 列表简述：最多 8 项，超出补「等 N 个」
+fn brief_list(items: &[String]) -> String {
+    if items.len() <= 8 {
+        return items.join("、");
+    }
+    format!("{}…等 {} 个", items[..8].join("、"), items.len())
 }
 
 fn is_active(state: &Arc<AppState>, id: &str) -> bool {
@@ -342,11 +605,14 @@ fn fail(app: &AppHandle, state: &Arc<AppState>, id: &str, error: TaskError) {
             t.status = TaskStatus::Failed;
             t.error = Some(error.clone());
             t.finished_at = Some(now_ms());
-            t.logs.push(log_line(
-                error.stage,
-                LogLevel::Error,
-                &format!("{} · {}", error.title, error.detail),
-            ));
+            push_line(
+                t,
+                log_line(
+                    error.stage,
+                    LogLevel::Error,
+                    &format!("{} · {}", error.title, error.detail),
+                ),
+            );
         },
         true,
     );
@@ -420,6 +686,26 @@ async fn run_pipeline(app: AppHandle, state: Arc<AppState>, id: String) {
             pack.file_name, parsed.manifest.mc_version
         ),
     );
+    // index 声明了 URL 但包内没字节的残缺条目才需要联网补取
+    let off_pack = parsed
+        .mod_files
+        .iter()
+        .chain(parsed.extra_files.iter())
+        .filter(|f| !f.in_pack && !f.url.is_empty())
+        .count();
+    push_log(
+        &app,
+        &state,
+        &id,
+        PipelineStage::Parser,
+        LogLevel::Info,
+        &format!(
+            "包内内容：模组 {} 个 · 其他文件 {} 个 · 需联网补取 {} 个",
+            parsed.mod_files.len(),
+            parsed.extra_files.len(),
+            off_pack
+        ),
+    );
     update(&app, &state, &id, |t| t.progress = 15, false);
     if !is_active(&state, &id) {
         return;
@@ -428,6 +714,11 @@ async fn run_pipeline(app: AppHandle, state: Arc<AppState>, id: String) {
     /* ---- 阶段 2 · detector ---- */
     update(&app, &state, &id, |t| t.stage = Some(PipelineStage::Detector), false);
     let counts = detector::count_plan(&plan);
+    let review: Vec<String> = plan
+        .iter()
+        .filter(|m| m.needs_review)
+        .map(|m| m.name.clone())
+        .collect();
     push_log(
         &app,
         &state,
@@ -436,6 +727,44 @@ async fn run_pipeline(app: AppHandle, state: Arc<AppState>, id: String) {
         LogLevel::Info,
         &format!("方案确认：剔除 {} · 保留 {} · 新增 {}", counts.remove, counts.keep, counts.add),
     );
+    let removed: Vec<String> = plan
+        .iter()
+        .filter(|m| m.disposition == ModDisposition::Remove)
+        .map(|m| m.name.clone())
+        .collect();
+    if !removed.is_empty() {
+        push_log(
+            &app,
+            &state,
+            &id,
+            PipelineStage::Detector,
+            LogLevel::Info,
+            &format!("剔除名单：{}", brief_list(&removed)),
+        );
+    }
+    for row in plan
+        .iter()
+        .filter(|m| m.auto_supplement && m.disposition != ModDisposition::Remove)
+    {
+        push_log(
+            &app,
+            &state,
+            &id,
+            PipelineStage::Detector,
+            LogLevel::Info,
+            &format!("自动补齐：{}（服务端运行所需）", row.name),
+        );
+    }
+    if !review.is_empty() {
+        push_log(
+            &app,
+            &state,
+            &id,
+            PipelineStage::Detector,
+            LogLevel::Warn,
+            &format!("待人工确认：{}（跨版本组件，服务端可能仍需）", brief_list(&review)),
+        );
+    }
     update(
         &app,
         &state,
@@ -494,11 +823,8 @@ async fn run_pipeline(app: AppHandle, state: Arc<AppState>, id: String) {
             });
             continue;
         }
-        let matched = parsed
-            .mod_files
-            .iter()
-            .enumerate()
-            .find(|(i, f)| !used_files.contains(i) && split_mod_file(&f.file_name).0 == row.id);
+        let matched = detector::match_pack_index(&parsed.mod_files, row, &used_files)
+            .map(|i| (i, &parsed.mod_files[i]));
         if let Some((i, f)) = matched {
             used_files.insert(i);
             // 物理在包内一律 ZipEntry 直取（mrpack index 几乎总带 URL，不能以 URL 定夺）；
@@ -565,17 +891,17 @@ async fn run_pipeline(app: AppHandle, state: Arc<AppState>, id: String) {
 
     // 3.2 用户在「客户端保留目录」卡勾选的目录（逻辑相对路径，任意层级），命中前缀的文件原样带入；
     // overrides/ 壳前缀剥离后匹配与落位（CF 格式内容映射到服务端根）
+    let mut kept_by_dir: HashMap<String, usize> = HashMap::new();
     for f in &parsed.extra_files {
         let rel = f.path.replace('\\', "/");
         let logical = parser::logical_rel(&rel);
         let lower = logical.to_lowercase();
-        let keep = options
+        let hit = options
             .keep_dirs
             .iter()
-            .any(|d| lower.starts_with(&format!("{}/", d.to_lowercase())));
-        if !keep {
-            continue;
-        }
+            .find(|d| lower.starts_with(&format!("{}/", d.to_lowercase())));
+        let Some(dir) = hit else { continue };
+        *kept_by_dir.entry(dir.clone()).or_default() += 1;
         let dest = staging.join(logical);
         let fetch = if f.in_pack || f.url.is_empty() {
             Fetch::ZipEntry {
@@ -592,6 +918,20 @@ async fn run_pipeline(app: AppHandle, state: Arc<AppState>, id: String) {
             dest,
             size_bytes: f.size_bytes,
         });
+    }
+    for dir in &options.keep_dirs {
+        let n = kept_by_dir.get(dir).copied().unwrap_or(0);
+        push_log(
+            &app,
+            &state,
+            &id,
+            PipelineStage::Downloader,
+            if n == 0 { LogLevel::Warn } else { LogLevel::Info },
+            &format!(
+                "保留目录 {dir} · {n} 个文件{}",
+                if n == 0 { "（包内无此目录，已跳过）" } else { "" }
+            ),
+        );
     }
 
     // 3.3 服务端加载器本体（loader_version 为空会拼出无效坐标——前端已拦截，这里兜底）
@@ -646,10 +986,55 @@ async fn run_pipeline(app: AppHandle, state: Arc<AppState>, id: String) {
         }
     }
 
+    let loader_jar = server_jar_name.clone().or(installer_jar_name.clone());
+    if let Some(jar) = &loader_jar {
+        push_log(
+            &app,
+            &state,
+            &id,
+            PipelineStage::Downloader,
+            LogLevel::Info,
+            &format!(
+                "服务端加载器：{jar}（{} {}）",
+                parsed.manifest.loader.as_label(),
+                options.loader_version
+            ),
+        );
+    }
+
     let total = items.len() as u32;
+    // 取件构成：只有「Fetch::Url 且未命中下载缓存」的条目真正走网络，
+    // 包内条目与本地 jar 零流量 —— 界面据此不再把全程称作假下载的「下载中」
+    let mut tally = FetchTally {
+        files: total,
+        ..Default::default()
+    };
+    // 缓存探测要重算 sha1（整文件读一遍），条目多时不能反复读盘：一次算完给统计和分组计划共用
+    let cached_flags: Vec<bool> = items.iter().map(|it| dl.is_cached(it)).collect();
+    for (it, cached) in items.iter().zip(&cached_flags) {
+        tally.bytes += it.size_bytes;
+        // 与 harvest 的分拣一致：命中缓存的条目走复制，不再解包
+        if *cached {
+            tally.cached_files += 1;
+        } else {
+            match &it.fetch {
+                Fetch::Url(_) => {
+                    tally.net_files += 1;
+                    tally.net_bytes += it.size_bytes;
+                }
+                Fetch::ZipEntry { .. } => tally.pack_files += 1,
+                Fetch::Local(_) => tally.local_files += 1,
+            }
+        }
+    }
+    // 离线条目的分目录账本计划（入组口径与取件回调同源）
+    let group_plan = group_plan_of(&items, &staging, &cached_flags);
     update(&app, &state, &id, |t| {
         t.total = Some(total);
         t.downloaded = Some(0);
+        t.fetch = Some(tally);
+        t.net_done = Some(0);
+        t.done_bytes = Some(0);
     }, false);
     push_log(
         &app,
@@ -657,12 +1042,30 @@ async fn run_pipeline(app: AppHandle, state: Arc<AppState>, id: String) {
         &id,
         PipelineStage::Downloader,
         LogLevel::Info,
-        &format!("准备下载 {total} 个文件 · 并发 {}", settings.concurrency),
+        &format!(
+            "取件计划 {total} 项 · 需联网 {}（≈{}）· 整合包 {} · 本地 {} · 缓存命中 {} · 并发 {}",
+            tally.net_files,
+            fmt_size(tally.net_bytes),
+            tally.pack_files,
+            tally.local_files,
+            tally.cached_files,
+            settings.concurrency
+        ),
     );
+    if tally.net_files == 0 {
+        push_log(
+            &app,
+            &state,
+            &id,
+            PipelineStage::Downloader,
+            LogLevel::Info,
+            "本次无需联网：全部文件来自整合包、本地文件或下载缓存",
+        );
+    }
 
-    let app2 = app.clone();
-    let state2 = state.clone();
-    let id2 = id.clone();
+    let net_actual = Arc::new(std::sync::atomic::AtomicU32::new(0));
+    let bytes_actual = Arc::new(std::sync::atomic::AtomicU64::new(0));
+    let (net_a, bytes_a) = (net_actual.clone(), bytes_actual.clone());
     let cancel = state
         .inner
         .lock()
@@ -671,29 +1074,99 @@ async fn run_pipeline(app: AppHandle, state: Arc<AppState>, id: String) {
         .get(&id)
         .cloned()
         .unwrap_or_else(|| Arc::new(AtomicBool::new(false)));
+    let groups = Arc::new(Mutex::new(FetchGroups::new(group_plan)));
+    let (app_f, state_f, id_f) = (app.clone(), state.clone(), id.clone());
+    let (groups_f, net_f, bytes_f) = (groups.clone(), net_actual.clone(), bytes_actual.clone());
+    let staging_f = staging.clone();
+    // 取消后 release_and_next 会把下一条排队任务标成 Running，届时 is_active(本 id)
+    // 这类「有没有 Running 行」的判断会误判为真，故回调自己盯取消标志
+    let cancel_flag = cancel.clone();
     let dl_result = dl
-        .download_all(items, cancel, move |done, tot| {
-            update(
-                &app2,
-                &state2,
-                &id2,
-                |t| {
-                    t.downloaded = Some(done as u32);
-                    t.total = Some(tot as u32);
-                    t.progress = 30 + (52 * done as u32).checked_div(tot as u32).unwrap_or(0).max(1);
-                },
-                true,
-            );
+        .download_all(items, cancel, move |done, tot, oc| {
+            if cancel_flag.load(Ordering::Relaxed) {
+                return;
+            }
+            let network = matches!(oc.source, FetchSource::Network);
+            net_a.fetch_add(if network && !oc.cached { 1 } else { 0 }, Ordering::Relaxed);
+            bytes_a.fetch_add(oc.bytes, Ordering::Relaxed);
+
+            // 真正联网（含重试）的条目值得逐条盯：量级只有几十到几百条
+            if reports_per_line(network, oc.cached, oc.retries) {
+                let verb = if oc.cached { "复用缓存" } else { "联网获取" };
+                let mut msg = format!("{verb} {} · {}", oc.file_name, fmt_size(oc.bytes));
+                if oc.retries > 0 {
+                    msg.push_str(&format!("（重试 {} 次后成功）", oc.retries));
+                }
+                let level = if oc.retries > 0 { LogLevel::Warn } else { LogLevel::Info };
+                let (net_u, bytes_u) = (net_f.clone(), bytes_f.clone());
+                log_update(
+                    &app_f,
+                    &state_f,
+                    &id_f,
+                    PipelineStage::Downloader,
+                    level,
+                    &msg,
+                    |t| apply_fetch_counts(t, done, tot, &net_u, &bytes_u),
+                );
+                return;
+            }
+
+            // 离线项：记进所属目录的账，取满预设数才出一条；没取满时只按间隔推进度、不写日志
+            let label = fetch_group_label(&oc.dest, &staging_f);
+            let done_snap = groups_f.lock().unwrap().record(&label, oc.bytes, done, tot);
+            match done_snap {
+                Some(g) => {
+                    let (net_u, bytes_u) = (net_f.clone(), bytes_f.clone());
+                    log_update(
+                        &app_f,
+                        &state_f,
+                        &id_f,
+                        PipelineStage::Downloader,
+                        LogLevel::Info,
+                        &group_line(&g),
+                        move |t| apply_fetch_counts(t, g.done, g.total, &net_u, &bytes_u),
+                    );
+                }
+                None => {
+                    if groups_f.lock().unwrap().beat_due() {
+                        let (net_u, bytes_u) = (net_f.clone(), bytes_f.clone());
+                        update(
+                            &app_f,
+                            &state_f,
+                            &id_f,
+                            |t| apply_fetch_counts(t, done, tot, &net_u, &bytes_u),
+                            true,
+                        );
+                    }
+                }
+            }
         })
         .await;
+    // 兜底只给「跑完了但账本没对上」的正常任务补行；取消/失败不补，
+    // 否则会把半截目录说成取件完成，还会覆写已取消任务的进度
+    if dl_result.is_ok() && is_active(&state, &id) {
+        flush_groups(&app, &state, &id, &groups, &net_actual, &bytes_actual);
+    }
     if let Err(e) = dl_result {
         map_download_error(&app, &state, &id, &e);
         return;
     }
     if !is_active(&state, &id) {
-        push_log(&app, &state, &id, PipelineStage::Downloader, LogLevel::Warn, "任务已取消，下载中止");
+        push_log(&app, &state, &id, PipelineStage::Downloader, LogLevel::Warn, "任务已取消，取件中止");
         return;
     }
+    push_log(
+        &app,
+        &state,
+        &id,
+        PipelineStage::Downloader,
+        LogLevel::Info,
+        &format!(
+            "取件完成 {total} 项 · 实际联网 {} 项 · 共取件 {}",
+            net_actual.load(Ordering::Relaxed),
+            fmt_size(bytes_actual.load(Ordering::Relaxed))
+        ),
+    );
     update(&app, &state, &id, |t| t.progress = 82, true);
 
     /* ---- 阶段 4 · builder ---- */
@@ -702,11 +1175,6 @@ async fn run_pipeline(app: AppHandle, state: Arc<AppState>, id: String) {
         t.progress = 84;
     }, true);
     let output_name = output_name_of(&pack.file_name);
-    let review: Vec<String> = plan
-        .iter()
-        .filter(|m| m.needs_review)
-        .map(|m| m.name.clone())
-        .collect();
     let readme = build_readme(&plan, &counts, &review, parsed.manifest.loader, &options.keep_dirs, options.agree_eula);
     let build_state = state.clone();
     let build_app = app.clone();
@@ -736,7 +1204,7 @@ async fn run_pipeline(app: AppHandle, state: Arc<AppState>, id: String) {
     })
     .await;
 
-    let (_out_path, size) = match build_result {
+    let built = match build_result {
         Ok(Ok(v)) => v,
         Ok(Err(e)) => {
             fail(&app, &state, &id, TaskError {
@@ -764,6 +1232,35 @@ async fn run_pipeline(app: AppHandle, state: Arc<AppState>, id: String) {
         }
     };
     /* ---- 成功收尾 ---- */
+    push_log(
+        &app,
+        &state,
+        &id,
+        PipelineStage::Builder,
+        LogLevel::Info,
+        &format!("生成包根文件：{}", brief_list(&built.generated)),
+    );
+    push_log(
+        &app,
+        &state,
+        &id,
+        PipelineStage::Builder,
+        LogLevel::Info,
+        &format!(
+            "打包 {} · {} 个文件 · {}",
+            output_name,
+            built.entries,
+            fmt_size(built.size)
+        ),
+    );
+    push_log(
+        &app,
+        &state,
+        &id,
+        PipelineStage::Builder,
+        LogLevel::Info,
+        &format!("输出路径 {}", built.path.display()),
+    );
     // zip 已在输出目录生成，暂存目录即刻回收（文件本体留在 cache/files 供跨任务复用）
     let _ = std::fs::remove_dir_all(&staging_path);
     let finished = now_ms();
@@ -778,12 +1275,15 @@ async fn run_pipeline(app: AppHandle, state: Arc<AppState>, id: String) {
         t.stage = Some(PipelineStage::Builder);
         t.finished_at = Some(finished);
         t.output_file_name = Some(output_name.clone());
-        t.output_size_bytes = Some(size);
-        t.logs.push(log_line(
-            PipelineStage::Builder,
-            LogLevel::Info,
-            &format!("打包完成 · {output_name}"),
-        ));
+        t.output_size_bytes = Some(built.size);
+        push_line(
+            t,
+            log_line(
+                PipelineStage::Builder,
+                LogLevel::Info,
+                &format!("打包完成 · {output_name}"),
+            ),
+        );
         let duration_sec = t
             .started_at
             .map(|s| ((finished - s) / 1000).max(1) as u64)
@@ -791,7 +1291,7 @@ async fn run_pipeline(app: AppHandle, state: Arc<AppState>, id: String) {
         let report = ConversionReport {
             task_id: id.clone(),
             output_file_name: output_name.clone(),
-            output_size_bytes: size,
+            output_size_bytes: built.size,
             duration_sec,
             removed: counts.remove,
             kept: counts.keep,
@@ -813,12 +1313,17 @@ fn map_download_error(app: &AppHandle, state: &Arc<AppState>, id: &str, e: &Down
             attempts,
             cause,
         } => (
-            "依赖下载失败".to_string(),
+            // attempts>0 才是真联网重试；包内/本地读失败不叫「下载失败」
+            if *attempts > 0 {
+                "联网下载失败".to_string()
+            } else {
+                "文件获取失败".to_string()
+            },
             format!("{file_name} — {cause}"),
             Some(*attempts),
         ),
         DownloadError::NotFound(s) => ("依赖解析失败".to_string(), s.clone(), None),
-        other => ("依赖下载失败".to_string(), other.to_string(), None),
+        other => ("取件失败".to_string(), other.to_string(), None),
     };
     fail(
         app,
@@ -906,4 +1411,158 @@ fn output_name_of(file_name: &str) -> String {
         .or_else(|| file_name.strip_suffix(".7z"))
         .unwrap_or(file_name);
     format!("{stem}-server.zip")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// 分组名口径：staging 第一层目录即一条日志的归属，mods/ 说「模组」，根下散件说「加载器」
+    #[test]
+    fn fetch_group_label_maps_dest_to_folder() {
+        let staging = PathBuf::from("/cache/tasks/t1/staging");
+        assert_eq!(fetch_group_label(&staging.join("mods").join("a.jar"), &staging), "模组");
+        assert_eq!(fetch_group_label(&staging.join("config").join("a.toml"), &staging), "config");
+        assert_eq!(
+            fetch_group_label(&staging.join("kubejs").join("client").join("x.js"), &staging),
+            "kubejs"
+        );
+        assert_eq!(fetch_group_label(&staging.join("fabric-server-launch.jar"), &staging), "加载器");
+        // 大小写不同的 Mods/ 归同一组
+        assert_eq!(fetch_group_label(&staging.join("Mods").join("a.jar"), &staging), "模组");
+    }
+
+    /// 只有「真联网」的条目逐条报：命中缓存的联网坐标、包内、本地条目一律归入目录账本
+    #[test]
+    fn only_real_network_reports_per_line() {
+        assert!(reports_per_line(true, false, 0), "未命中缓存的联网条目逐条报");
+        assert!(!reports_per_line(true, true, 0), "联网坐标命中缓存 → 走复制，入目录");
+        assert!(!reports_per_line(false, false, 0), "包内/本地 → 入目录");
+        assert!(reports_per_line(false, false, 2), "重试过就该看得见");
+    }
+
+    fn spec_at(fetch: Fetch, dest: PathBuf) -> ItemSpec {
+        ItemSpec {
+            file_name: dest
+                .file_name()
+                .map(|s| s.to_string_lossy().to_string())
+                .unwrap_or_default(),
+            sha1: None,
+            dest,
+            size_bytes: 10,
+            fetch,
+        }
+    }
+
+    /// 计划与回调同源：按 group_plan_of 的预设数走一遍回调路由，每个目录恰好出一条
+    #[test]
+    fn group_plan_matches_runtime_routing() {
+        let staging = PathBuf::from("/cache/tasks/t1/staging");
+        let archive = PathBuf::from("/pack.mrpack");
+        let items = vec![
+            spec_at(Fetch::ZipEntry { archive: archive.clone(), entry: "override/config/a.cfg".into() }, staging.join("config").join("a.cfg")),
+            spec_at(Fetch::ZipEntry { archive: archive.clone(), entry: "override/config/b.cfg".into() }, staging.join("config").join("b.cfg")),
+            spec_at(Fetch::Local(PathBuf::from("/local/a.jar")), staging.join("mods").join("a.jar")),
+            spec_at(Fetch::Url("https://m/1.jar".into()), staging.join("mods").join("1.jar")),
+            spec_at(Fetch::Url("https://m/2.jar".into()), staging.join("mods").join("2.jar")),
+            spec_at(Fetch::Url("https://dl/fabric.jar".into()), staging.join("fabric-server-launch.jar")),
+        ];
+        // 联网坐标里 mods/2.jar 与根下的服务端 jar 命中缓存 → 走复制，归入各自目录
+        let cached = [false, false, false, false, true, true];
+        let plan = group_plan_of(&items, &staging, &cached);
+        assert_eq!(
+            plan,
+            vec![("config".to_string(), 2u32), ("模组".to_string(), 2u32), ("加载器".to_string(), 1u32)]
+        );
+
+        let mut g = FetchGroups::new(plan);
+        let mut per_line = 0;
+        let mut group_lines = 0;
+        for (i, it) in items.iter().enumerate() {
+            let network = matches!(&it.fetch, Fetch::Url(_));
+            if reports_per_line(network, cached[i], 0) {
+                per_line += 1;
+                continue;
+            }
+            let label = fetch_group_label(&it.dest, &staging);
+            if g.record(&label, 10, i + 1, items.len()).is_some() {
+                group_lines += 1;
+            }
+        }
+        assert_eq!(per_line, 1, "只有未命中缓存的那个联网 jar 逐条报");
+        assert_eq!(group_lines, 3, "三个目录各一条");
+        assert!(g.pending().is_empty(), "计划与回调对得上时不该有兜底残留");
+    }
+
+    /// 一个目录只出一条：取满预设数才发，过程中只走心跳
+    #[test]
+    fn groups_emit_one_line_per_folder_when_full() {
+        let mut g = FetchGroups::new(vec![("模组".into(), 2), ("config".into(), 3)]);
+        assert!(g.record("模组", 10, 1, 5).is_none());
+        let snap = g.record("模组", 20, 2, 5).expect("取满 2 个应出一条");
+        assert_eq!(snap.files, 2);
+        assert_eq!(snap.bytes, 30);
+        assert_eq!(group_line(&snap), "取件 · 模组 · 2 个 · 30 B");
+        // 同目录再来一条（预设外的迟到项）不应重复出
+        assert!(g.record("模组", 99, 3, 5).is_none());
+        // 未取满的目录不出
+        assert!(g.record("config", 1, 4, 5).is_none());
+        assert!(g.record("config", 1, 5, 5).is_none());
+        assert!(g.record("config", 1, 6, 5).is_some());
+        // 兜底只补没出过的，且已出过的不再重复
+        let left = g.pending();
+        assert!(left.iter().all(|r| r.label != "模组"));
+
+        let mut g2 = FetchGroups::new(vec![("kubejs".into(), 100)]);
+        assert!(g2.record("kubejs", 5, 1, 100).is_none());
+        let left = g2.pending();
+        assert_eq!(left.len(), 1, "未取满的目录在整轮结束后要兜底补一条");
+        assert_eq!(left[0].files, 1);
+        assert!(g2.pending().is_empty(), "兜底刷出后不应重复");
+    }
+
+    /// 心跳：首次立即可发（进度条别等到取满才动），随后受间隔约束；
+    /// 窗口起点记在账本上，取条目/发日志都不该把它清空
+    #[test]
+    fn group_beat_throttles_progress_only_updates() {
+        let mut g = FetchGroups::new(vec![("config".into(), 9999)]);
+        assert!(g.beat_due(), "首次应立即可发，否则进度条会长时间不动");
+        assert!(!g.beat_due(), "间隔未到不应再发");
+        g.last_beat = Some(std::time::Instant::now() - BEAT_INTERVAL * 2);
+        assert!(g.beat_due(), "间隔已过应再发");
+    }
+
+    /// 日志环：超限只留最近 MAX_LOG_LINES 条，头部恰好一条截断说明
+    #[test]
+    fn log_ring_trims_to_recent_lines() {
+        let mut logs: Vec<TaskLogLine> = Vec::new();
+        for i in 0..(MAX_LOG_LINES + 250) {
+            logs.push(log_line(
+                PipelineStage::Downloader,
+                LogLevel::Info,
+                &format!("取件 · config · {i} 个"),
+            ));
+            trim_logs(&mut logs);
+            assert!(logs.len() <= MAX_LOG_LINES);
+        }
+        assert_eq!(logs.len(), MAX_LOG_LINES);
+        assert_eq!(
+            logs.iter().filter(|l| l.message.starts_with("（日志过长")).count(),
+            1,
+            "截断说明不应重复堆积"
+        );
+        assert!(logs[0].message.starts_with("（日志过长"));
+        assert_eq!(
+            logs.last().unwrap().message,
+            format!("取件 · config · {} 个", MAX_LOG_LINES + 249)
+        );
+    }
+
+    #[test]
+    fn unique_output_names_avoid_overwrite() {
+        let mut used = HashSet::new();
+        assert_eq!(unique_mod_name(&mut used, "a.jar", "m1"), "a.jar");
+        assert_eq!(unique_mod_name(&mut used, "a.jar", "m2"), "a-m2.jar");
+        assert_eq!(unique_mod_name(&mut used, "a-m2.jar", "m3"), "a-m2-m3.jar");
+    }
 }

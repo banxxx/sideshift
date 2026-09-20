@@ -72,6 +72,31 @@ pub struct PlanMod {
     /// 依赖的其他方案行 id（mrpack depends 解析所得，供反向依赖警告）
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub depends: Vec<String>,
+    /// 行 ↔ 包内条目的精确锚（detector 写入，前端原样回传）；
+    /// 同 id 多文件（如一个模组两个版本）时靠它锁定正确条目，缺省回落 id 顺序匹配
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub src_path: Option<String>,
+}
+
+/// 取件构成（阶段 3 计划确定后写入）：网络 / 包内 / 本地 / 缓存命中四类来源的诚实汇总。
+/// 旧字段 downloaded/total 仍是「全部条目」计数，net* 才是真联网量
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, Default)]
+#[serde(rename_all = "camelCase", default)]
+pub struct FetchTally {
+    /// 全部取件条目数
+    pub files: u32,
+    /// 全部条目字节（大小未知条目计 0）
+    pub bytes: u64,
+    /// 需联网条目数
+    pub net_files: u32,
+    /// 需联网字节
+    pub net_bytes: u64,
+    /// 包内直取条目数
+    pub pack_files: u32,
+    /// 本地文件复制条目数
+    pub local_files: u32,
+    /// 计划阶段就命中下载缓存的条目数（零流量、零解压）
+    pub cached_files: u32,
 }
 
 /// 用户在添加那一刻选定的 Modrinth 构建（与版本行一一对应，保证方案显示版本 = 实际下载版本）
@@ -225,6 +250,15 @@ pub struct ConversionTask {
     pub downloaded: Option<u32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub total: Option<u32>,
+    /// 取件构成（阶段 3 计划落定后写入）：界面据此区分「下载中」与「取件中」
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fetch: Option<FetchTally>,
+    /// 已完成的联网条目数（缓存命中不计）
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub net_done: Option<u32>,
+    /// 已取回字节（含包内/本地/缓存），供「已取 X MB」文案
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub done_bytes: Option<u64>,
     pub created_at: i64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub started_at: Option<i64>,

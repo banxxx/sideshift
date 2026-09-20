@@ -6,11 +6,49 @@
  * 取消=停在原地（不标错）。
  */
 import { Check, RefreshCw, X, type LucideIcon } from "lucide-react";
-import type { ConversionTask, PipelineStage, TaskStatus } from "@/lib/types";
+import type { ConversionTask, FetchTally, PipelineStage, TaskStatus } from "@/lib/types";
 import type { RailLog, RailStageStatus, RailTone } from "@/components/features/ShiftRail";
 import type { Tone } from "@/components/design/ui";
 
 const ORDER: PipelineStage[] = ["parser", "detector", "downloader", "builder"];
+
+/**
+ * 本条任务的取件是否真走网络。fetch 计划未落定（阶段 1–2、排队、旧存档）时保守按联网口径。
+ */
+export function needsNetwork(task: ConversionTask): boolean {
+    return task.fetch ? task.fetch.netFiles > 0 : true;
+}
+
+/**
+ * 阶段 3 计数口径：真联网时按「已下载/需联网」（本地件秒完成，计入会让进度条失真），
+ * 全程零流量时按「已取件/全部条目」。
+ */
+export function fetchCounts(task: ConversionTask): {
+    verb: string;
+    done: number;
+    total: number;
+} {
+    const f: FetchTally | undefined = task.fetch;
+    if (f && f.netFiles > 0)
+        return { verb: "下载", done: task.netDone ?? 0, total: f.netFiles };
+    return {
+        verb: f ? "取件" : "下载",
+        done: task.downloaded ?? 0,
+        total: task.total ?? 0,
+    };
+}
+
+/** 「下载 3/5」/「取件 12/14」——芯片与轨道标题共用的一行文案 */
+export function runLabel(task: ConversionTask): string {
+    const { verb, done, total } = fetchCounts(task);
+    return `${verb} ${done}/${total}`;
+}
+
+/** 只取计数部分（芯片已带动词时用，如「下载中 7/12」） */
+export function runCounts(task: ConversionTask): string {
+    const { done, total } = fetchCounts(task);
+    return `${done}/${total}`;
+}
 
 /** 任务状态 → 芯片文案/色调/图标（任务列表卡与任务详情页共用一套口径） */
 export const STATUS_META: Record<
@@ -37,6 +75,8 @@ export interface TaskRailView {
     statuses: Partial<Record<PipelineStage, RailStageStatus>>;
     status: { label: string; tone: RailTone };
     logs: RailLog[];
+    /** 站点副标题覆写（零联网任务：下载站如实写成整合包/本地取件） */
+    subs?: Partial<Record<PipelineStage, string>>;
     waiting?: { title: string; detail?: string };
 }
 
@@ -69,9 +109,9 @@ export function taskToRail(task: ConversionTask): TaskRailView {
                 : "gold";
     const label =
         task.status === "running"
-            ? task.downloaded != null && task.total != null && task.stage === "downloader"
-              ? `转换中 · 下载 ${task.downloaded}/${task.total}`
-              : `转换中 · ${stageLabel(task.stage ?? "parser")}`
+            ? task.stage === "downloader" && task.total != null
+              ? `转换中 · ${runLabel(task)}`
+              : `转换中 · ${stageLabel(task.stage ?? "parser", needsNetwork(task))}`
             : task.status === "queued"
               ? "排队中"
               : FINISHED_LABEL[task.status];
@@ -82,6 +122,7 @@ export function taskToRail(task: ConversionTask): TaskRailView {
         statuses,
         status: { label, tone },
         logs,
+        subs: needsNetwork(task) ? undefined : { downloader: "整合包与本地取件" },
         waiting: logs.length === 0 ? { title: "等待开始转换" } : undefined,
     };
 }
@@ -111,8 +152,12 @@ const FINISHED_LABEL: Record<string, string> = {
     cancelled: "已取消",
 };
 
-/** 阶段中文短名（芯片文案用，与设计稿"转换中 · 下载 41/146"口径一致） */
-export function stageLabel(stage: PipelineStage): string {
+/**
+ * 阶段中文短名（芯片文案用，与设计稿"转换中 · 下载 41/146"口径一致）。
+ * downloader 站点按是否真联网改口：零流量的包内/本地搬运叫「取件」，不叫「下载」
+ */
+export function stageLabel(stage: PipelineStage, net = true): string {
+    if (stage === "downloader" && !net) return "取件";
     return { parser: "解析", detector: "检测", downloader: "下载", builder: "构建" }[stage];
 }
 
@@ -123,9 +168,14 @@ export function stageLabel(stage: PipelineStage): string {
  * running 取当前阶段（"下载中"）+ 金底金字；failed = 灰底红字；cancelled = 灰底灰字；success = 绿底绿字。
  */
 export function progressChip(task: ConversionTask): { label: string; tone: Tone; plain: boolean } {
+    const net = needsNetwork(task);
     switch (task.status) {
         case "running":
-            return { label: `${stageLabel(task.stage ?? "parser")}中`, tone: "gold", plain: false };
+            return {
+                label: `${stageLabel(task.stage ?? "parser", net)}中`,
+                tone: "gold",
+                plain: false,
+            };
         case "queued":
             return { label: "排队中", tone: "muted", plain: true };
         case "failed":
@@ -146,16 +196,21 @@ export function stageTrack(task: ConversionTask): {
     next?: string;
 } {
     const idx = task.stage ? ORDER.indexOf(task.stage) : -1;
-    const next = idx >= 0 && idx < ORDER.length - 1 ? stageLabel(ORDER[idx + 1]) : undefined;
+    const net = needsNetwork(task);
+    const next =
+        idx >= 0 && idx < ORDER.length - 1 ? stageLabel(ORDER[idx + 1], net) : undefined;
     if (task.status === "success") return { current: { label: "构建完成", tone: "emerald" } };
     if (task.status === "failed")
         return {
-            current: { label: `${stageLabel(task.stage ?? "builder")}失败`, tone: "redstone" },
+            current: {
+                label: `${stageLabel(task.stage ?? "builder", net)}失败`,
+                tone: "redstone",
+            },
             next,
         };
     if (task.status === "cancelled") return { current: { label: "已取消", tone: "muted" }, next };
     return {
-        current: { label: stageLabel(task.stage ?? "parser"), tone: "gold" },
+        current: { label: stageLabel(task.stage ?? "parser", net), tone: "gold" },
         next,
     };
 }

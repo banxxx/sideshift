@@ -19,20 +19,38 @@ import { notify } from "@/lib/notify";
 import { useNavigation } from "@/lib/navigation";
 import {
     BAR_COLOR,
+    fetchCounts,
+    needsNetwork,
     progressChip,
     stageLabel,
     stageTrack,
     toneDot,
     toneText,
 } from "@/lib/rail-view";
-import { formatClock, formatDuration, loaderLabel, outputNameOf, truncateMiddle } from "@/lib/format";
+import {
+    formatClock,
+    formatDuration,
+    formatSize,
+    loaderLabel,
+    outputNameOf,
+    truncateMiddle,
+} from "@/lib/format";
 import type { ConversionTask } from "@/lib/types";
 import { TaskErrorCard } from "@/components/features/TaskErrorCard";
+import { LogCopyButton } from "@/components/features/LogCopyButton";
 import { Bar, Btn, Divider, InfoRow, PageHeader, Panel, PanelHead, ToneChip } from "@/components/design/ui";
+import { useLogFollow } from "@/lib/log-view";
 import { cn } from "@/lib/utils";
 
 /** HH:MM（设计稿时间口径，不含秒） */
 const hm = (t: number) => formatClock(t).slice(0, 5);
+
+/**
+ * 日志渲染条数上限：后端已按窗口聚合并截断到 600 行，这里再钉一道渲染上限，
+ * 保证 DOM 行数与日志量脱钩（一次转换曾产生 7300+ 行，全量渲染直接把窗口卡死）。
+ * 复制按钮仍走全量 `task.logs`。
+ */
+const LOG_RENDER_CAP = 400;
 
 export function TaskDetailPage() {
     const { entry, navigate, switchPrimary } = useNavigation();
@@ -42,6 +60,7 @@ export function TaskDetailPage() {
     const [missing, setMissing] = useState(false);
     const [copied, setCopied] = useState(false);
     const logRef = useRef<HTMLDivElement>(null);
+    useLogFollow(logRef, task?.logs.length ?? 0);
 
     // 自调度轮询：运行/排队中每 800ms 拉一次快照，进入终态即停；taskId 变化（重试跳转）重新起表
     useEffect(() => {
@@ -102,6 +121,8 @@ export function TaskDetailPage() {
     const started = task.startedAt ?? task.createdAt;
     const elapsed = (task.finishedAt ?? Date.now()) - started;
     const lastLog = task.logs[task.logs.length - 1];
+    const hiddenLogs = Math.max(0, task.logs.length - LOG_RENDER_CAP);
+    const visibleLogs = hiddenLogs > 0 ? task.logs.slice(-LOG_RENDER_CAP) : task.logs;
     const counts = task.counts;
     const packName = truncateMiddle(
         task.pack.fileName.replace(/\.(mrpack|zip|7z)$/i, ""),
@@ -226,19 +247,33 @@ export function TaskDetailPage() {
                         </div>
                     </Panel>
 
-                    {/* ---- 日志 ---- */}
+                    {/* ---- 日志：定高 260 + 框内滚动，卡高不随日志条数变化 ---- */}
                     <Panel gap={12}>
-                        <PanelHead title="日志" />
+                        <PanelHead
+                            title="日志"
+                            right={
+                                <LogCopyButton
+                                    logs={task.logs}
+                                    header={`SideShift 日志 · ${task.pack.fileName} · ${task.id}`}
+                                />
+                            }
+                        />
                         <div
                             ref={logRef}
-                            className="flex max-h-[260px] w-full flex-col gap-1 overflow-auto rounded-lg bg-surface-2 p-3"
+                            className="log-scroll flex h-[260px] w-full flex-col gap-1 overflow-y-auto rounded-lg bg-surface-2 p-3"
                         >
                             {task.logs.length === 0 && (
                                 <span className="font-mono text-[10px] leading-[14px] text-text-3">
                                     等待开始转换…
                                 </span>
                             )}
-                            {task.logs.map((l, i) => (
+                            {hiddenLogs > 0 && (
+                                <span className="font-mono text-[10px] leading-[14px] text-text-3">
+                                    （仅显示最近 {LOG_RENDER_CAP} 条 · 已省略 {hiddenLogs} 条，复制可取全部{" "}
+                                    {task.logs.length} 条）
+                                </span>
+                            )}
+                            {visibleLogs.map((l, i) => (
                                 <div key={i} className="flex w-full gap-2">
                                     <span className="shrink-0 font-mono text-[10px] leading-[14px] font-normal text-amethyst">
                                         [{l.stage}]
@@ -350,17 +385,25 @@ function subLine(task: ConversionTask, elapsed: number): string {
     }
 }
 
-/** 进度卡第一行左侧：阶段级摘要 */
+/**
+ * 进度卡第一行左侧：阶段级摘要。
+ * 取件阶段按真实来源分流——真联网叫「下载 已联网/需联网」，
+ * 包内/本地/缓存零流量的叫「取件 已完成/全部」并标注无需联网
+ */
 function progressHeadline(task: ConversionTask): string {
-    const dl =
-        task.downloaded != null && task.total != null
-            ? `${task.downloaded} / ${task.total} 个文件`
-            : "";
-    if (task.status === "failed") return dl ? `依赖下载中断于 ${dl}` : `${stageLabel(task.stage ?? "builder")}阶段中断`;
-    if (task.status === "cancelled") return dl ? `用户取消于 ${dl}` : "用户取消任务";
-    if (task.status === "success") return `构建完成 · 输出 ${task.outputFileName ?? outputNameOf(task.pack.fileName)}`;
-    if (task.stage === "downloader" && dl) return `依赖下载 ${dl}`;
-    return `${stageLabel(task.stage ?? "parser")}阶段进行中`;
+    const net = needsNetwork(task);
+    const { verb, done, total } = fetchCounts(task);
+    const n = task.total != null ? `${done} / ${total} 个文件` : "";
+    const taken =
+        task.doneBytes != null && task.doneBytes > 0 ? ` · 已取 ${formatSize(task.doneBytes)}` : "";
+    if (task.status === "failed")
+        return n ? `${verb}中断于 ${n}` : `${stageLabel(task.stage ?? "builder", net)}阶段中断`;
+    if (task.status === "cancelled") return n ? `用户取消于 ${n}` : "用户取消任务";
+    if (task.status === "success")
+        return `构建完成 · 输出 ${task.outputFileName ?? outputNameOf(task.pack.fileName)}`;
+    if (task.stage === "downloader" && n)
+        return `${verb === "下载" ? "依赖" : "文件"}${verb} ${n}${taken}${net ? "" : " · 无需联网"}`;
+    return `${stageLabel(task.stage ?? "parser", net)}阶段进行中`;
 }
 
 /** 进度卡第二行右侧：错误码 / 取消 / 耗时 */

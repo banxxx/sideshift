@@ -55,6 +55,9 @@ const ACTIVE: ConversionTask["status"][] = ["queued", "running"];
 export function useActiveTask() {
     const [active, setActive] = useState<ConversionTask | null>(null);
     const alive = useRef(true);
+    // 进度事件合并窗：一次转换可以打出成百上千条日志，逐事件全量拉任务列表
+    // （含日志数组）会直接把 webview 打满——实测 7000+ 事件时整个应用卡死
+    const pendingEvent = useRef(false);
 
     const refresh = useCallback(async () => {
         // Phase 2 之前 Rust 侧还没有 list_tasks，Tauri 下会 reject；
@@ -71,12 +74,21 @@ export function useActiveTask() {
         setActive(running ?? sorted.find((t) => t.status !== "queued") ?? null);
     }, []);
 
+    const scheduleRefresh = useCallback(() => {
+        if (pendingEvent.current) return;
+        pendingEvent.current = true;
+        window.setTimeout(() => {
+            pendingEvent.current = false;
+            void refresh();
+        }, 250);
+    }, [refresh]);
+
     useEffect(() => {
         alive.current = true;
         refresh();
-        // 进度事件到达时立刻拉一次最新快照（事件载荷只带增量，任务整体以 listTasks 为准）
+        // 进度事件到达时合并拉一次最新快照（事件载荷只带增量，任务整体以 listTasks 为准）
         let unlisten: (() => void) | undefined;
-        api.onProgress(() => void refresh()).then((fn) => {
+        api.onProgress(scheduleRefresh).then((fn) => {
             unlisten = fn;
         });
         // 轮询兜底：mock 引擎推进、任务完成态切换
@@ -86,7 +98,7 @@ export function useActiveTask() {
             unlisten?.();
             window.clearInterval(timer);
         };
-    }, [refresh]);
+    }, [refresh, scheduleRefresh]);
 
     return { active, refresh };
 }

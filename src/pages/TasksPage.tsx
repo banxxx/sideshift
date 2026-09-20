@@ -13,7 +13,7 @@ import { useEffect, useState } from "react";
 import * as api from "@/lib/api";
 import { notify } from "@/lib/notify";
 import { useNavigation } from "@/lib/navigation";
-import { BAR_COLOR, progressChip, stageLabel } from "@/lib/rail-view";
+import { BAR_COLOR, needsNetwork, progressChip, runCounts, stageLabel } from "@/lib/rail-view";
 import { formatDuration, formatElapsed, formatSize, loaderLabel, outputNameOf, truncateMiddle } from "@/lib/format";
 import type { ConversionTask, TaskStatus } from "@/lib/types";
 import { Bar, Btn, PageHeader, Panel, SegTabs, ToneChip } from "@/components/design/ui";
@@ -284,7 +284,8 @@ function TaskCard({ task }: { task: ConversionTask }) {
 function subLine(task: ConversionTask, outName: string): string {
     if (task.status === "failed") {
         return `→ ${loaderLabel(task.pack.loader)} ${task.options.mcVersion} · 中断于${stageLabel(
-            task.stage ?? "builder"
+            task.stage ?? "builder",
+            needsNetwork(task)
         )}阶段`;
     }
     if (task.status === "success" && task.outputSizeBytes != null) {
@@ -293,10 +294,10 @@ function subLine(task: ConversionTask, outName: string): string {
     return `→ ${outName}`;
 }
 
-/** 状态芯片文案：下载阶段追加 "7/12" 计数（设计稿 "下载中 7/12"） */
+/** 状态芯片文案：取件阶段追加 "7/12" 计数（联网任务按「已下载/需联网」，纯本地按「已取件/全部」） */
 function chipLabel(task: ConversionTask, base: string): string {
-    if (task.status === "running" && task.stage === "downloader" && task.downloaded != null && task.total != null) {
-        return `${base} ${task.downloaded}/${task.total}`;
+    if (task.status === "running" && task.stage === "downloader" && task.total != null) {
+        return `${base} ${runCounts(task)}`;
     }
     return base;
 }
@@ -305,12 +306,12 @@ function chipLabel(task: ConversionTask, base: string): string {
 function detailLine(task: ConversionTask): string {
     if (task.status === "running" || task.status === "queued") {
         const last = task.logs[task.logs.length - 1]?.message;
-        const where = task.stage ? `${stageLabel(task.stage)} ·` : "排队 ·";
+        const where = task.stage ? `${stageLabel(task.stage, needsNetwork(task))} ·` : "排队 ·";
         return [where, last ?? "等待开始…"].filter(Boolean).join(" ");
     }
     if (task.status === "success") {
         const c = task.counts;
         return c ? `剔除 ${c.remove} 个客户端专属模组 · 补齐 ${c.add} 个服务端依赖` : "转换完成";
     }
-    return "任务已取消 · 已下载文件保留在缓存";
+    return "任务已取消 · 已取回的文件保留在下载缓存";
 }

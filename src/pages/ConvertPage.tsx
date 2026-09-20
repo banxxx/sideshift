@@ -837,8 +837,10 @@ export function ConvertPage() {
                         <CountRow label="新增服务端模组" count={counts.add} tone="accent" />
                         <Divider />
                         <NoteRow icon={Download}>
-                            预计下载 {formatSize(estimate.downloadBytes)}
-                            {!estimate.complete && "（估算）"}
+                            {estimate.downloadBytes > 0
+                                ? `预计下载 ${formatSize(estimate.downloadBytes)}`
+                                : "无需联网下载 · 全部来自整合包与本地"}
+                            {!estimate.complete && estimate.downloadBytes > 0 && "（估算）"}
                         </NoteRow>
                         <NoteRow icon={Archive}>输出 {outputNameOf(manifest.fileName)}</NoteRow>
                         <NoteRow icon={Folder}>
