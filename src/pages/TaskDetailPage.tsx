@@ -35,9 +35,10 @@ import {
     outputNameOf,
     truncateMiddle,
 } from "@/lib/format";
-import type { ConversionTask } from "@/lib/types";
+import type { ActivityInfo, ConversionTask } from "@/lib/types";
 import { TaskErrorCard } from "@/components/features/TaskErrorCard";
 import { LogCopyButton } from "@/components/features/LogCopyButton";
+import { ActivitySubBar, activityMeasure } from "@/components/features/ActivityBar";
 import { Bar, Btn, Divider, InfoRow, PageHeader, Panel, PanelHead, ToneChip } from "@/components/design/ui";
 import { useLogFollow } from "@/lib/log-view";
 import { cn } from "@/lib/utils";
@@ -59,8 +60,29 @@ export function TaskDetailPage() {
     const [task, setTask] = useState<ConversionTask | null>(null);
     const [missing, setMissing] = useState(false);
     const [copied, setCopied] = useState(false);
+    /** 实时条数据源：进度事件比 800ms 轮询密一个量级，轮询到的快照作为兜底覆写 */
+    const [activity, setActivity] = useState<ActivityInfo | undefined>(undefined);
     const logRef = useRef<HTMLDivElement>(null);
     useLogFollow(logRef, task?.logs.length ?? 0);
+
+    // 事件流只喂实时条：日志/阶段等仍以轮询快照为准，避免两套状态互相覆写
+    const eventsLive = useRef(false);
+    useEffect(() => {
+        let alive = true;
+        let unsub: (() => void) | undefined;
+        void api.onProgress((e) => {
+            if (e.taskId !== taskId) return;
+            eventsLive.current = true;
+            setActivity(e.activity);
+        }).then((fn) => {
+            if (alive) unsub = fn;
+            else fn();
+        });
+        return () => {
+            alive = false;
+            unsub?.();
+        };
+    }, [taskId]);
 
     // 自调度轮询：运行/排队中每 800ms 拉一次快照，进入终态即停；taskId 变化（重试跳转）重新起表
     useEffect(() => {
@@ -78,6 +100,8 @@ export function TaskDetailPage() {
                 return;
             }
             setTask({ ...t });
+            // 拿不到事件流的环境（浏览器 mock / 订阅失败）用快照喂实时条
+            if (!eventsLive.current) setActivity(t.activity);
             if (t.status === "running" || t.status === "queued") {
                 timer = window.setTimeout(() => void tick(), 800);
             }
@@ -121,6 +145,8 @@ export function TaskDetailPage() {
     const started = task.startedAt ?? task.createdAt;
     const elapsed = (task.finishedAt ?? Date.now()) - started;
     const lastLog = task.logs[task.logs.length - 1];
+    /** 当前动作只在运行中有意义：终态下事件里的残值不该再画子条 */
+    const act = task.status === "running" ? activity : undefined;
     const hiddenLogs = Math.max(0, task.logs.length - LOG_RENDER_CAP);
     const visibleLogs = hiddenLogs > 0 ? task.logs.slice(-LOG_RENDER_CAP) : task.logs;
     const counts = task.counts;
@@ -198,7 +224,11 @@ export function TaskDetailPage() {
                                 </ToneChip>
                             }
                         />
-                        <Bar percent={task.progress} fillClass={BAR_COLOR[task.status]} />
+                        {/* 父子两条一组：粗=整包总进度（阶段加权，分钟级），细=当前动作（秒级字节量） */}
+                        <div className="flex w-full flex-col gap-1.5">
+                            <Bar percent={task.progress} fillClass={BAR_COLOR[task.status]} />
+                            <ActivitySubBar activity={act} />
+                        </div>
 
                         <div className="flex w-full justify-between gap-3">
                             <span className="text-[12px] leading-[18px] font-medium text-text-1">
@@ -208,17 +238,30 @@ export function TaskDetailPage() {
                                 {task.progress}%
                             </span>
                         </div>
+                        {/* 第二行：有当前动作时是「正在弄哪个文件」，否则回落最后一条日志 */}
                         <div className="flex w-full justify-between gap-3">
-                            <span className="truncate font-mono text-[11px] leading-[16px] font-normal text-text-3">
-                                {lastLog?.message ?? "等待日志…"}
+                            <span
+                                title={act?.subject}
+                                className={cn(
+                                    "min-w-0 flex-1 truncate font-mono text-[11px] leading-[16px] font-normal",
+                                    act ? "text-text-2" : "text-text-3"
+                                )}
+                            >
+                                {act
+                                    ? `${act.kind === "net" ? "下载" : "打包"} · ${act.subject}`
+                                    : (lastLog?.message ?? "等待日志…")}
                             </span>
                             <span
                                 className={cn(
-                                    "shrink-0 font-mono text-[11px] leading-[16px] font-normal",
-                                    task.status === "failed" ? "text-redstone" : "text-text-3"
+                                    "shrink-0 font-mono text-[11px] leading-[16px] font-normal tabular-nums",
+                                    act?.attempt && act.attempt > 1
+                                        ? "text-gold"
+                                        : task.status === "failed"
+                                          ? "text-redstone"
+                                          : "text-text-3"
                                 )}
                             >
-                                {progressAside(task, elapsed)}
+                                {act ? activityMeasure(act) : progressAside(task, elapsed)}
                             </span>
                         </div>
 

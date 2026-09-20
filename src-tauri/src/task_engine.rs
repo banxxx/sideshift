@@ -9,9 +9,11 @@ use std::sync::{Arc, Mutex};
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager};
 
-use crate::core::builder::{self, BuildInput};
+use crate::core::builder::{self, BuildEvent, BuildInput};
 use crate::core::detector;
-use crate::core::downloader::{DownloadError, Downloader, Fetch, FetchSource, ItemSpec};
+use crate::core::downloader::{
+    DownloadError, Downloader, Fetch, FetchSource, ItemSpec, TransferProgress,
+};
 use crate::core::parser::{self, ParsedPack};
 use crate::models::*;
 
@@ -191,12 +193,14 @@ pub fn create_task(
         fetch: None,
         net_done: None,
         done_bytes: None,
+        activity: None,
         created_at: now_ms(),
         started_at: None,
         finished_at: None,
         error: None,
         counts: None,
         output_file_name: None,
+        output_path: None,
         output_size_bytes: None,
         logs: Vec::new(),
     };
@@ -222,6 +226,59 @@ pub fn create_task(
 
 /// 独占槽位交接点：流水线退出（成功/失败/取消皆如此）后拉起队首排队任务。
 /// 返回 Some(next_id) 表示调用方需 spawn
+/// 原地重试：复用同一 id 与同一份方案，重置运行态后重新排队。
+/// 复用 id 才认得上一次的产物（outputPath）——同名时覆写自己那份，而不是每重试一次就多一个序号包。
+pub fn retry_task(app: &AppHandle, state: &Arc<AppState>, id: &str) -> Option<StartResult> {
+    let queued = {
+        let mut inner = state.inner.lock().unwrap();
+        let t = inner.tasks.get_mut(id)?;
+        // 已在跑/已在队：不重复拉起，把现状原样回给前端
+        if matches!(t.status, TaskStatus::Queued | TaskStatus::Running) {
+            return Some(StartResult {
+                task_id: id.to_string(),
+                queued: inner.current.as_deref() != Some(id),
+            });
+        }
+        t.status = TaskStatus::Queued;
+        t.stage = None;
+        t.progress = 0;
+        t.error = None;
+        t.activity = None;
+        t.started_at = None;
+        t.finished_at = None;
+        t.downloaded = None;
+        t.net_done = None;
+        t.done_bytes = None;
+        t.output_file_name = None;
+        t.output_size_bytes = None;
+        // 排队顺序按创建时间排，重试要顺延到队尾
+        t.created_at = now_ms();
+        push_line(
+            t,
+            log_line(
+                PipelineStage::Parser,
+                LogLevel::Info,
+                "重新排队：沿用上次方案（日志保留上一轮的记录）",
+            ),
+        );
+        // 取消标志必须复位，否则新一轮每个回调都会被它拦死
+        if let Some(flag) = inner.cancel.get(id) {
+            flag.store(false, Ordering::Relaxed);
+        }
+        save_tasks(app, &inner);
+        if inner.current.is_some() {
+            true
+        } else {
+            inner.current = Some(id.to_string());
+            false
+        }
+    };
+    if !queued {
+        spawn_pipeline(app, state, id.to_string());
+    }
+    Some(StartResult { task_id: id.to_string(), queued })
+}
+
 fn release_and_next(app: &AppHandle, state: &Arc<AppState>, done_id: &str) -> Option<String> {
     let next = {
         let mut inner = state.inner.lock().unwrap();
@@ -289,6 +346,7 @@ pub fn cancel(app: &AppHandle, state: &Arc<AppState>, id: &str) {
             if matches!(t.status, TaskStatus::Queued | TaskStatus::Running) {
                 t.status = TaskStatus::Cancelled;
                 t.finished_at = Some(now_ms());
+                t.activity = None;
                 let stage = t.stage.unwrap_or(PipelineStage::Parser);
                 push_line(t, log_line(stage, LogLevel::Warn, "任务已被用户取消"));
             }
@@ -349,6 +407,7 @@ fn emit_progress(app: &AppHandle, t: &ConversionTask) {
         downloaded: t.downloaded,
         total: t.total,
         log: t.logs.last().cloned(),
+        activity: t.activity.clone(),
     };
     let _ = app.emit(EVENT_PROGRESS, ev);
 }
@@ -561,6 +620,155 @@ fn flush_groups(
     }
 }
 
+/* ---------------- 当前动作（实时条，不进日志环） ---------------- */
+
+/// 实时条最小重绘间隔：进度事件一次要全量刷 UI，逐块发会把界面烧穿
+/// （日志量级 = 前端性能预算，同理适用于 activity）
+const ACTIVITY_WINDOW: std::time::Duration = std::time::Duration::from_millis(150);
+
+/// 联网传输的实时账本：reqwest 每个响应块回调一次，比日志密两个数量级，
+/// 这里只累加字节，到窗口点才产出一条 ActivityInfo 随进度事件下发。
+/// 锁顺序固定为「先本账本、后任务表」，且任务表回调里不得回头锁账本（防互锁）。
+#[derive(Default)]
+struct NetActivity {
+    /// dest → (文件名, 已收, 该响应 Content-Length)：只装进行中的条目，收完即结算移出
+    inflight: HashMap<PathBuf, (String, u64, u64)>,
+    /// 已完成联网条目的字节
+    settled: u64,
+    /// 已完成条目里 Content-Length 已知的那部分（计划没给量时用它兜底）
+    settled_known: u64,
+    /// 计划口径：需联网总字节 / 总条数（建计划时算好，整轮不变）
+    planned_bytes: u64,
+    items_total: u32,
+    subject: String,
+    attempt: u32,
+    last_emit: Option<std::time::Instant>,
+    last_bytes: u64,
+    rate: f64,
+}
+
+impl NetActivity {
+    fn new(planned_bytes: u64, items_total: u32) -> Self {
+        Self { planned_bytes, items_total, ..Default::default() }
+    }
+
+    fn done(&self) -> u64 {
+        self.settled + self.inflight.values().map(|(_, d, _)| *d).sum::<u64>()
+    }
+
+    /// 分母优先取计划量（含还没开跑的条目），计划没给数才退回 Content-Length 累加
+    fn total(&self) -> u64 {
+        if self.planned_bytes > 0 {
+            return self.planned_bytes;
+        }
+        self.settled_known + self.inflight.values().map(|(_, _, t)| *t).sum::<u64>()
+    }
+
+    fn snapshot(&self, items_done: u32) -> ActivityInfo {
+        ActivityInfo {
+            kind: ActivityKind::Net,
+            subject: self.subject.clone(),
+            done_bytes: self.done(),
+            total_bytes: self.total(),
+            items_done,
+            items_total: self.items_total,
+            rate_bps: self.rate,
+            attempt: self.attempt.max(1),
+        }
+    }
+
+    /// 记一个响应块；返回 Some(info) 表示到出图点了。速率按两次出图之间的字节差算，
+    /// 再做一点平滑，免得采样窗口边界上数字乱跳
+    fn record(&mut self, p: &TransferProgress, items_done: u32) -> Option<ActivityInfo> {
+        let e = self
+            .inflight
+            .entry(p.key.clone())
+            .or_insert_with(|| (p.file_name.clone(), 0, 0));
+        e.1 = p.done;
+        e.2 = p.total;
+        self.subject = p.file_name.clone();
+        self.attempt = p.attempt;
+        let now = std::time::Instant::now();
+        let due = self
+            .last_emit
+            .map(|t| now.duration_since(t) >= ACTIVITY_WINDOW)
+            .unwrap_or(true);
+        let done = self.done();
+        if let Some(prev) = self.last_emit {
+            let dt = now.duration_since(prev).as_secs_f64();
+            if dt > 0.0 {
+                let inst = done.saturating_sub(self.last_bytes) as f64 / dt;
+                self.rate = if self.rate > 0.0 { self.rate * 0.7 + inst * 0.3 } else { inst };
+            }
+        }
+        if !due {
+            return None;
+        }
+        self.last_emit = Some(now);
+        self.last_bytes = done;
+        Some(self.snapshot(items_done))
+    }
+
+    /// 一条收完：从在飞集合结算。集合里没有的说明是缓存命中（零传输），不计
+    fn settle(&mut self, key: &Path, bytes: u64) {
+        if let Some((_, _, known)) = self.inflight.remove(key) {
+            self.settled += bytes;
+            self.settled_known += known;
+        }
+    }
+}
+
+/// 打包实时账本：ZipWriter 每写一个文件回调一次，口径与联网侧一致
+#[derive(Default)]
+struct ZipActivity {
+    files_total: u32,
+    files_done: u32,
+    bytes_total: u64,
+    bytes_done: u64,
+    subject: String,
+    started: Option<std::time::Instant>,
+    last_emit: Option<std::time::Instant>,
+}
+
+impl ZipActivity {
+    fn plan(&mut self, files: usize, bytes: u64) {
+        self.files_total = files as u32;
+        self.bytes_total = bytes;
+        self.started = Some(std::time::Instant::now());
+    }
+
+    fn snapshot(&self) -> ActivityInfo {
+        let secs = self.started.map(|s| s.elapsed().as_secs_f64()).unwrap_or(0.0);
+        ActivityInfo {
+            kind: ActivityKind::Zip,
+            subject: self.subject.clone(),
+            done_bytes: self.bytes_done,
+            total_bytes: self.bytes_total,
+            items_done: self.files_done,
+            items_total: self.files_total,
+            // 打包侧看的是平均吞吐：单文件之间的瞬时差没有意义
+            rate_bps: if secs > 0.0 { self.bytes_done as f64 / secs } else { 0.0 },
+            attempt: 1,
+        }
+    }
+
+    fn file(&mut self, group: &str, bytes: u64) -> Option<ActivityInfo> {
+        self.files_done += 1;
+        self.bytes_done += bytes;
+        self.subject = group.to_string();
+        let now = std::time::Instant::now();
+        let due = self
+            .last_emit
+            .map(|t| now.duration_since(t) >= ACTIVITY_WINDOW)
+            .unwrap_or(true);
+        if !due {
+            return None;
+        }
+        self.last_emit = Some(now);
+        Some(self.snapshot())
+    }
+}
+
 /// 人读体积（日志文案用；1MB = 1000KB 口径，与前端 formatSize 一致）
 fn fmt_size(bytes: u64) -> String {
     const KB: f64 = 1000.0;
@@ -574,6 +782,13 @@ fn fmt_size(bytes: u64) -> String {
     } else {
         format!("{bytes} B")
     }
+}
+
+/// 打包进度：84 → 99 按已写字节铺开。旧写法全程钉在 90 再跳 100，几百个文件的
+/// 压缩时间里界面一动不动，看起来就像卡死
+fn build_progress(done: u64, total: u64) -> u32 {
+    let step = done.saturating_mul(15).checked_div(total.max(1)).unwrap_or(0).min(15);
+    84 + step as u32
 }
 
 /// 列表简述：最多 8 项，超出补「等 N 个」
@@ -605,6 +820,7 @@ fn fail(app: &AppHandle, state: &Arc<AppState>, id: &str, error: TaskError) {
             t.status = TaskStatus::Failed;
             t.error = Some(error.clone());
             t.finished_at = Some(now_ms());
+            t.activity = None;
             push_line(
                 t,
                 log_line(
@@ -1075,14 +1291,34 @@ async fn run_pipeline(app: AppHandle, state: Arc<AppState>, id: String) {
         .cloned()
         .unwrap_or_else(|| Arc::new(AtomicBool::new(false)));
     let groups = Arc::new(Mutex::new(FetchGroups::new(group_plan)));
+    /* 联网实时条：字节级回调比日志密两个数量级，只攒账、按窗口出一条 activity；
+       日志仍然一个条目完成一行 */
+    let agg = Arc::new(Mutex::new(NetActivity::new(tally.net_bytes, tally.net_files)));
+    let (app_t, state_t, id_t) = (app.clone(), state.clone(), id.clone());
+    let (agg_t, net_t) = (agg.clone(), net_actual.clone());
+    let cancel_t = cancel.clone();
+    let dl = dl.with_transfer(Arc::new(move |p: &TransferProgress| {
+        if cancel_t.load(Ordering::Relaxed) {
+            return;
+        }
+        // 锁顺序固定「先账本、后任务表」，任务表回调里不得回头锁账本
+        let info = agg_t
+            .lock()
+            .unwrap()
+            .record(p, net_t.load(Ordering::Relaxed));
+        if let Some(info) = info {
+            update(&app_t, &state_t, &id_t, |t| t.activity = Some(info), true);
+        }
+    }));
     let (app_f, state_f, id_f) = (app.clone(), state.clone(), id.clone());
     let (groups_f, net_f, bytes_f) = (groups.clone(), net_actual.clone(), bytes_actual.clone());
+    let (agg_f, net_a2) = (agg.clone(), net_actual.clone());
     let staging_f = staging.clone();
     // 取消后 release_and_next 会把下一条排队任务标成 Running，届时 is_active(本 id)
     // 这类「有没有 Running 行」的判断会误判为真，故回调自己盯取消标志
     let cancel_flag = cancel.clone();
     let dl_result = dl
-        .download_all(items, cancel, move |done, tot, oc| {
+        .download_all(items, cancel.clone(), move |done, tot, oc| {
             if cancel_flag.load(Ordering::Relaxed) {
                 return;
             }
@@ -1099,6 +1335,12 @@ async fn run_pipeline(app: AppHandle, state: Arc<AppState>, id: String) {
                 }
                 let level = if oc.retries > 0 { LogLevel::Warn } else { LogLevel::Info };
                 let (net_u, bytes_u) = (net_f.clone(), bytes_f.clone());
+                // 结算这条的在飞字节；没有下一条在飞就顺势收掉实时条
+                let snap = {
+                    let mut g = agg_f.lock().unwrap();
+                    g.settle(&oc.dest, oc.bytes);
+                    (!g.inflight.is_empty()).then(|| g.snapshot(net_a2.load(Ordering::Relaxed)))
+                };
                 log_update(
                     &app_f,
                     &state_f,
@@ -1106,7 +1348,10 @@ async fn run_pipeline(app: AppHandle, state: Arc<AppState>, id: String) {
                     PipelineStage::Downloader,
                     level,
                     &msg,
-                    |t| apply_fetch_counts(t, done, tot, &net_u, &bytes_u),
+                    move |t| {
+                        apply_fetch_counts(t, done, tot, &net_u, &bytes_u);
+                        t.activity = snap;
+                    },
                 );
                 return;
             }
@@ -1170,9 +1415,11 @@ async fn run_pipeline(app: AppHandle, state: Arc<AppState>, id: String) {
     update(&app, &state, &id, |t| t.progress = 82, true);
 
     /* ---- 阶段 4 · builder ---- */
+    // 联网实时条到此收摊，之后的进度由打包侧接管
     update(&app, &state, &id, |t| {
         t.stage = Some(PipelineStage::Builder);
         t.progress = 84;
+        t.activity = None;
     }, true);
     let output_name = output_name_of(&pack.file_name);
     let readme = build_readme(&plan, &counts, &review, parsed.manifest.loader, &options.keep_dirs, options.agree_eula);
@@ -1189,17 +1436,72 @@ async fn run_pipeline(app: AppHandle, state: Arc<AppState>, id: String) {
     let build_id = id.clone();
     let build_output_name = output_name.clone();
     let staging_path = staging.clone();
+    // 本任务上一轮的产物：同名时覆写自己那份，不去抢别人占用的文件名
+    let own_output = state
+        .inner
+        .lock()
+        .unwrap()
+        .tasks
+        .get(&id)
+        .and_then(|t| t.output_path.clone());
+    let build_cancel = cancel.clone();
     let build_result = tokio::task::spawn_blocking(move || {
-        update(&build_app, &build_state, &build_id, |t| t.progress = 90, false);
-        builder::build(&BuildInput {
+        let mut agg = ZipActivity::default();
+        let (a, s, i) = (build_app, build_state, build_id);
+        let input = BuildInput {
             staging: &staging,
             output_dir: &output_dir,
             output_file_name: build_output_name,
+            own_output,
             options: &build_options,
             loader: build_loader,
             server_jar_name,
             installer_jar_name,
             readme_lines: readme,
+        };
+        // 打包是 CPU + 磁盘活，进度事件按窗口节流；取消后不再写任务表
+        builder::build(&input, &mut |ev| {
+            if build_cancel.load(Ordering::Relaxed) {
+                return;
+            }
+            match ev {
+                BuildEvent::Plan { files, bytes } => {
+                    agg.plan(*files, *bytes);
+                    let snap = agg.snapshot();
+                    update(&a, &s, &i, |t| t.activity = Some(snap), true);
+                }
+                BuildEvent::File { group, bytes } => {
+                    if let Some(snap) = agg.file(group, *bytes) {
+                        let (done, total) = (snap.done_bytes, snap.total_bytes);
+                        update(
+                            &a,
+                            &s,
+                            &i,
+                            move |t| {
+                                t.activity = Some(snap);
+                                t.progress = build_progress(done, total);
+                            },
+                            true,
+                        );
+                    }
+                }
+                BuildEvent::Group { label, files, bytes } => {
+                    let snap = agg.snapshot();
+                    let (done, total) = (snap.done_bytes, snap.total_bytes);
+                    log_update(
+                        &a,
+                        &s,
+                        &i,
+                        PipelineStage::Builder,
+                        LogLevel::Info,
+                        &format!("已打包 · {label} · {files} 个 · {}", fmt_size(*bytes)),
+                        move |t| {
+                            t.activity = Some(snap);
+                            t.progress = build_progress(done, total);
+                        },
+                    );
+                }
+            }
         })
     })
     .await;
@@ -1232,6 +1534,12 @@ async fn run_pipeline(app: AppHandle, state: Arc<AppState>, id: String) {
         }
     };
     /* ---- 成功收尾 ---- */
+    // 实际落盘名可能与默认名不同（撞名自动加了序号）：日志与报告都按实际名说
+    let final_name = built
+        .path
+        .file_name()
+        .map(|s| s.to_string_lossy().to_string())
+        .unwrap_or_else(|| output_name.clone());
     push_log(
         &app,
         &state,
@@ -1240,6 +1548,25 @@ async fn run_pipeline(app: AppHandle, state: Arc<AppState>, id: String) {
         LogLevel::Info,
         &format!("生成包根文件：{}", brief_list(&built.generated)),
     );
+    if built.overwritten {
+        push_log(
+            &app,
+            &state,
+            &id,
+            PipelineStage::Builder,
+            LogLevel::Info,
+            &format!("覆写本任务上一次的输出：{final_name}"),
+        );
+    } else if final_name != output_name {
+        push_log(
+            &app,
+            &state,
+            &id,
+            PipelineStage::Builder,
+            LogLevel::Warn,
+            &format!("{output_name} 已被其他包占用，本次另存为 {final_name}"),
+        );
+    }
     push_log(
         &app,
         &state,
@@ -1248,7 +1575,7 @@ async fn run_pipeline(app: AppHandle, state: Arc<AppState>, id: String) {
         LogLevel::Info,
         &format!(
             "打包 {} · {} 个文件 · {}",
-            output_name,
+            final_name,
             built.entries,
             fmt_size(built.size)
         ),
@@ -1268,20 +1595,28 @@ async fn run_pipeline(app: AppHandle, state: Arc<AppState>, id: String) {
         let mut inner = state.inner.lock().unwrap();
         let t = match inner.tasks.get_mut(&id) {
             Some(t) if matches!(t.status, TaskStatus::Queued | TaskStatus::Running) => t,
-            _ => return, // 已被取消：不写成功态
+            // 已被取消：不写成功态，但实时条要收掉
+            _ => {
+                if let Some(t) = inner.tasks.get_mut(&id) {
+                    t.activity = None;
+                }
+                return;
+            }
         };
         t.status = TaskStatus::Success;
         t.progress = 100;
         t.stage = Some(PipelineStage::Builder);
         t.finished_at = Some(finished);
-        t.output_file_name = Some(output_name.clone());
+        t.activity = None;
+        t.output_file_name = Some(final_name.clone());
+        t.output_path = Some(built.path.clone());
         t.output_size_bytes = Some(built.size);
         push_line(
             t,
             log_line(
                 PipelineStage::Builder,
                 LogLevel::Info,
-                &format!("打包完成 · {output_name}"),
+                &format!("打包完成 · {final_name}"),
             ),
         );
         let duration_sec = t
@@ -1290,7 +1625,7 @@ async fn run_pipeline(app: AppHandle, state: Arc<AppState>, id: String) {
             .unwrap_or(1);
         let report = ConversionReport {
             task_id: id.clone(),
-            output_file_name: output_name.clone(),
+            output_file_name: final_name.clone(),
             output_size_bytes: built.size,
             duration_sec,
             removed: counts.remove,
@@ -1530,6 +1865,70 @@ mod tests {
         assert!(!g.beat_due(), "间隔未到不应再发");
         g.last_beat = Some(std::time::Instant::now() - BEAT_INTERVAL * 2);
         assert!(g.beat_due(), "间隔已过应再发");
+    }
+
+    fn tp(key: &str, done: u64, total: u64, attempt: u32) -> TransferProgress {
+        TransferProgress {
+            file_name: format!("{key}.jar"),
+            key: PathBuf::from(key),
+            done,
+            total,
+            attempt,
+        }
+    }
+
+    /// 实时条：并发下载的字节合到一条、窗口未到不出图、结算不重复计数
+    #[test]
+    fn net_activity_aggregates_concurrent_files_and_throttles() {
+        let mut a = NetActivity::new(300, 2);
+        assert!(a.record(&tp("/d/a", 50, 150, 1), 0).is_some(), "首次应立即出图，否则条不动");
+        assert!(a.record(&tp("/d/b", 30, 150, 1), 0).is_none(), "窗口未到不应再出图");
+        assert_eq!(a.done(), 80, "在飞两条的字节应合并计数");
+        a.settle(&PathBuf::from("/d/a"), 150);
+        assert_eq!(a.done(), 180, "结算按实际字节计，不与在飞量重复");
+        assert_eq!(a.total(), 300, "计划有量就用计划量当分母");
+        a.last_emit = Some(std::time::Instant::now() - ACTIVITY_WINDOW * 2);
+        let info = a.record(&tp("/d/b", 150, 150, 2), 1).expect("窗口已过应再出图");
+        assert_eq!(info.done_bytes, 300);
+        assert_eq!(info.attempt, 2, "第几次重试要看得见");
+        assert_eq!(info.items_total, 2);
+        assert!(info.rate_bps > 0.0, "速率应算出来");
+    }
+
+    /// 计划没给字节（例如 maven 坐标无伴生大小）：分母退回 Content-Length 累加
+    #[test]
+    fn net_activity_falls_back_to_content_length() {
+        let mut a = NetActivity::new(0, 2);
+        a.record(&tp("/d/a", 10, 100, 1), 0).unwrap();
+        a.settle(&PathBuf::from("/d/a"), 10);
+        a.last_emit = Some(std::time::Instant::now() - ACTIVITY_WINDOW * 2);
+        let info = a.record(&tp("/d/b", 5, 50, 1), 1).expect("窗口已过应出图");
+        assert_eq!(info.total_bytes, 150, "已结算 + 在飞的 Content-Length");
+        assert_eq!(info.done_bytes, 15);
+    }
+
+    /// 打包侧同样按窗口出图，subject 跟随当前顶层目录
+    #[test]
+    fn zip_activity_throttles_per_file() {
+        let mut z = ZipActivity::default();
+        z.plan(3, 300);
+        assert!(z.file("模组", 100).is_some(), "首个文件应立即出图");
+        assert!(z.file("模组", 100).is_none(), "窗口未到不应再出图");
+        z.last_emit = Some(std::time::Instant::now() - ACTIVITY_WINDOW * 2);
+        let info = z.file("根文件", 100).expect("窗口已过应出图");
+        assert_eq!((info.done_bytes, info.total_bytes), (300, 300));
+        assert_eq!((info.items_done, info.items_total), (3, 3));
+        assert_eq!(info.subject, "根文件");
+        assert_eq!(info.kind, ActivityKind::Zip);
+    }
+
+    /// 打包进度必须在 84→99 之间真实铺开（旧写法全程钉 90，看着像卡死）
+    #[test]
+    fn build_progress_spreads_over_the_zip_stage() {
+        assert_eq!(build_progress(0, 1000), 84);
+        assert_eq!(build_progress(500, 1000), 91);
+        assert_eq!(build_progress(1000, 1000), 99, "打包阶段不满 100，成功收尾才给 100");
+        assert_eq!(build_progress(0, 0), 84, "总量为 0 不能崩");
     }
 
     /// 日志环：超限只留最近 MAX_LOG_LINES 条，头部恰好一条截断说明

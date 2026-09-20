@@ -154,6 +154,29 @@ export interface FetchTally {
     cachedFiles: number;
 }
 
+/** 正在进行中的动作类型：联网收字节 / 本地写 zip */
+export type ActivityKind = "net" | "zip";
+
+/**
+ * 当前动作（Rust: 只在进度事件上走，不进日志环）。
+ * 前端据此在日志区上方渲染一条实时条——逐块进度写成日志行会顶穿渲染预算
+ */
+export interface ActivityInfo {
+    kind: ActivityKind;
+    /** 联网 = 当前文件名；打包 = 当前顶层目录名（包根散件记「包根」） */
+    subject: string;
+    doneBytes: number;
+    /** 0 = 总量未知（响应无 Content-Length） */
+    totalBytes: number;
+    itemsDone: number;
+    /** 0 = 总量未知 */
+    itemsTotal: number;
+    /** 平均速率（字节/秒） */
+    rateBps: number;
+    /** 第几次尝试（1 起）；>1 = 前面失败过，要标出来 */
+    attempt: number;
+}
+
 /** 任务状态 */
 export type TaskStatus =
     | "queued"
@@ -190,6 +213,8 @@ export interface ConversionTask {
     netDone?: number;
     /** 已取回字节（含包内/本地/缓存） */
     doneBytes?: number;
+    /** 当前动作（仅联网传输 / 打包进行中非空）：日志区上方实时条的数据源 */
+    activity?: ActivityInfo;
     /** 创建/开始/结束时间（epoch ms） */
     createdAt: number;
     startedAt?: number;
@@ -200,6 +225,8 @@ export interface ConversionTask {
     counts?: { remove: number; keep: number; add: number };
     /** 输出文件名 / 体积（成功时） */
     outputFileName?: string;
+    /** 产物绝对路径：同名包加序号后与默认名不同名，重试时据此覆写自己那份 */
+    outputPath?: string;
     outputSizeBytes?: number;
     logs: TaskLogLine[];
 }
@@ -338,6 +365,8 @@ export interface ProgressEvent {
     downloaded?: number;
     total?: number;
     log?: TaskLogLine;
+    /** 当前动作（联网传输 / 打包进行中）：前端直接刷新实时条，不必回拉任务 */
+    activity?: ActivityInfo;
 }
 
 /** 后端事件名常量（与 Rust emit 字符串保持一致） */

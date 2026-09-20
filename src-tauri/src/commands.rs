@@ -312,16 +312,8 @@ pub fn retry_task(
     state: S<'_>,
     id: String,
 ) -> Option<task_engine::StartResult> {
-    let (options, pack, plan) = {
-        let inner = lock(&state);
-        let t = inner.tasks.get(&id)?;
-        (
-            t.options.clone(),
-            t.pack.clone(),
-            inner.plans.get(&id).cloned().unwrap_or_default(),
-        )
-    };
-    Some(task_engine::create_task(&app, &state, options, pack, plan))
+    // 原地重试：同一 id、同一方案，产物落到自己上一份（详见 task_engine::retry_task）
+    task_engine::retry_task(&app, &state, &id)
 }
 
 #[tauri::command]

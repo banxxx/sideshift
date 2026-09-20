@@ -89,6 +89,48 @@ pub struct ItemOutcome {
 /// 逐条完成回调：Arc 持有与借用两种传法共用同一签名
 type OnDone = dyn Fn(usize, usize, &ItemOutcome) + Send + Sync;
 
+/// 联网传输中的字节进度（每个响应块一次，调用方自行节流；离线搬运不发）
+#[derive(Debug, Clone)]
+pub struct TransferProgress {
+    pub file_name: String,
+    /// 本条目的唯一键（dest 绝对路径）：并发下载同名条目也不串账
+    pub key: PathBuf,
+    /// 本文件已收字节
+    pub done: u64,
+    /// 本文件总字节，0 = 响应无 Content-Length
+    pub total: u64,
+    /// 第几次尝试（1 起）
+    pub attempt: u32,
+}
+
+type OnTransfer = dyn Fn(&TransferProgress) + Send + Sync;
+
+/// 单次下载尝试的失败分类
+enum Attempt {
+    /// 换个时间再试可能成功（连接重置、429/5xx）：退避后重试
+    Retry(String),
+    /// 重试也不会变好（sha1 不符、磁盘写不进）：立即结束本条目
+    Fatal(DownloadError),
+}
+
+/// 落盘类失败：带上第几次尝试与出问题的路径，日志里能一眼看出是网络还是磁盘
+fn io_err(item: &ItemSpec, attempt: u32, e: &std::io::Error, path: &Path) -> Attempt {
+    Attempt::Fatal(DownloadError::Failed {
+        file_name: item.file_name.clone(),
+        attempts: attempt.saturating_sub(1),
+        cause: format!("{e}（{}）", path.display()),
+    })
+}
+
+/// 尝试专属临时名：并发重试不会互相踩到同一个半成品
+fn temp_path(target: &Path, attempt: u32) -> PathBuf {
+    let stem = target
+        .file_name()
+        .and_then(|s| s.to_str())
+        .unwrap_or("download");
+    target.with_file_name(format!("{stem}.part{attempt}"))
+}
+
 impl ItemSpec {
     fn source_key(&self) -> String {
         match &self.fetch {
@@ -103,6 +145,7 @@ pub struct Downloader {
     pub client: Client,
     cache_dir: PathBuf,
     concurrency: usize,
+    transfer: Option<Arc<OnTransfer>>,
 }
 
 impl Downloader {
@@ -116,7 +159,14 @@ impl Downloader {
             client,
             cache_dir,
             concurrency: concurrency.clamp(1, 16),
+            transfer: None,
         }
+    }
+
+    /// 挂上字节进度出口：流水线据此渲染「联网下载中」实时条
+    pub fn with_transfer(mut self, f: Arc<OnTransfer>) -> Self {
+        self.transfer = Some(f);
+        self
     }
 
     /// 缓存路径；`None` = 该项不落缓存。URL 项按 sha1（缺省按 URL 哈希，Modrinth 坐标与内容一一对应）
@@ -278,19 +328,19 @@ impl Downloader {
         }
     }
 
+    /// 联网单项：缓存命中直接复制落位，否则流式取回。离线项由 harvest 通道处理，不进这里。
     async fn download_one(&self, item: &ItemSpec) -> Result<ItemOutcome, DownloadError> {
-        let source = match &item.fetch {
-            Fetch::Url(_) => FetchSource::Network,
-            Fetch::ZipEntry { .. } => FetchSource::Pack,
-            Fetch::Local(_) => FetchSource::Local,
+        let Fetch::Url(url) = &item.fetch else {
+            unreachable!("离线项走 harvest_offline，download_all 不会把非 URL 项交给这里")
         };
         if let Some(parent) = item.dest.parent() {
             std::fs::create_dir_all(parent)?;
         }
         // 缓存复用前提：声明了 sha1 就必须与内容一致（不一致视作缓存损坏，重新获取）
-        let cache = self.cache_path_opt(item).filter(|c| c.exists());
+        let cache = self.cache_path_opt(item);
         let cached = cache
             .as_ref()
+            .filter(|c| c.exists())
             .is_some_and(|c| self.verify_cache(item, c));
         if cached {
             let c = cache.unwrap();
@@ -302,7 +352,7 @@ impl Downloader {
             let bytes = std::fs::metadata(&c).map(|m| m.len()).unwrap_or(0);
             return Ok(ItemOutcome {
                 file_name: item.file_name.clone(),
-                source,
+                source: FetchSource::Network,
                 cached: true,
                 bytes,
                 retries: 0,
@@ -310,80 +360,144 @@ impl Downloader {
             });
         }
 
-        let (bytes, retries) = self.fetch_bytes_of(item).await?;
-        if let Some(expect) = &item.sha1 {
-            let got = sha1_hex(&bytes);
-            if !got.eq_ignore_ascii_case(expect) {
-                return Err(DownloadError::Failed {
-                    file_name: item.file_name.clone(),
-                    attempts: 0,
-                    cause: format!("sha1 校验不一致（期望 {expect} · 实际 {got}）"),
-                });
-            }
-        }
-        if let Some(c) = cache.filter(|_| !cached) {
-            if let Some(parent) = c.parent() {
-                std::fs::create_dir_all(parent)?;
-            }
-            std::fs::write(&c, &bytes)?;
-        }
-        std::fs::write(&item.dest, &bytes).map_err(|e| DownloadError::Failed {
-            file_name: item.file_name.clone(),
-            attempts: 0,
-            cause: format!("{e}（dest={}）", item.dest.display()),
-        })?;
+        let (bytes, retries) = self.stream_url(item, url, cache.as_deref()).await?;
         Ok(ItemOutcome {
             file_name: item.file_name.clone(),
-            source,
+            source: FetchSource::Network,
             cached: false,
-            bytes: bytes.len() as u64,
+            bytes,
             retries,
             dest: item.dest.clone(),
         })
     }
 
-    /// 按来源取回内容；联网项最多重试 RETRIES 次（退避），返回 (字节, 已重试次数)
-    async fn fetch_bytes_of(&self, item: &ItemSpec) -> Result<(Vec<u8>, u32), DownloadError> {
-        match &item.fetch {
-            Fetch::ZipEntry { archive, entry } => {
-                read_zip_entry(archive, entry).map(|b| (b, 0)).map_err(|e| {
-                    DownloadError::Failed {
-                        file_name: item.file_name.clone(),
-                        attempts: 0,
-                        cause: format!("包内条目读取失败：{e}（{entry}）"),
-                    }
-                })
-            }
-            Fetch::Local(p) => std::fs::read(p)
-                .map(|b| (b, 0))
-                .map_err(|e| DownloadError::Failed {
-                    file_name: item.file_name.clone(),
-                    attempts: 0,
-                    cause: format!("本地文件读取失败：{e}（{}）", p.display()),
-                }),
-            Fetch::Url(url) => {
-                let mut last_cause = String::from("unknown");
-                for attempt in 1..=RETRIES {
-                    match self.fetch_bytes(url).await {
-                        Ok(b) => return Ok((b, attempt - 1)),
-                        Err(e) => {
-                            last_cause = e.to_string();
-                            if attempt < RETRIES {
-                                tokio::time::sleep(std::time::Duration::from_millis(
-                                    500 * attempt as u64,
-                                ))
-                                .await;
-                            }
-                        }
+    /// 流式取回一个 URL：边收块边写临时文件、边增量算 sha1，校验通过才落到缓存与目标位。
+    /// 旧写法 `resp.bytes()` 把整个 jar 囤在内存里、且收完之前一个字节进度都没有。
+    /// 传输类失败退避重试至多 RETRIES 次；校验/磁盘类失败就地结束。
+    async fn stream_url(
+        &self,
+        item: &ItemSpec,
+        url: &str,
+        cache: Option<&Path>,
+    ) -> Result<(u64, u32), DownloadError> {
+        let mut last_cause = String::from("unknown");
+        for attempt in 1..=RETRIES {
+            match self.stream_attempt(item, url, cache, attempt).await {
+                Ok(bytes) => return Ok((bytes, attempt - 1)),
+                Err(Attempt::Fatal(e)) => return Err(e),
+                Err(Attempt::Retry(cause)) => {
+                    last_cause = cause;
+                    if attempt < RETRIES {
+                        tokio::time::sleep(std::time::Duration::from_millis(
+                            500 * attempt as u64,
+                        ))
+                        .await;
                     }
                 }
-                Err(DownloadError::Failed {
-                    file_name: item.file_name.clone(),
-                    attempts: RETRIES,
-                    cause: last_cause,
-                })
             }
         }
+        Err(DownloadError::Failed {
+            file_name: item.file_name.clone(),
+            attempts: RETRIES,
+            cause: last_cause,
+        })
+    }
+
+    /// 单次尝试：成功返回落盘字节数。失败（含重试路径）一律清掉半截临时文件
+    async fn stream_attempt(
+        &self,
+        item: &ItemSpec,
+        url: &str,
+        cache: Option<&Path>,
+        attempt: u32,
+    ) -> Result<u64, Attempt> {
+        // 有缓存槽先落到缓存名（成功后复制到 dest）；无槽位则直接在 dest 旁边成形
+        let staged: &Path = cache.unwrap_or(item.dest.as_path());
+        if let Some(parent) = staged.parent() {
+            std::fs::create_dir_all(parent).map_err(|e| io_err(item, attempt, &e, staged))?;
+        }
+        let temp = temp_path(staged, attempt);
+        let written = match self.write_to_temp(item, url, &temp, attempt).await {
+            Ok(w) => w,
+            Err(e) => {
+                // 文件句柄已在 write_to_temp 返回时关闭，这里才删得掉
+                let _ = std::fs::remove_file(&temp);
+                return Err(e);
+            }
+        };
+        std::fs::rename(&temp, staged).map_err(|e| io_err(item, attempt, &e, staged))?;
+        if staged != item.dest.as_path() {
+            std::fs::copy(staged, &item.dest)
+                .map_err(|e| io_err(item, attempt, &e, &item.dest))?;
+        }
+        Ok(written)
+    }
+
+    /// 收流写临时文件：边写边增量算 sha1，每个响应块向 transfer 出口报一次字节；
+    /// 校验不通过算确定性失败（Fatal），不占用重试次数
+    async fn write_to_temp(
+        &self,
+        item: &ItemSpec,
+        url: &str,
+        temp: &Path,
+        attempt: u32,
+    ) -> Result<u64, Attempt> {
+        use std::io::Write;
+        use sha1::{Digest, Sha1};
+
+        let resp = self.client.get(url).send().await.map_err(|e| {
+            let status = e.status().map(|s| s.as_u16()).unwrap_or(0);
+            Attempt::Retry(format!("{url} 请求失败（HTTP {status}）：{e}"))
+        })?;
+        let status = resp.status();
+        if !status.is_success() {
+            return Err(Attempt::Retry(format!("{url} → HTTP {}", status.as_u16())));
+        }
+        let total = resp.content_length().unwrap_or(0);
+
+        let mut file =
+            std::fs::File::create(temp).map_err(|e| io_err(item, attempt, &e, temp))?;
+        let mut hasher = Sha1::new();
+        let mut written: u64 = 0;
+        let mut stream = resp.bytes_stream();
+        while let Some(chunk) = stream.next().await {
+            let chunk = chunk.map_err(|e| {
+                let of = if total > 0 { total.to_string() } else { "?".into() };
+                Attempt::Retry(format!("{url} 传输中断（已收 {written}/{of} 字节）：{e}"))
+            })?;
+            file.write_all(&chunk)
+                .map_err(|e| io_err(item, attempt, &e, temp))?;
+            hasher.update(&chunk);
+            written += chunk.len() as u64;
+            if let Some(t) = &self.transfer {
+                t(&TransferProgress {
+                    file_name: item.file_name.clone(),
+                    key: item.dest.clone(),
+                    done: written,
+                    total,
+                    attempt,
+                });
+            }
+        }
+        file.flush().map_err(|e| io_err(item, attempt, &e, temp))?;
+
+        if let Some(expect) = &item.sha1 {
+            let got: String = hasher
+                .finalize()
+                .iter()
+                .map(|b| format!("{b:02x}"))
+                .collect();
+            if !got.eq_ignore_ascii_case(expect) {
+                return Err(Attempt::Fatal(DownloadError::Failed {
+                    file_name: item.file_name.clone(),
+                    attempts: attempt.saturating_sub(1),
+                    cause: format!(
+                        "{url} sha1 校验不一致（期望 {expect} · 实际 {got} · 已收 {written} 字节）"
+                    ),
+                }));
+            }
+        }
+        Ok(written)
     }
 
     /// 缓存文件与声明 sha1 是否一致（未声明视为可用；读取失败按不一致处理，触发重取）
@@ -921,25 +1035,6 @@ fn version_cmp(a: &str, b: &str) -> std::cmp::Ordering {
     pa.cmp(&pb)
 }
 
-/// 读取本地 zip 包内条目字节
-fn read_zip_entry(archive: &Path, entry: &str) -> Result<Vec<u8>, DownloadError> {
-    use std::io::Read;
-    let f = File::open(archive)?;
-    let mut z = zip::ZipArchive::new(f).map_err(|e| DownloadError::Failed {
-        file_name: entry.to_string(),
-        attempts: 0,
-        cause: format!("zip 读取失败：{e}"),
-    })?;
-    let mut rf = z.by_name(entry).map_err(|e| DownloadError::Failed {
-        file_name: entry.to_string(),
-        attempts: 0,
-        cause: format!("包内条目缺失：{e}"),
-    })?;
-    let mut buf = Vec::new();
-    rf.read_to_end(&mut buf)?;
-    Ok(buf)
-}
-
 /* ---------------- 离线批量取件（download_all 的 harvest 通道） ---------------- */
 
 /// 一次纯复制型任务：缓存命中或本地 jar → 目标路径
@@ -1288,5 +1383,83 @@ mod tests {
             format!("content-2999-{}", 2999 * 37)
         );
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// 流式下载：边收边写临时文件 → 校验通过才 rename 到缓存并复制到 dest；
+    /// 中途写入的 dest 只能是完整内容，且 transfer 回调必须带单调增长的字节数
+    #[tokio::test]
+    async fn streaming_download_reports_progress_and_writes_complete_file() {
+        use std::io::{Read, Write};
+
+        let payload: Vec<u8> = (0..300_000u32).map(|i| (i % 251) as u8).collect();
+        let want_sha1 = sha1_hex(&payload);
+
+        // 一次性本地 HTTP 服务：固定 Content-Length，分块写出以触发多次进度回调
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let body = payload.clone();
+        let srv = tokio::task::spawn_blocking(move || {
+            let (mut sock, _) = listener.accept().unwrap();
+            let mut req = [0u8; 4096];
+            let _ = sock.read(&mut req);
+            let head = format!(
+                "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                body.len()
+            );
+            sock.write_all(head.as_bytes()).unwrap();
+            for chunk in body.chunks(50_000) {
+                sock.write_all(chunk).unwrap();
+            }
+            sock.flush().unwrap();
+        });
+
+        let dir = std::env::temp_dir().join(format!("sideshift-dl-{}", uuid::Uuid::new_v4()));
+        let out = dir.join("out");
+        let dest = out.join("blob.bin");
+        let progress: Arc<std::sync::Mutex<Vec<(u64, u64, u32)>>> = Default::default();
+        let sink = {
+            let progress = progress.clone();
+            move |p: &TransferProgress| {
+                progress.lock().unwrap().push((p.done, p.total, p.attempt))
+            }
+        };
+        let dl = Downloader::new(out.join("cache"), 2).with_transfer(Arc::new(sink));
+        let items = vec![ItemSpec {
+            fetch: Fetch::Url(format!("http://{addr}/blob.bin")),
+            file_name: "blob.bin".to_string(),
+            sha1: Some(want_sha1.clone()),
+            dest: dest.clone(),
+            size_bytes: 0,
+        }];
+        dl.download_all(items, Arc::new(AtomicBool::new(false)), |_, _, _| {})
+            .await
+            .unwrap();
+        srv.await.unwrap();
+
+        assert_eq!(std::fs::read(&dest).unwrap(), payload, "dest 必须是完整内容");
+        // 进度单调不减，且至少覆盖总量
+        let p = progress.lock().unwrap();
+        assert!(p.len() >= 2, "分块写入应有多次进度回调，实得 {}", p.len());
+        assert!(p.windows(2).all(|w| w[0].0 <= w[1].0), "done 必须单调不减");
+        assert_eq!(p.last().unwrap().0, payload.len() as u64);
+        assert_eq!(p.last().unwrap().1, payload.len() as u64, "应取到 Content-Length");
+        // 缓存位已成形，且没有半截临时文件残留
+        let cache = out.join("cache").join("files").join(&want_sha1).join("blob.bin");
+        assert!(cache.exists(), "成功后应落到缓存：{}", cache.display());
+        let mut leftovers = 0;
+        let mut stack = vec![out.join("cache")];
+        while let Some(d) = stack.pop() {
+            let Ok(rd) = std::fs::read_dir(&d) else { continue };
+            for e in rd.flatten() {
+                let p = e.path();
+                if p.is_dir() {
+                    stack.push(p);
+                } else if p.file_name().unwrap().to_string_lossy().contains(".part") {
+                    leftovers += 1;
+                }
+            }
+        }
+        assert_eq!(leftovers, 0, "临时文件必须清干净");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

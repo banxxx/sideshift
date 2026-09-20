@@ -45,6 +45,12 @@ export function toFraction(progress: number): number {
     return Math.min(1, Math.max(0, progress / 100));
 }
 
+/** 实时条速率：沿用 formatSize 的单位口径加 /s（1.9 MB/s） */
+export function formatRate(bytesPerSec: number): string {
+    if (bytesPerSec <= 0) return "—";
+    return `${formatSize(bytesPerSec)}/s`;
+}
+
 /** 加载器显示名：fabric → Fabric（芯片/下拉/弹窗副标题统一口径） */
 export function loaderLabel(loader: LoaderKind): string {
     return { fabric: "Fabric", forge: "Forge", neoforge: "NeoForge" }[loader];

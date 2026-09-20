@@ -1,6 +1,8 @@
 //! 跨进程数据模型：字段名/取值必须与 src/lib/types.ts 契约逐一对齐。
 //! serde 约定：结构体 camelCase，枚举小写；可选字段 Option + skip_serializing_if。
 
+use std::path::PathBuf;
+
 use serde::{Deserialize, Serialize};
 
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
@@ -99,6 +101,35 @@ pub struct FetchTally {
     pub cached_files: u32,
 }
 
+/// 正在进行中的动作类型：联网传输 / 本地打包
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum ActivityKind {
+    /// 联网收字节
+    Net,
+    /// 写 zip
+    Zip,
+}
+
+/// 当前动作（只随进度事件走，不进日志环）：前端在日志区上方渲染成一条实时进度条。
+/// 定案依据：日志量级 = 前端性能预算（十五轮），逐毫秒的进度绝不能写成日志行。
+#[derive(Serialize, Deserialize, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct ActivityInfo {
+    pub kind: ActivityKind,
+    /// 联网 = 当前文件名；打包 = 当前顶层目录名（包根散件记「包根」）
+    pub subject: String,
+    pub done_bytes: u64,
+    /// 0 = 总量未知（响应无 Content-Length）
+    pub total_bytes: u64,
+    pub items_done: u32,
+    /// 0 = 总量未知
+    pub items_total: u32,
+    /// 平均速率（字节/秒），按采样窗口算
+    pub rate_bps: f64,
+    /// 第几次尝试（1 起）；>1 说明前面失败过，前端要标出来
+    pub attempt: u32,
+}
 /// 用户在添加那一刻选定的 Modrinth 构建（与版本行一一对应，保证方案显示版本 = 实际下载版本）
 #[derive(Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
@@ -259,6 +290,9 @@ pub struct ConversionTask {
     /// 已取回字节（含包内/本地/缓存），供「已取 X MB」文案
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub done_bytes: Option<u64>,
+    /// 当前动作（联网传输 / 打包进行中才有值）：渲染成日志区上方的实时条
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub activity: Option<ActivityInfo>,
     pub created_at: i64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub started_at: Option<i64>,
@@ -270,6 +304,10 @@ pub struct ConversionTask {
     pub counts: Option<PlanCounts>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub output_file_name: Option<String>,
+    /// 本任务实际产物的绝对路径：同名包自动加序号后与「默认名」不同名，
+    /// 重试时要认得自己那份（覆写自己的，不去抢别人的文件名）
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub output_path: Option<PathBuf>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub output_size_bytes: Option<u64>,
     pub logs: Vec<TaskLogLine>,
@@ -437,4 +475,7 @@ pub struct ProgressEvent {
     pub total: Option<u32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub log: Option<TaskLogLine>,
+    /// 当前动作（联网传输 / 打包进行中）：前端直接据此刷新实时条，不必回拉任务列表
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub activity: Option<ActivityInfo>,
 }

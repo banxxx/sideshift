@@ -23,6 +23,8 @@ pub struct BuildInput<'a> {
     pub staging: &'a Path,
     pub output_dir: &'a Path,
     pub output_file_name: String,
+    /// 本任务上一次的产物绝对路径（重试时传入）：撞名时覆写自己那份而不是加序号
+    pub own_output: Option<PathBuf>,
     pub options: &'a ConversionOptions,
     pub loader: LoaderKind,
     /// Fabric：一体化服务端 jar 文件名；Forge/NeoForge 为 None（用 installer + run 脚本）
@@ -41,25 +43,205 @@ pub struct BuildReport {
     pub generated: Vec<String>,
     /// 打进 zip 的文件数
     pub entries: usize,
+    /// 覆写了本任务上一次的产物（同名序号只给别人的包）
+    pub overwritten: bool,
 }
 
-pub fn build(input: &BuildInput) -> Result<BuildReport, BuilderError> {
+/// 打包过程事件：Plan 先给总量（实时条的分母），File 逐文件累加字节，
+/// Group 在每个顶层目录写完时出一条日志
+#[derive(Debug, Clone)]
+pub enum BuildEvent {
+    Plan { files: usize, bytes: u64 },
+    /// group = 该条目所属顶层目录，实时条拿它当「正在打包什么」的文案
+    File { group: String, bytes: u64 },
+    Group { label: String, files: usize, bytes: u64 },
+}
+
+/// 已是压缩格式的后缀：jar/zip 本体就是 deflate，png/ogg 是有损压缩，
+/// 再压一遍只烧 CPU 不省体积——单线程 Deflate 压几百 MB mod 就是「构建特别慢」的全部原因
+const STORED_EXTS: &[&str] = &[
+    "jar", "zip", "png", "jpg", "jpeg", "webp", "gif", "ogg", "mp3", "mp4", "webm", "7z", "gz",
+    "bz2", "xz", "zst", "woff", "woff2", "tga", "dds", "bundled",
+];
+
+fn stored_for(rel: &str) -> bool {
+    match rel.rsplit_once('.') {
+        Some((_, ext)) => STORED_EXTS.contains(&ext.to_ascii_lowercase().as_str()),
+        None => false,
+    }
+}
+
+/// 输出名落地：默认名空着就用它；被别的包占了就 `{stem}-server-2.zip` 递增；
+/// 递增到本任务自己上一份时回到那份（覆写，不留一堆重复包）
+fn resolve_out(dir: &Path, desired: &str, own: Option<&Path>) -> PathBuf {
+    let (stem, ext) = match desired.rsplit_once('.') {
+        Some((s, e)) if !s.is_empty() => (s.to_string(), format!(".{e}")),
+        _ => (desired.to_string(), String::new()),
+    };
+    let mut n = 0usize;
+    loop {
+        // 序号从 2 起（-server-2.zip），0 号是默认名本身
+        let name = if n == 0 {
+            desired.to_string()
+        } else {
+            format!("{stem}-{}{ext}", n + 1)
+        };
+        let cand = dir.join(name);
+        if own == Some(cand.as_path()) || !cand.exists() {
+            return cand;
+        }
+        n += 1;
+    }
+}
+
+pub fn build(
+    input: &BuildInput,
+    on_event: &mut dyn FnMut(&BuildEvent),
+) -> Result<BuildReport, BuilderError> {
     let generated = write_root_files(input)?;
     std::fs::create_dir_all(input.output_dir)?;
-    let out_path = input.output_dir.join(&input.output_file_name);
+    let out_path = resolve_out(
+        input.output_dir,
+        &input.output_file_name,
+        input.own_output.as_deref(),
+    );
+    let overwritten = out_path.exists();
     let file = File::create(&out_path)?;
     let mut zip = zip::ZipWriter::new(BufWriter::new(file));
-    let opts: SimpleFileOptions =
-        SimpleFileOptions::default().compression_method(CompressionMethod::Deflated);
-    let entries = zip_dir(&mut zip, input.staging, input.staging, &opts)?;
-    zip.finish()?;
+
+    // 先列清单再写：总量是实时条的分母，也是「哪个顶层目录写完」的判据
+    let mut plan: Vec<Planned> = Vec::new();
+    collect(input.staging, input.staging, &mut plan)?;
+    let total_bytes: u64 = plan.iter().map(|p| p.size).sum();
+    on_event(&BuildEvent::Plan { files: plan.len(), bytes: total_bytes });
+
+    let res = write_zip(&mut zip, &plan, on_event).and_then(|_| zip.finish().map_err(BuilderError::Zip));
+    if res.is_err() {
+        // 半截 zip 留在输出目录只会误导（它看着像上一次的成功产物），删掉再报错
+        let _ = std::fs::remove_file(&out_path);
+        res?;
+    }
     let size = out_path.metadata().map(|m| m.len()).unwrap_or(0);
     Ok(BuildReport {
         path: out_path,
         size,
         generated,
-        entries,
+        entries: plan.len(),
+        overwritten,
     })
+}
+
+/// 逐条目写入：jar 这类已压缩内容走 Stored（ deflate 再压一遍不省体积只烧时间），
+/// 文本走 Deflated；每个顶层目录写完发一条 Group 事件
+fn write_zip(
+    zip: &mut zip::ZipWriter<BufWriter<File>>,
+    plan: &[Planned],
+    on_event: &mut dyn FnMut(&BuildEvent),
+) -> Result<(), BuilderError> {
+    let mut groups = group_totals(plan);
+    for p in plan {
+        let mut opts = SimpleFileOptions::default().compression_method(if stored_for(&p.rel) {
+            CompressionMethod::Stored
+        } else {
+            CompressionMethod::Deflated
+        });
+        // zip 默认不携带 unix 权限（解压后 644），shell 脚本需补执行位
+        if p.exec {
+            opts = opts.unix_permissions(0o755);
+        }
+        zip.start_file(&p.rel, opts)?;
+        let mut f = File::open(&p.path)?;
+        std::io::copy(&mut f, zip)?;
+        on_event(&BuildEvent::File { group: p.group.clone(), bytes: p.size });
+        let Some(g) = groups.iter_mut().find(|g| g.label == p.group) else {
+            continue;
+        };
+        g.done += 1;
+        if g.done == g.files && !g.flushed {
+            g.flushed = true;
+            on_event(&BuildEvent::Group {
+                label: g.label.clone(),
+                files: g.files,
+                bytes: g.bytes,
+            });
+        }
+    }
+    Ok(())
+}
+
+/// 待写入条目：绝对路径 + zip 内相对路径 + 大小 + 归属顶层分组
+struct Planned {
+    path: PathBuf,
+    rel: String,
+    size: u64,
+    group: String,
+    /// shell 脚本：zip 里要带 755 执行位
+    exec: bool,
+}
+
+#[derive(Clone)]
+struct GroupAcc {
+    label: String,
+    files: usize,
+    bytes: u64,
+    done: usize,
+    flushed: bool,
+}
+
+/// staging 第一层目录即一个分组（mods/ 说「模组」，包根散件说「根文件」）——
+/// 与取件阶段的分目录日志同一套口径
+fn group_of(rel: &str) -> String {
+    match rel.split_once('/') {
+        Some((head, _)) if head.eq_ignore_ascii_case("mods") => "模组".to_string(),
+        Some((head, _)) => head.to_string(),
+        None => "根文件".to_string(),
+    }
+}
+
+fn group_totals(plan: &[Planned]) -> Vec<GroupAcc> {
+    let mut out: Vec<GroupAcc> = Vec::new();
+    for p in plan {
+        match out.iter_mut().find(|g| g.label == p.group) {
+            Some(g) => {
+                g.files += 1;
+                g.bytes += p.size;
+            }
+            None => out.push(GroupAcc {
+                label: p.group.clone(),
+                files: 1,
+                bytes: p.size,
+                done: 0,
+                flushed: false,
+            }),
+        }
+    }
+    out
+}
+
+/// 递归收集待打包条目（排序保证目录顺序稳定，日志与产物可复现）
+fn collect(root: &Path, dir: &Path, out: &mut Vec<Planned>) -> Result<(), BuilderError> {
+    let mut entries: Vec<PathBuf> = std::fs::read_dir(dir)?.filter_map(|e| e.ok().map(|e| e.path())).collect();
+    entries.sort();
+    for path in entries {
+        let meta = std::fs::metadata(&path)?;
+        if meta.is_dir() {
+            collect(root, &path, out)?;
+            continue;
+        }
+        let rel = path
+            .strip_prefix(root)
+            .map_err(|e| BuilderError::Io(std::io::Error::other(e)))?
+            .to_string_lossy()
+            .replace('\\', "/");
+        out.push(Planned {
+            group: group_of(&rel),
+            exec: rel.to_lowercase().ends_with(".sh"),
+            size: meta.len(),
+            path,
+            rel,
+        });
+    }
+    Ok(())
 }
 
 /// Aikar's flags：官方推荐的 G1GC 调优参数组（4G+ 内存口径）
@@ -224,35 +406,161 @@ simulation-distance=10
     Ok(generated)
 }
 
-/// 递归写入 zip；返回写入的文件数
-fn zip_dir(
-    zip: &mut zip::ZipWriter<BufWriter<File>>,
-    root: &Path,
-    dir: &Path,
-    opts: &SimpleFileOptions,
-) -> Result<usize, BuilderError> {
-    let mut count = 0usize;
-    for entry in std::fs::read_dir(dir)? {
-        let path = entry?.path();
-        let rel = path
-            .strip_prefix(root)
-            .map_err(|e| BuilderError::Io(std::io::Error::other(e)))?
-            .to_string_lossy()
-            .replace('\\', "/");
-        if path.is_dir() {
-            count += zip_dir(zip, root, &path, opts)?;
-        } else {
-            // zip 默认不携带 unix 权限（解压后 644），shell 脚本需补执行位
-            let file_opts = if rel.to_lowercase().ends_with(".sh") {
-                opts.unix_permissions(0o755)
-            } else {
-                *opts
-            };
-            zip.start_file(&rel, file_opts)?;
-            let mut f = File::open(&path)?;
-            std::io::copy(&mut f, zip)?;
-            count += 1;
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn opts() -> ConversionOptions {
+        ConversionOptions {
+            mc_version: "1.20.1".into(),
+            loader_version: "0.15.3".into(),
+            java_version: "17".into(),
+            memory_mb: 4096,
+            generate_scripts: true,
+            nogui: true,
+            agree_eula: false,
+            server_port: 25565,
+            motd: "test".into(),
+            max_players: 20,
+            gamemode: "survival".into(),
+            difficulty: "easy".into(),
+            online_mode: true,
+            level_seed: String::new(),
+            use_aikar_flags: false,
+            extra_jvm_args: String::new(),
+            output_override: String::new(),
+            keep_dirs: vec![],
         }
     }
-    Ok(count)
+
+    fn tmp() -> PathBuf {
+        let d = std::env::temp_dir().join(format!("sideshift-build-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&d).unwrap();
+        d
+    }
+
+    fn put(path: &Path, bytes: &[u8]) {
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, bytes).unwrap();
+    }
+
+    fn input<'a>(staging: &'a Path, out: &'a Path, o: &'a ConversionOptions) -> BuildInput<'a> {
+        BuildInput {
+            staging,
+            output_dir: out,
+            output_file_name: "pack-server.zip".into(),
+            own_output: None,
+            options: o,
+            loader: LoaderKind::Fabric,
+            server_jar_name: Some("server.jar".into()),
+            installer_jar_name: None,
+            readme_lines: vec![],
+        }
+    }
+
+    #[test]
+    fn stored_only_for_already_compressed_suffixes() {
+        assert!(stored_for("mods/big-mod.jar"));
+        assert!(stored_for("resources/SOUND.OGG"), "后缀大小写不敏感");
+        assert!(!stored_for("config/a.toml"));
+        assert!(!stored_for("start.sh"));
+        assert!(!stored_for("README"));
+    }
+
+    #[test]
+    fn group_label_follows_first_folder_and_renames_mods() {
+        assert_eq!(group_of("mods/x.jar"), "模组");
+        assert_eq!(group_of("Mods/x.jar"), "模组");
+        assert_eq!(group_of("kubejs/client/x.js"), "kubejs");
+        assert_eq!(group_of("eula.txt"), "根文件");
+    }
+
+    #[test]
+    fn other_tasks_pack_gets_suffix_but_retry_reuses_own_slot() {
+        let dir = tmp();
+        let desired = "pack-server.zip";
+        assert_eq!(resolve_out(&dir, desired, None), dir.join(desired));
+        put(&dir.join(desired), b"another task");
+        // 默认名被别人的包占了 → 加序号，绝不静默覆写
+        let second = resolve_out(&dir, desired, None);
+        assert_eq!(second, dir.join("pack-server-2.zip"));
+        put(&second, b"mine");
+        // 本任务重试：认得自己那份，回到 -2 而不是又造一个 -3
+        assert_eq!(resolve_out(&dir, desired, Some(&second)), second);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn build_emits_plan_files_groups_and_splits_compression() {
+        let root = tmp();
+        let staging = root.join("staging");
+        let out = root.join("out");
+        let jarish: Vec<u8> = (0..40_000u32).map(|i| (i % 253) as u8).collect();
+        put(&staging.join("mods/example-mod.jar"), &jarish);
+        put(&staging.join("config/settings.toml"), b"key = \"value\"\n");
+        put(&staging.join("config/nested/inner.txt"), b"hello");
+
+        let o = opts();
+        let mut events: Vec<BuildEvent> = Vec::new();
+        let report = build(&input(&staging, &out, &o), &mut |e| events.push(e.clone())).unwrap();
+        assert!(!report.overwritten, "首次构建不该报覆写");
+        assert!(report.path.exists());
+
+        let planned = match events.first().cloned() {
+            Some(BuildEvent::Plan { files, bytes }) => (files, bytes),
+            other => panic!("首个事件应为 Plan，实得 {other:?}"),
+        };
+        assert_eq!(planned.0, report.entries);
+        let file_bytes: u64 = events
+            .iter()
+            .filter_map(|e| match e {
+                BuildEvent::File { bytes, .. } => Some(*bytes),
+                _ => None,
+            })
+            .sum();
+        assert_eq!(file_bytes, planned.1, "逐文件字节累加应等于 Plan 总量");
+        let groups: Vec<&str> = events
+            .iter()
+            .filter_map(|e| match e {
+                BuildEvent::Group { label, .. } => Some(label.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert!(groups.contains(&"模组"), "实得 {groups:?}");
+        assert!(groups.contains(&"config"), "实得 {groups:?}");
+        assert!(groups.contains(&"根文件"), "实得 {groups:?}");
+
+        // 分流压缩：jar 走 Stored（已是 deflate，再压纯烧 CPU），文本走 Deflated；
+        // .sh 补执行位
+        let mut z = zip::ZipArchive::new(File::open(&report.path).unwrap()).unwrap();
+        assert_eq!(
+            z.by_name("mods/example-mod.jar").unwrap().compression(),
+            CompressionMethod::Stored
+        );
+        assert_eq!(
+            z.by_name("config/settings.toml").unwrap().compression(),
+            CompressionMethod::Deflated
+        );
+        assert_eq!(
+            z.by_name("start.sh").unwrap().unix_mode().unwrap() & 0o755,
+            0o755,
+            "shell 脚本必须带执行位"
+        );
+
+        // 同名第二个任务：加序号；本任务重试：认得自己那份并覆写
+        let second = build(&input(&staging, &out, &o), &mut |_| {}).unwrap();
+        assert_eq!(second.path, out.join("pack-server-2.zip"));
+        assert!(!second.overwritten, "序号位是空出来的，不叫覆写");
+        let mut i2 = input(&staging, &out, &o);
+        i2.own_output = Some(second.path.clone());
+        let retry = build(&i2, &mut |_| {}).unwrap();
+        assert_eq!(retry.path, second.path, "重试应覆写自己那份而不是再递增");
+        assert!(retry.overwritten);
+        assert_eq!(
+            std::fs::read_dir(&out).unwrap().count(),
+            2,
+            "同一任务反复重试不该攒出一堆重复包"
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
 }

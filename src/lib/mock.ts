@@ -324,6 +324,15 @@ function now(): string {
     return new Date().toTimeString().slice(0, 8);
 }
 
+/** 实时条样例文件名（轮着当「正在下载哪一个」，与 stagePlan 的下载日志同一批名字） */
+const NET_SAMPLE = [
+    "fabric-api-0.92.2+1.20.1.jar",
+    "sodium-fabric-0.5.8+mc1.20.1.jar",
+    "modmenu-7.2.2.jar",
+    "spark-1.10.60.jar",
+    "xaerominimap-23.9.5.jar",
+];
+
 /* ---------------- 历史样例任务 ----------------
  * 让任务列表、任务详情（失败 / 已取消）、转换报告、错误卡在浏览器 dev 下都能直接走查——
  * 只靠 mockStartTask 只能产出成功态。真实实现里这些记录由 Rust 持久化，故仅注入一次。
@@ -520,6 +529,33 @@ function advance(id: string) {
             task.total = 146;
             task.netDone = Math.round(ratio * task.fetch.netFiles);
             task.doneBytes = Math.round(ratio * task.fetch.bytes);
+            // 实时条走联网口径（缓存/本地件零流量，计进来会让条跑得比真实网络快）
+            task.activity = {
+                kind: "net",
+                subject: NET_SAMPLE[(task.netDone ?? 0) % NET_SAMPLE.length],
+                doneBytes: Math.round(ratio * task.fetch.netBytes),
+                totalBytes: task.fetch.netBytes,
+                itemsDone: task.netDone ?? 0,
+                itemsTotal: task.fetch.netFiles,
+                rateBps: 2_400_000,
+                attempt: 1,
+            };
+        } else if (seg.stage === "builder") {
+            // 打包段 82→100：分母用产物体积，subject 随已写字节换目录
+            const p = (task.progress - 82) / 18;
+            const bytes = 101_187_000;
+            task.activity = {
+                kind: "zip",
+                subject: p < 0.82 ? "模组" : p < 0.94 ? "config" : "根文件",
+                doneBytes: Math.round(p * bytes),
+                totalBytes: bytes,
+                itemsDone: Math.round(p * 148),
+                itemsTotal: 148,
+                rateBps: 64_000_000,
+                attempt: 1,
+            };
+        } else {
+            task.activity = undefined;
         }
         // 每进入新阶段补一条日志（近似：按进度里程碑）
         if (task.progress % 15 === 2) {
@@ -533,6 +569,7 @@ function advance(id: string) {
         }
         if (task.progress >= 100) {
             task.status = "success";
+            task.activity = undefined;
             task.finishedAt = Date.now();
             task.outputFileName = outputNameOf(task.pack.fileName);
             task.outputSizeBytes = 96 * 1024 * 1024;
@@ -559,6 +596,7 @@ export function mockCancelTask(id: string): void {
     if (task && (task.status === "running" || task.status === "queued")) {
         const wasQueued = task.status === "queued";
         task.status = "cancelled";
+        task.activity = undefined;
         task.finishedAt = Date.now();
         task.logs.push({ time: now(), stage: task.stage ?? "builder", message: "任务已被用户取消", level: "warn" });
         // 排队行没有推进器，取消后由其替运行中任务交棒；运行中的交棒在 advance 里做

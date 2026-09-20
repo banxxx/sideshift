@@ -26,7 +26,7 @@ tauri-plugin-dialog = "2"
 tauri-plugin-fs = "2"
 tauri-plugin-http = "2"
 tokio = { version = "1", features = ["fs", "io-util", "macros", "rt", "sync"] }
-reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "stream"] }
 zip = { version = "2", default-features = false, features = ["deflate"] }
 futures = "0.3"
 chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
