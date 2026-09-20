@@ -15,6 +15,11 @@ dist-ssr
 # 设计稿对照用 scratch（PNG 导出 + 读 .pen 的一次性脚本）
 .design-ref
 
+# 临时探针/取证 scratch（调试用的 API 响应落盘等），不入库
+.scratch
+.probe-*.json
+src-tauri/.probe-*.json
+
 # Editor directories and files
 .vscode/*
 .idea

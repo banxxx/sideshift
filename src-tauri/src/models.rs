@@ -47,6 +47,34 @@ pub enum ModDisposition {
     Add,
 }
 
+/// 端信息的证据来源（前端据此显示「依据什么判定」，可信度从高到低）
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum EnvSource {
+    /// mrpack files[].env——整合包作者显式声明，最权威
+    Mrpack,
+    /// jar 内 fabric.mod.json / quilt.mod.json 的 environment 字段
+    JarMetadata,
+    /// Modrinth 按文件 sha1 反查构建（POST /v2/version_files）
+    ModrinthHash,
+    /// Modrinth 项目级 client_side/server_side（未下载模组的回落）
+    ModrinthProject,
+    /// 模组名关键字表，仅兜底
+    NameHeuristic,
+    /// 无任何证据
+    #[default]
+    Unknown,
+}
+
+/// 某端的支持程度：required 必需 / optional 可选（能装但无收益）/ unsupported 不支持
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum SideFlag {
+    Required,
+    Optional,
+    Unsupported,
+}
+
 #[derive(Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct PlanMod {
@@ -78,6 +106,41 @@ pub struct PlanMod {
     /// 同 id 多文件（如一个模组两个版本）时靠它锁定正确条目，缺省回落 id 顺序匹配
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub src_path: Option<String>,
+    /// 本次处置的证据来源（Unknown = 未判定）；前端据此给出「依据 X 判定」的可信度标注
+    #[serde(default)]
+    pub env_source: EnvSource,
+    /// 客户端支持度；None = 无证据
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub client_side: Option<SideFlag>,
+    /// 服务端支持度；与 client_side 一起给出「客户端必需 / 服务端可选」这一直白证据。
+    /// None = 无证据：行默认保留，且不标「待人工确认」（多留不炸服，误删才会）
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub server_side: Option<SideFlag>,
+}
+
+/// 自动分类结果事件载荷（`plan://classified`）：离线层与在线层各推一次
+#[derive(Serialize, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct PlanClassified {
+    /// 归属包名：前端按当前 manifest.fileName 校验，切包后的迟到事件丢弃
+    pub file_name: String,
+    /// 带全部证据层的完整方案（前端只套用到用户未手动改过的行）
+    pub plan: Vec<PlanMod>,
+    /// 仍无任何端证据的行数（前端据此提示「N 个模组未判定，已默认保留」）
+    pub unresolved: u32,
+    /// false = 在线层还没跑完（离线那次推送用），true 才是本轮最后一次事件
+    pub done: bool,
+    /// false = 在线层有请求失败，结论可能不完整（前端提示可重跑）
+    pub complete: bool,
+}
+
+/// `classify_pack` 的同步返回：离线层结论 + 在线层还会不会再推一次事件。
+/// 前端据此决定「自动分类中」是否继续转圈——命令返回只代表离线层跑完。
+#[derive(Serialize, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct PlanClassification {
+    pub plan: Vec<PlanMod>,
+    pub online_pending: bool,
 }
 
 /// 取件构成（阶段 3 计划确定后写入）：网络 / 包内 / 本地 / 缓存命中四类来源的诚实汇总。
@@ -435,6 +498,14 @@ pub struct AppSettings {
     pub verify_after_build: bool,
     pub download_source: DownloadSource,
     pub concurrency: u32,
+    /// 方案自动分类时允许联网反查 Modrinth（sha1 批量 + 项目级端声明）。
+    /// 旧 settings.json 无此字段 → default_fn 补 true，不能让整体反序列化失败丢用户设置
+    #[serde(default = "default_online_classify")]
+    pub auto_classify_online: bool,
+}
+
+fn default_online_classify() -> bool {
+    true
 }
 
 impl Default for AppSettings {
@@ -446,6 +517,7 @@ impl Default for AppSettings {
             verify_after_build: false,
             download_source: DownloadSource::Official,
             concurrency: 6,
+            auto_classify_online: true,
         }
     }
 }
@@ -459,6 +531,7 @@ impl AppSettings {
             verify_after_build: false,
             download_source: DownloadSource::Official,
             concurrency: 6,
+            auto_classify_online: true,
         }
     }
 }

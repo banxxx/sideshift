@@ -12,7 +12,7 @@ import { Check, ChevronDown, ChevronLeft, ChevronRight, Folder, MinusSquare, Puz
 import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { AnimatePresence, motion } from "motion/react";
 import * as api from "@/lib/api";
-import { formatSize, loaderLabel } from "@/lib/format";
+import { evidenceLabel, formatSize, loaderLabel } from "@/lib/format";
 import type {
     LoaderKind,
     ModDisposition,
@@ -76,13 +76,38 @@ const LIST_COPY: Record<
     },
 };
 
-/** 处于该清单处置下的行说明（剔除态沿用设计稿口径） */
+/** 剔除行的原因：按实际两侧支持度说，并标出证据出处（不写死「env=client」） */
+function stripReason(m: PlanMod): string {
+    const why =
+        m.serverSide === "unsupported"
+            ? "服务端不支持"
+            : m.clientSide === "required" && m.serverSide === "optional"
+              ? "客户端必需、服务端仅可选"
+              : m.clientSide === "required"
+                ? "仅声明客户端必需"
+                : "客户端专属";
+    return `剔除原因：${why} · 依据：${evidenceLabel(m.envSource)}${m.needsReview ? " · 待人工确认" : ""}`;
+}
+
+/** 保留行的原因：没有端证据时必须说「无依据」，不能替模组宣称服务端可用 */
+function keepReason(m: PlanMod): string {
+    if (m.autoSupplement) return "自动补齐的服务端依赖 · 剔除可能导致启动失败";
+    const why =
+        m.serverSide === "required"
+            ? "服务端必需"
+            : m.serverSide === "optional"
+              ? "服务端可选"
+              : m.serverSide === "unsupported"
+                ? "服务端不支持，本行未自动剔除"
+                : null;
+    return why
+        ? `保留原因：${why} · 依据：${evidenceLabel(m.envSource)}`
+        : "无端证据 · 默认保留，可手动剔除";
+}
+
+/** 处于该清单处置下的行说明（一律由证据推导，无证据就承认无证据） */
 function rowOnSub(m: PlanMod, focus: ListFocus): string {
-    if (focus === "remove") {
-        return m.needsReview
-            ? "剔除原因：客户端/服务端两可用，默认按客户端处理"
-            : "剔除原因：客户端专属（env=client）";
-    }
+    if (focus === "remove") return stripReason(m);
     if (focus === "add") {
         return m.autoSupplement
             ? "自动补齐的服务端基础库 · 停用可能导致依赖它的模组失效"
@@ -90,9 +115,7 @@ function rowOnSub(m: PlanMod, focus: ListFocus): string {
               ? "本地 jar · 构建时直接复制"
               : "在线添加 · 已钉住所选构建";
     }
-    return m.autoSupplement
-        ? "自动补齐的服务端依赖 · 剔除可能导致启动失败"
-        : "服务端可用 · 随包构建";
+    return keepReason(m);
 }
 
 export function PlanListModal({
@@ -238,7 +261,7 @@ export function PlanListModal({
                             </span>
                             {isOn ? (
                                 focus === "remove" ? (
-                                    <TagChip square>客户端专属</TagChip>
+                                    <TagChip square>{`客户端专属 · ${evidenceLabel(m.envSource)}`}</TagChip>
                                 ) : m.autoSupplement ? (
                                     <TagChip square>自动补齐</TagChip>
                                 ) : focus === "keep" ? (

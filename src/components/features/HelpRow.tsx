@@ -44,7 +44,7 @@ const HELPS: Array<{ icon: LucideIcon; title: string; desc: string }> = [
 
 export function HelpRow() {
     return (
-        <motion.div variants={row} className="w-[760px] flex gap-4">
+        <motion.div variants={row} className="flex w-full max-w-[760px] gap-4">
             {HELPS.map(({ icon: Icon, title, desc }) => (
                 <motion.div
                     key={title}

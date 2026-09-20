@@ -1,6 +1,7 @@
 //! 下载器与外部 API：并发限流 + sha1 缓存 + 3 次重试；Modrinth 搜索/版本解析；
 //! MC 版本表（piston-meta）、Fabric/Forge/NeoForge 加载器版本表。
 
+use std::collections::HashMap;
 use std::fs::File;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
@@ -40,6 +41,20 @@ pub enum DownloadError {
     },
     #[error("未找到可用版本：{0}")]
     NotFound(String),
+}
+
+/// Modrinth 侧的端声明原始值（字段口径见 env 模块的映射表；这里只搬运不解释）
+#[derive(Debug, Clone, Default)]
+pub struct ModrinthEnv {
+    /// 项目级：required / optional / unsupported
+    pub client_side: Option<String>,
+    pub server_side: Option<String>,
+    /// 构建级只有这个：client_only / server_only / client_and_server /
+    /// client_only_server_optional / server_only_client_optional / client_or_server_prefers_both
+    pub environment: Option<String>,
+    /// 供 slug 猜测校验（文件名推的 id 是否真是这个项目）
+    pub slug: Option<String>,
+    pub title: Option<String>,
 }
 
 /// 文件来源：远程 URL、本地 zip 包内条目（裸 zip 整合包免网络直提）、或本地单文件
@@ -593,6 +608,102 @@ impl Downloader {
     }
 
     /* ---------------- Modrinth ---------------- */
+
+    /// 读一个 JSON 值（POST 版本：`get_json` 只能取）
+    async fn post_json(&self, url: &str, body: &Value) -> Result<Value, DownloadError> {
+        let resp = self
+            .client
+            .post(url)
+            .json(body)
+            .send()
+            .await
+            .map_err(|e| DownloadError::Http {
+                url: url.to_string(),
+                status: e.status().map(|s| s.as_u16()).unwrap_or(0),
+            })?;
+        let status = resp.status();
+        if !status.is_success() {
+            return Err(DownloadError::Http {
+                url: url.to_string(),
+                status: status.as_u16(),
+            });
+        }
+        let bytes = resp
+            .bytes()
+            .await
+            .map_err(|e| DownloadError::Http {
+                url: url.to_string(),
+                status: e.status().map(|s| s.as_u16()).unwrap_or(0),
+            })?;
+        Ok(serde_json::from_slice(&bytes)?)
+    }
+
+    /// Modrinth 响应里的端声明字段（项目级有 client_side/server_side，构建级只有 environment）
+    fn modrinth_env(v: &Value) -> ModrinthEnv {
+        let s = |k: &str| v[k].as_str().map(String::from);
+        ModrinthEnv {
+            client_side: s("client_side"),
+            server_side: s("server_side"),
+            // project.environment 实测是字符串，个别接口给数组 → 取首元素
+            environment: v["environment"]
+                .as_array()
+                .and_then(|a| a.first())
+                .and_then(|e| e.as_str())
+                .map(String::from)
+                .or_else(|| s("environment")),
+            slug: s("slug"),
+            title: s("title"),
+        }
+    }
+
+    /// 按文件 sha1 批量反查构建（`POST /v2/version_files`）。
+    /// 实测响应为 `{ "<sha1>": {version…, environment, project_id} }`，查不到的哈希直接缺席。
+    pub async fn version_env_by_sha1(
+        &self,
+        hashes: &[String],
+    ) -> Result<HashMap<String, ModrinthEnv>, DownloadError> {
+        let mut out = HashMap::new();
+        if hashes.is_empty() {
+            return Ok(out);
+        }
+        let v = self
+            .post_json(
+                &format!("{MODRINTH_API}/version_files"),
+                &serde_json::json!({ "hashes": hashes, "algorithm": "sha1" }),
+            )
+            .await?;
+        if let Some(obj) = v.as_object() {
+            for (k, ver) in obj {
+                out.insert(k.to_lowercase(), Self::modrinth_env(ver));
+            }
+        }
+        Ok(out)
+    }
+
+    /// 项目级端声明（`GET /v2/project/{slug|id}`）；`Ok(None)` = 项目不存在（404，不是网络故障）
+    pub async fn project_env(&self, key: &str) -> Result<Option<ModrinthEnv>, DownloadError> {
+        let url = format!("{MODRINTH_API}/project/{}", urlencoding(key));
+        match self.get_json(&url).await {
+            Ok(v) => Ok(Some(Self::modrinth_env(&v))),
+            Err(DownloadError::Http { status: 404, .. }) => Ok(None),
+            Err(e) => Err(e),
+        }
+    }
+
+    /// 按名称搜项目（`GET /v2/search`）：命中项同时带 client_side / server_side /
+    /// environment（实测），是文件名被改过、slug 猜不上时唯一还能对上平台的线索。
+    /// 只做取证，不做展示，故不套搜索页的筛选与分页。
+    pub async fn search_env(&self, query: &str) -> Result<Vec<ModrinthEnv>, DownloadError> {
+        let url = format!(
+            "{MODRINTH_API}/search?query={}&limit=5&index=relevance",
+            urlencoding(query.trim())
+        );
+        let v = self.get_json(&url).await?;
+        Ok(v["hits"]
+            .as_array()
+            .map(|a| a.iter().map(Self::modrinth_env).collect())
+            .unwrap_or_default())
+    }
 
     pub async fn search_mods(&self, q: &ModSearchQuery) -> Result<ModSearchPage, DownloadError> {
         if q.source == ModSource::Curseforge {

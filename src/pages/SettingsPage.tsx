@@ -101,12 +101,22 @@ export function SettingsPage() {
                     </SettingRow>
                     <SettingRow
                         label="剔除客户端专属资源"
-                        desc="移除光影、小地图、键盘鼠标等 41 类已知客户端模组"
+                        desc="按端证据自动移除光影、小地图等客户端模组；关则全部保留"
                     >
                         <Toggle
                             size="md"
                             checked={settings.stripClientOnly}
                             onChange={(v) => patch({ stripClientOnly: v })}
+                        />
+                    </SettingRow>
+                    <SettingRow
+                        label="联网反查端信息"
+                        desc="包内证据不足时，按 sha1 向 Modrinth 查该构建的端支持度并本地缓存"
+                    >
+                        <Toggle
+                            size="md"
+                            checked={settings.autoClassifyOnline}
+                            onChange={(v) => patch({ autoClassifyOnline: v })}
                         />
                     </SettingRow>
                     <SettingRow label="构建后自动校验" desc="生成前启动一次服务端空跑，验证依赖完整性">

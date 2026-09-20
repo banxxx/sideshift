@@ -162,7 +162,7 @@ export function ReportPage() {
                             icon={Minus}
                             tone="gold"
                             title="剔除客户端专属模组"
-                            sub="依据 env=client 判定"
+                            sub="依据端证据（作者声明 / jar 自证 / 平台反查）"
                             count={report.removed}
                         />
                         <ChangeRow

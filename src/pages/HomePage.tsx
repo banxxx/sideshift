@@ -115,8 +115,10 @@ export function HomePage() {
                     </motion.div>
                 ) : (
                     <motion.div key="cards" className="flex flex-col gap-5">
-                        {/* 上半：拖放卡（紧凑 540）+ 已选包详情卡，设计稿定高 288 */}
-                        <div className="flex gap-5 items-stretch h-[288px]">
+                        {/* 上半：拖放卡（≈58% 宽）+ 已选包详情卡。
+                            高度用 36vh 卡在设计稿的 288：1200×800 下 36vh 正好 288（像素级保真），
+                            窗口变矮时先收这里，而不是把下面的轨道卡挤出滚动区 */}
+                        <div className="flex h-[clamp(256px,36vh,288px)] items-stretch gap-5">
                             <Dropzone
                                 layoutId="dropzone"
                                 compact

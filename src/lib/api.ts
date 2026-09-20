@@ -23,6 +23,8 @@ import type {
     ModVersionEntry,
     PackDirNode,
     PackManifest,
+    PlanClassified,
+    PlanClassification,
     PlanMod,
     ProgressEvent,
     StartResult,
@@ -129,12 +131,6 @@ export async function listPackDirs(): Promise<PackDirNode[]> {
 
 /* ---------------- 转换方案 ---------------- */
 
-/** 模组处置方案（Rust: get_plan(taskId?) -> PlanMod[]） */
-export async function getPlan(): Promise<PlanMod[]> {
-    if (!isTauri) return mock.mockPlanMods;
-    return invokeOrMock("get_plan", undefined, () => mock.mockPlanMods);
-}
-
 /** 剔除清单（Rust: list_excluded_mods） */
 export async function listExcludedMods(): Promise<PlanMod[]> {
     if (!isTauri) return mock.mockExcludedMods;
@@ -150,6 +146,22 @@ export async function estimateDownload(
     return invokeOrMock("estimate_download", { plan, options }, () =>
         mock.mockEstimateDownload(plan, options)
     );
+}
+
+/** 自动分类（Rust: classify_pack -> PlanClassification）：离线层立即返回，在线层随后走 onClassified 补全 */
+export async function classifyPack(): Promise<PlanClassification> {
+    if (!isTauri) return mock.mockClassify(mock.mockPlanMods);
+    return invokeOrMock("classify_pack", undefined, () =>
+        mock.mockClassify(mock.mockPlanMods)
+    );
+}
+
+/** 订阅自动分类结果（离线先到、在线补全，两次事件同一 fileName） */
+export function onClassified(
+    cb: (e: PlanClassified) => void
+): Promise<UnlistenFn> {
+    if (!isTauri) return Promise.resolve(() => {});
+    return listen<PlanClassified>(EVENTS.classified, (ev) => cb(ev.payload));
 }
 
 /* ---------------- 在线添加 ---------------- */

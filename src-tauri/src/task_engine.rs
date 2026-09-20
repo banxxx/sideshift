@@ -11,6 +11,7 @@ use tauri::{AppHandle, Emitter, Manager};
 
 use crate::core::builder::{self, BuildEvent, BuildInput};
 use crate::core::detector;
+use crate::core::env;
 use crate::core::downloader::{
     DownloadError, Downloader, Fetch, FetchSource, ItemSpec, TransferProgress,
 };
@@ -19,6 +20,8 @@ use crate::models::*;
 
 pub const EVENT_PROGRESS: &str = "conversion://progress";
 pub const EVENT_DONE: &str = "conversion://done";
+/// 自动分类结果（离线层一次、在线层一次）：与任务流水线无关，只刷方案表
+pub const EVENT_CLASSIFIED: &str = "plan://classified";
 const SETTINGS_FILE: &str = "settings.json";
 /// 任务本地存档：注册表全量快照（任务 + 方案 + 报告），重启后可见可重试
 const TASKS_FILE: &str = "tasks.json";
@@ -47,6 +50,10 @@ pub struct Inner {
     pub settings: AppSettings,
     /// 当前独占运行的任务 id——同一时间只允许一条转换在跑，其余排队
     pub current: Option<String>,
+    /// 最近一次自动分类取到的端证据（包内条目路径 → 证据）；只属于 env_evidence_file 那个包
+    pub env_evidence: env::EvidenceMap,
+    /// env_evidence 归属的包名（换包即作废）
+    pub env_evidence_file: Option<String>,
 }
 
 pub struct AppState {

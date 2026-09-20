@@ -15,7 +15,7 @@ import { AnimatePresence, motion, type Variants } from "motion/react";
 import * as api from "@/lib/api";
 import { useNavigation } from "@/lib/navigation";
 import { notify } from "@/lib/notify";
-import { formatSize, loaderLabel, outputNameOf, truncateMiddle } from "@/lib/format";
+import { evidenceLabel, formatSize, loaderLabel, outputNameOf, truncateMiddle } from "@/lib/format";
 import type {
     AppSettings,
     ConversionOptions,
@@ -123,6 +123,34 @@ export function ConvertPage() {
     /** 包内可保留目录树（目录勾选弹窗数据源） */
     const [packDirs, setPackDirs] = useState<PackDirNode[]>([]);
     const [dirModalOpen, setDirModalOpen] = useState(false);
+    /** 自动分类进行中：离线层是同步返回，在线层补全后走 classified 事件再刷一次 */
+    const [classifying, setClassifying] = useState(false);
+    /** 「清空我的修改」两段式确认（弹窗纪律：不用遮罩/确认框，第二次点击才执行） */
+    const [confirmClear, setConfirmClear] = useState(false);
+
+    /** 自动分类主入口：进页默认执行，「重新自动分类」手动再跑一次。
+     *  手动处置存在 overrides，方案整体替换也不会覆盖用户改动。
+     *  命令返回只代表离线层跑完；联网反查在后台补全，收尾靠 classified 事件 */
+    async function runClassify(manual: boolean) {
+        setClassifying(true);
+        try {
+            const res = await api.classifyPack();
+            setPlan(res.plan);
+            setClassifying(res.onlinePending);
+            if (manual) {
+                const remove = res.plan.filter((m) => m.disposition === "remove").length;
+                notify(
+                    res.onlinePending
+                        ? `离线层判定剔除 ${remove} 项 · 联网反查进行中`
+                        : `已重新自动分类：剔除 ${remove} · 保留 ${res.plan.length - remove}`,
+                    "success"
+                );
+            }
+        } catch {
+            notify("自动分类失败，当前方案保持不变", "error");
+            setClassifying(false);
+        }
+    }
 
     // 进入页面：默认选项（以包的 MC 版本为准）+ 模组方案 + 版本下拉数据
     // keepDirs 预勾选：与目录树一并加载后探测包内存在的推荐目录；用户已有选择则不覆盖
@@ -139,11 +167,36 @@ export function ConvertPage() {
                 keepDirs: o.keepDirs.length ? o.keepDirs : present,
             });
         });
-        void api.getPlan().then(setPlan);
+        void runClassify(false);
         void api.listMcVersions().then((l) => setMcOptions(l.map(toOption)));
         void api.listJavaVersions().then((l) => setJavaOptions(l.map(toOption)));
         void api.getSettings().then(setSettings);
     }, [manifest]);
+
+    // 在线反查的补全结论：后端换包后会停推，这里再按 fileName 拦一道，防迟到事件串台
+    const packName = manifest?.fileName;
+    useEffect(() => {
+        let alive = true;
+        let off: (() => void) | null = null;
+        void api
+            .onClassified((e) => {
+                if (!alive) return;
+                if (e.fileName && packName && e.fileName !== packName) return;
+                setPlan(e.plan);
+                // 离线那次推送只是先给结论，本轮结束（done）才停「分类中」
+                if (!e.done) return;
+                setClassifying(false);
+                if (!e.complete) notify("联网反查未全部完成，剩余行沿用离线结论", "warn");
+            })
+            .then((f) => {
+                if (alive) off = f;
+                else f();
+            });
+        return () => {
+            alive = false;
+            off?.();
+        };
+    }, [packName]);
 
     // MC 版本变更 → 重新拉取该版本可用的加载器版本
     const mcVersion = options?.mcVersion;
@@ -182,6 +235,12 @@ export function ConvertPage() {
             addTotal: mods.filter((m) => m.disposition === "add").length,
         }),
         [activeMods, mods]
+    );
+
+    /** 无任何端证据的行：默认保留（多留不炸服、误删才会），只在卡底给一句汇总，不逐行标噪音 */
+    const unresolved = useMemo(
+        () => plan.filter((m) => (m.envSource ?? "unknown") === "unknown").length,
+        [plan]
     );
 
     /** 本地兜底聚合（后端答不上来时展示）：联网行按源 fileSize 求和 */
@@ -261,6 +320,17 @@ export function ConvertPage() {
 
     const setDisposition = (id: string, d: ModDisposition) =>
         setOverrides((o) => ({ ...o, [id]: d }));
+
+    /** 手动改动数（处置覆写 + 停用行）：>0 才露出「清空我的修改」出口 */
+    const manualEdits = Object.keys(overrides).length + disabledIds.size;
+
+    /** 清空手动改动 = 回到自动分类结果；两段式确认，第二次点击才执行 */
+    const clearEdits = () => {
+        setOverrides({});
+        setDisabledIds(new Set());
+        setConfirmClear(false);
+        notify("已清空手动修改，方案回到自动分类结果", "success");
+    };
 
     /** 卡片行内移除单个保留目录（批量增删走 DirPickerModal 应用回写） */
     const removeDir = (name: string) => {
@@ -593,15 +663,60 @@ export function ConvertPage() {
                                         transition={{ duration: 0.18, ease: "easeOut" }}
                                         className="flex w-full items-center justify-between"
                                     >
-                                        {tab === "remove" && (
-                                            <LinkBtn chevron onClick={() => setListFocus("remove")}>
-                                                查看全部 {counts.remove} 项剔除清单
-                                            </LinkBtn>
-                                        )}
-                                        {tab === "keep" && (
-                                            <LinkBtn chevron onClick={() => setListFocus("keep")}>
-                                                查看全部 {counts.keep} 项保留清单
-                                            </LinkBtn>
+                                        {(tab === "remove" || tab === "keep") && (
+                                            <>
+                                                <LinkBtn chevron onClick={() => setListFocus(tab)}>
+                                                    查看全部 {tab === "remove" ? counts.remove : counts.keep} 项
+                                                    {tab === "remove" ? "剔除" : "保留"}清单
+                                                </LinkBtn>
+                                                {/* 自动分类出口：进页已默认跑过，这里只给重跑与回退手动改动的入口；
+                                                    无证据行数以一行汇总提示，不逐行标「待确认」 */}
+                                                <div className="flex min-w-0 items-center gap-2.5">
+                                                    {unresolved > 0 && (
+                                                        <span className="truncate text-[10px] leading-[14px] text-text-3">
+                                                            {unresolved} 项无依据 · 默认保留
+                                                        </span>
+                                                    )}
+                                                    {classifying ? (
+                                                        <span className="text-[11px] leading-[16px] text-text-3">
+                                                            自动分类中…
+                                                        </span>
+                                                    ) : (
+                                                        <>
+                                                            <LinkBtn size="sm" onClick={() => void runClassify(true)}>
+                                                                重新自动分类
+                                                            </LinkBtn>
+                                                            {manualEdits > 0 &&
+                                                                (confirmClear ? (
+                                                                    <>
+                                                                        <LinkBtn
+                                                                            size="sm"
+                                                                            className="text-redstone"
+                                                                            onClick={clearEdits}
+                                                                        >
+                                                                            确认清空 {manualEdits} 项
+                                                                        </LinkBtn>
+                                                                        <LinkBtn
+                                                                            size="sm"
+                                                                            className="text-text-3"
+                                                                            onClick={() => setConfirmClear(false)}
+                                                                        >
+                                                                            取消
+                                                                        </LinkBtn>
+                                                                    </>
+                                                                ) : (
+                                                                    <LinkBtn
+                                                                        size="sm"
+                                                                        className="text-text-2"
+                                                                        onClick={() => setConfirmClear(true)}
+                                                                    >
+                                                                        清空我的修改
+                                                                    </LinkBtn>
+                                                                ))}
+                                                        </>
+                                                    )}
+                                                </div>
+                                            </>
                                         )}
                                         {tab === "add" && (
                                             <>
@@ -960,12 +1075,13 @@ function PlanModRow({
     );
 }
 
-/** 徽章优先级：自动补齐 > 需人工确认 > 本地 > 客户端专属；普通在线新增无徽章（不挂无逻辑装饰） */
+/** 徽章优先级：自动补齐 > 需人工确认 > 本地 > 客户端专属（附判定依据，剔除是破坏性操作，必须说清凭什么） */
 function badgeFor(mod: PlanMod, local: boolean): React.ReactNode {
     if (mod.autoSupplement) return <TagChip>自动补齐</TagChip>;
     if (mod.needsReview) return <ToneChip tone="gold" size="sm">需人工确认</ToneChip>;
     if (local) return <TagChip>本地</TagChip>;
-    if (mod.clientOnly) return <TagChip>客户端专属</TagChip>;
+    if (mod.clientOnly)
+        return <TagChip>{`客户端专属 · ${evidenceLabel(mod.envSource)}`}</TagChip>;
     return undefined;
 }
 

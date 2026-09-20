@@ -39,6 +39,24 @@ export interface PinnedVersion {
     fileName: string;
 }
 
+/** 端证据的来源（可信度由高到低；前端据此标注「依据什么判定」） */
+export type EnvSource =
+    /** mrpack files[].env —— 整合包作者显式声明 */
+    | "mrpack"
+    /** 包内 jar 的 fabric.mod.json environment —— 模组作者自证 */
+    | "jarMetadata"
+    /** Modrinth 按文件 sha1 反查构建 */
+    | "modrinthHash"
+    /** Modrinth 项目级 client_side/server_side */
+    | "modrinthProject"
+    /** 模组名关键字表，纯兜底 */
+    | "nameHeuristic"
+    /** 无任何证据：默认保留 */
+    | "unknown";
+
+/** 某一端的支持程度 */
+export type SideFlag = "required" | "optional" | "unsupported";
+
 /** 转换方案里的一行模组 */
 export interface PlanMod {
     id: string;
@@ -62,6 +80,12 @@ export interface PlanMod {
     localPath?: string;
     /** 行 ↔ 整合包内条目的精确锚（Rust 下发，前端原样回传）：同 id 多文件时锁定正确条目 */
     srcPath?: string;
+    /** 本行处置的证据来源；unknown = 没判定出来（默认保留） */
+    envSource?: EnvSource;
+    /** 客户端支持度；缺省 = 无证据 */
+    clientSide?: SideFlag;
+    /** 服务端支持度；与 clientSide 一起给出「客户端必需 / 服务端可选」这一直白证据 */
+    serverSide?: SideFlag;
     /** 在线添加时钉住的构建；缺省 = 构建期解析最新兼容版（自动补行） */
     pinned?: PinnedVersion;
     /** 仅前端展示态：新增行被停用（行保留在清单、不参与构建与计数），下发前整行过滤 */
@@ -355,6 +379,29 @@ export interface AppSettings {
     downloadSource: DownloadSource;
     /** 并发下载数 1–16 */
     concurrency: number;
+    /** 自动分类时允许联网反查 Modrinth（关掉了只剩包内自证 + 本地索引 + 名称兜底） */
+    autoClassifyOnline: boolean;
+}
+
+/** 自动分类结果（Rust emit("plan://classified", payload)）：在线层跑完后的增量刷新 */
+export interface PlanClassified {
+    /** 归属包名：前端按当前 manifest.fileName 校验，切包后的迟到事件一律丢弃 */
+    fileName: string;
+    /** 带全部证据层的完整方案（前端只套用用户未手动改过的行） */
+    plan: PlanMod[];
+    /** 仍无任何端证据的行数 */
+    unresolved: number;
+    /** false = 本轮还没跑完（离线那次推送），true 才是最后一次事件 */
+    done: boolean;
+    /** 在线层是否全部成功（有请求失败 = false，前端提示可重试） */
+    complete: boolean;
+}
+
+/** classify_pack 的同步返回：离线层结论 + 在线层还会不会再推一次事件 */
+export interface PlanClassification {
+    plan: PlanMod[];
+    /** true = 联网反查已在后台起跑，最终结论走 plan://classified */
+    onlinePending: boolean;
 }
 
 /** 流水线进度事件载荷（Rust app.emit("conversion://progress", payload)） */
@@ -373,4 +420,5 @@ export interface ProgressEvent {
 export const EVENTS = {
     progress: "conversion://progress",
     done: "conversion://done",
+    classified: "plan://classified",
 } as const;

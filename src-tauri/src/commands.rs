@@ -4,10 +4,11 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use tauri::{AppHandle, State};
+use tauri::{AppHandle, Emitter, State};
 
 use crate::core::detector;
 use crate::core::downloader::Downloader;
+use crate::core::env;
 use crate::core::parser;
 use crate::core::parser::ParsedPack;
 use crate::models::*;
@@ -21,11 +22,7 @@ fn lock(state: &AppState) -> std::sync::MutexGuard<'_, task_engine::Inner> {
 
 fn last_parsed(state: &S<'_>) -> Option<Arc<ParsedPack>> {
     let inner = lock(&state);
-    inner
-        .last_file
-        .as_ref()
-        .and_then(|f| inner.parsed_by_name.get(f))
-        .cloned()
+    last_parsed_of(&inner)
 }
 
 fn downloader_of(state: &S<'_>) -> Downloader {
@@ -169,15 +166,197 @@ pub fn list_pack_dirs(state: S<'_>) -> Vec<PackDirNode> {
 
 /* ---------------- 转换方案 ---------------- */
 
+fn last_parsed_of(inner: &task_engine::Inner) -> Option<Arc<ParsedPack>> {
+    inner
+        .last_file
+        .as_ref()
+        .and_then(|f| inner.parsed_by_name.get(f))
+        .cloned()
+}
+
+/// 端证据表是否属于当前包（换包后旧证据一律作废，避免同名条目张冠李戴）
+fn evidence_of<'a>(
+    inner: &'a task_engine::Inner,
+    empty: &'a env::EvidenceMap,
+) -> &'a env::EvidenceMap {
+    if inner.env_evidence_file.is_some() && inner.env_evidence_file == inner.last_file {
+        &inner.env_evidence
+    } else {
+        empty
+    }
+}
+
 /// 最近一次解析包的方案（用户勾改在前端本地模型中，start_conversion 回传最终版）
 fn current_plan(state: &S<'_>) -> Vec<PlanMod> {
-    match last_parsed(state) {
-        Some(p) => {
-            let strip = lock(&state).settings.strip_client_only;
-            detector::build_plan(&p, strip)
-        }
+    let inner = lock(&state);
+    let empty = env::EvidenceMap::new();
+    match last_parsed_of(&inner) {
+        Some(p) => detector::build_plan(
+            &p,
+            inner.settings.strip_client_only,
+            evidence_of(&inner, &empty),
+        ),
         None => Vec::new(),
     }
+}
+
+/// 自动分类：先跑离线层（包内 jar 自证 + 本地索引）并立即返回，在线层（Modrinth 反查）
+/// 后台补完再用 `plan://classified` 事件推一次增量。用户手改永远在前端 overrides 里，
+/// 后端只交「自动结论」，不碰人工选择。
+#[tauri::command]
+pub async fn classify_pack(app: AppHandle, state: S<'_>) -> Result<PlanClassification, String> {
+    // 快照 inputs：guard 必须在这个块里结束，否则 MutexGuard 跨 await 让命令 future 不 Send
+    let (parsed, file_name, strip, online, cache_dir, concurrency) = {
+        let inner = lock(&state);
+        match last_parsed_of(&inner) {
+            Some(p) => (
+                p,
+                inner.last_file.clone().unwrap_or_default(),
+                inner.settings.strip_client_only,
+                inner.settings.auto_classify_online,
+                PathBuf::from(&inner.settings.cache_dir),
+                inner.settings.concurrency.max(1) as usize,
+            ),
+            None => {
+                return Ok(PlanClassification {
+                    plan: Vec::new(),
+                    online_pending: false,
+                })
+            }
+        }
+    };
+
+    // 离线层 1：包内 jar 自证（Fabric/Quilt 的 environment）+ 自报身份与哈希（重 CPU → _blocking）
+    let src = parsed
+        .manifest
+        .source_path
+        .clone()
+        .unwrap_or_default();
+    let need_jar: Vec<env::ProbeReq> = parsed
+        .mod_files
+        .iter()
+        .filter(|f| f.in_pack && f.env_server.is_none() && f.env_client.is_none())
+        .map(|f| env::ProbeReq {
+            path: f.path.clone(),
+            // index 没给哈希的行才需要整包算 sha1（裸 zip 大包的额外开销就省在这一步）
+            want_sha1: f.sha1.is_none(),
+        })
+        .collect();
+    let probes = if src.is_empty() || need_jar.is_empty() {
+        Default::default()
+    } else {
+        tauri::async_runtime::spawn_blocking(move || {
+            env::probe_jars(&PathBuf::from(src), &need_jar)
+        })
+        .await
+        .unwrap_or_default()
+    };
+    let mut ev: env::EvidenceMap = probes
+        .iter()
+        .filter_map(|(path, p)| p.env.map(|e| (path.clone(), e)))
+        .collect();
+    // 反查目标：index 未给哈希的行（裸 zip、手动塞入的 jar）用扫描算出的 sha1 补上——
+    // 中文改名包只剩哈希与包内 id 这两条路能对上平台
+    let mut targets = env::targets_for(&parsed.mod_files);
+    env::apply_probes(&probes, &mut targets);
+    // 离线层 2：上次联网查到的本地索引（有则免去在线请求）
+    let pending = env::apply_index(&env::EnvIndex::load(&cache_dir), &targets, &mut ev);
+
+    let plan = detector::build_plan(&parsed, strip, &ev);
+    {
+        let mut inner = lock(&state);
+        inner.env_evidence = ev.clone();
+        inner.env_evidence_file = Some(file_name.clone());
+    }
+    // 离线那次推送：还有在线层要跑就说明本轮没结束（done=false，前端继续转圈）
+    let offline_final = !online || pending.is_empty();
+    emit_classified(
+        &app,
+        &file_name,
+        plan.clone(),
+        &ev,
+        &parsed,
+        offline_final,
+        offline_final,
+    );
+
+    // 在线层：只查离线没答上的那些行
+    if online && !pending.is_empty() {
+        let app = app.clone();
+        let state = state.inner().clone();
+        let targets = targets.clone();
+        tauri::async_runtime::spawn(async move {
+            let dl = Downloader::new(cache_dir.clone(), concurrency);
+            let mut index = env::EnvIndex::load(&cache_dir);
+            let mut ev = state
+                .inner
+                .lock()
+                .map(|g| g.env_evidence.clone())
+                .unwrap_or_default();
+            let complete = env::resolve_online(
+                &dl,
+                &mut index,
+                &cache_dir,
+                &targets,
+                &pending,
+                &mut ev,
+            )
+            .await;
+            let (plan, file, parsed) = {
+                let mut g = lock(&state);
+                // 反查期间用户可能换了包：不是同一个包就不落库、不推事件
+                if g.env_evidence_file.as_deref() != Some(file_name.as_str()) {
+                    return;
+                }
+                g.env_evidence = ev.clone();
+                let parsed = last_parsed_of(&g);
+                let plan = parsed.as_ref().map(|p| {
+                    detector::build_plan(p, g.settings.strip_client_only, &ev)
+                });
+                (plan, file_name.clone(), parsed)
+            };
+            if let (Some(plan), Some(parsed)) = (plan, parsed) {
+                emit_classified(&app, &file, plan, &ev, &parsed, true, complete);
+            }
+        });
+    }
+    Ok(PlanClassification {
+        plan,
+        online_pending: !offline_final,
+    })
+}
+
+/// 推自动分类结果。分类明细不写日志行——日志量级就是前端性能预算（十五轮定案）
+fn emit_classified(
+    app: &AppHandle,
+    file_name: &str,
+    plan: Vec<PlanMod>,
+    ev: &env::EvidenceMap,
+    parsed: &ParsedPack,
+    done: bool,
+    complete: bool,
+) {
+    // 无证据 = 既没查到端声明、也没落进名称兜底的行；按包内条目对齐
+    let unresolved = parsed
+        .mod_files
+        .iter()
+        .filter(|f| {
+            !(f.env_server.is_some()
+                || f.env_client.is_some()
+                || ev.contains_key(&f.path)
+                || detector::name_heuristic_hit(&f.file_name))
+        })
+        .count() as u32;
+    let _ = app.emit(
+        task_engine::EVENT_CLASSIFIED,
+        PlanClassified {
+            file_name: file_name.to_string(),
+            plan,
+            unresolved,
+            done,
+            complete,
+        },
+    );
 }
 
 #[tauri::command]

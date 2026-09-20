@@ -123,18 +123,18 @@ const LOG_LEVEL_COLOR = {
 } as const;
 
 /**
- * 轨道几何：设计稿 rail-body 内宽 884，站点中心 x=130/343/557/770，底轨 130→770（640），
- * 线 y=44、站点 38×38（y=26）、标签 y=74。此处一律折算成百分比，
- * 使 1200 窗口下与设计稿逐像素对齐，窗口缩放时等比收缩而不重叠。
+ * 轨道几何（流体·对称）：两端芯片按自身内容宽排在行两端，芯片与轨道区之间固定
+ * 39px 行距 = 站点盒半径 19 + 视觉留白 20。于是「芯片外缘 → 站点盒外缘」左右
+ * 都正好 20px，且芯片文案变长也只吞行距、两端依旧等值——设计稿那组 130/114 的
+ * 绝对内缩左 20px 右 4px，本来就不对称。
+ * 四站等分轨道区（中心落在区内 0/33.3/66.7/100%）、底轨跨满整区，站距严格相等。
+ * 1200 窗口下首站中心 = 6 + 芯片 85 + 39 = 130，仍与设计稿的 130 对齐。
  */
-const RAIL_W = 884;
-const LINE_START = 130;
-const LINE_SPAN = 640;
-const STATION_CENTERS = [130, 343, 557, 770].map((x) => (x / RAIL_W) * 100);
-const LINE_LEFT = (LINE_START / RAIL_W) * 100;
-const LINE_WIDTH = (LINE_SPAN / RAIL_W) * 100;
-/** 标签宽度 190/884，居中挂在站点下方 */
-const LABEL_WIDTH = (190 / RAIL_W) * 100;
+const STATION_CENTERS = [0, 100 / 3, 200 / 3, 100];
+const LINE_LEFT = 0;
+const LINE_WIDTH = 100;
+/** 标签格 = 一格站距，居中挂在站点下方，相邻格刚好首尾相接 */
+const LABEL_WIDTH = 100 / 3;
 
 /**
  * 已完成段宽度（占底轨比例）：推进到"最后一个 done 站"的中心，与设计稿一致
@@ -207,111 +207,113 @@ export function ShiftRail({
                 )}
             </header>
 
-            {/* 轨道主体：设计稿 rail-body 内宽 884，纵向按「站点盒 38 + 10 + 名称 16 + 2 + 副标题 14
-                + 顶部留位 26」精确收到 106（原 126 的 20px 是标签行继承 24px 行高白撑出来的） */}
-            <div className="relative h-[106px]">
-                {/* 端点芯片 */}
-                <EndChip icon={Archive} label="客户端包" className="left-1.5 top-[29px]" />
+            {/* 轨道主体：芯片(内容宽) + 39px 行距 + 轨道区(flex-1) + 39px + 芯片。
+                轨道区内所有百分比都相对自身宽度；站点盒半径 19 会吃掉一半行距，
+                所以芯片与站点盒的视觉净间距左右都是 20px。
+                纵向 106 = 站点顶留位 26 + 盒 38 + 10 + 名称 16 + 2 + 副标题 14 */}
+            <div className="flex h-[106px] gap-[39px] px-1.5">
+                <EndChip icon={Archive} label="客户端包" className="mt-[29px] shrink-0" />
+                <div className="relative min-w-0 flex-1">
+                    {/* 底轨 + 已完成段 */}
+                    <span
+                        className="absolute h-[3px] rounded-full bg-rail-track"
+                        style={{ left: `${LINE_LEFT}%`, top: 44, width: `${LINE_WIDTH}%` }}
+                    />
+                    {doneFrac > 0 && (
+                        <span
+                            className="absolute h-[3px] rounded-full bg-emerald transition-[width] duration-500"
+                            style={{
+                                left: `${LINE_LEFT}%`,
+                                top: 44,
+                                width: `${LINE_WIDTH * doneFrac}%`,
+                            }}
+                        />
+                    )}
+
+                    {/* 进行中腿：淡色待走路 + accent 流动段（宽度 = 当前阶段完成度）+ 头部亮点。
+                        这是「线在走动」的唯一载体——站点盒保持灰色，不靠涂色表意 */}
+                    {leg && runFrac != null && (
+                        <>
+                            <span
+                                className="absolute h-[3px] rounded-full bg-accent/12"
+                                style={{
+                                    left: `${leg.left}%`,
+                                    top: 44,
+                                    width: `${leg.width}%`,
+                                }}
+                            />
+                            <span
+                                className="rail-flow absolute h-[3px] rounded-full transition-[width] duration-700 ease-linear"
+                                style={{
+                                    left: `${leg.left}%`,
+                                    top: 44,
+                                    width: `${runPct}%`,
+                                }}
+                            />
+                            <span
+                                className="rail-head absolute size-[7px] -translate-x-1/2 -translate-y-1/2 rounded-full bg-accent transition-[left] duration-700 ease-linear"
+                                style={{
+                                    left: `${leg.left + runPct}%`,
+                                    top: 45.5,
+                                }}
+                            />
+                        </>
+                    )}
+
+                    {/* 四站：站点盒 + 名称/副标题，整列以轨道中心对齐 */}
+                    {RAIL_STAGES.map((s, i) => {
+                        const st = list[i];
+                        const style = STATION_STYLE[st];
+                        const Icon = s.icon;
+                        return (
+                            <div
+                                key={s.stage}
+                                className="absolute -translate-x-1/2 flex flex-col items-center gap-2.5"
+                                style={{ left: `${STATION_CENTERS[i]}%`, width: `${LABEL_WIDTH}%`, top: 26 }}
+                            >
+                                <span
+                                    className={cn(
+                                        "size-[38px] shrink-0 rounded-[10px] border flex items-center justify-center",
+                                        style.box
+                                    )}
+                                >
+                                    {st === "done" && !doneShowsOwnIcon(list, i) ? (
+                                        <Check className={cn("size-4", style.iconColor)} />
+                                    ) : st === "error" ? (
+                                        <X className={cn("size-4", style.iconColor)} />
+                                    ) : (
+                                        <Icon
+                                            className={cn(
+                                                "size-4",
+                                                style.iconColor,
+                                                st === "active" && "animate-pulse"
+                                            )}
+                                        />
+                                    )}
+                                </span>
+                                <div className="flex w-full flex-col items-center gap-0.5">
+                                    <span
+                                        className={cn(
+                                            "text-xs leading-[16px] font-semibold text-center",
+                                            st === "pending" ? "text-text-2" : "text-text-1"
+                                        )}
+                                    >
+                                        {s.label}
+                                    </span>
+                                    <span className="font-mono text-[10px] leading-[14px] font-normal text-center text-text-3 w-full">
+                                        {subs?.[s.stage] ?? s.sub}
+                                    </span>
+                                </div>
+                            </div>
+                        );
+                    })}
+                </div>
                 <EndChip
                     icon={Server}
                     label="服务端包"
                     iconClass="text-emerald"
-                    className="right-1.5 top-[29px]"
+                    className="mt-[29px] shrink-0"
                 />
-
-                {/* 底轨 + 已完成段（几何按设计稿折算为百分比，一律圆头收边） */}
-                <span
-                    className="absolute h-[3px] rounded-full bg-rail-track"
-                    style={{ left: `${LINE_LEFT}%`, top: 44, width: `${LINE_WIDTH}%` }}
-                />
-                {doneFrac > 0 && (
-                    <span
-                        className="absolute h-[3px] rounded-full bg-emerald transition-[width] duration-500"
-                        style={{
-                            left: `${LINE_LEFT}%`,
-                            top: 44,
-                            width: `${LINE_WIDTH * doneFrac}%`,
-                        }}
-                    />
-                )}
-
-                {/* 进行中腿：淡色待走路 + accent 流动段（宽度 = 当前阶段完成度）+ 头部亮点。
-                    这是「线在走动」的唯一载体——站点盒保持灰色，不靠涂色表意 */}
-                {leg && runFrac != null && (
-                    <>
-                        <span
-                            className="absolute h-[3px] rounded-full bg-accent/12"
-                            style={{
-                                left: `${leg.left}%`,
-                                top: 44,
-                                width: `${leg.width}%`,
-                            }}
-                        />
-                        <span
-                            className="rail-flow absolute h-[3px] rounded-full transition-[width] duration-700 ease-linear"
-                            style={{
-                                left: `${leg.left}%`,
-                                top: 44,
-                                width: `${runPct}%`,
-                            }}
-                        />
-                        <span
-                            className="rail-head absolute size-[7px] -translate-x-1/2 -translate-y-1/2 rounded-full bg-accent transition-[left] duration-700 ease-linear"
-                            style={{
-                                left: `${leg.left + runPct}%`,
-                                top: 45.5,
-                            }}
-                        />
-                    </>
-                )}
-
-                {/* 四站：站点盒 + 名称/副标题，整列以轨道中心对齐 */}
-                {RAIL_STAGES.map((s, i) => {
-                    const st = list[i];
-                    const style = STATION_STYLE[st];
-                    const Icon = s.icon;
-                    return (
-                        <div
-                            key={s.stage}
-                            className="absolute -translate-x-1/2 flex flex-col items-center gap-2.5"
-                            style={{ left: `${STATION_CENTERS[i]}%`, width: `${LABEL_WIDTH}%`, top: 26 }}
-                        >
-                            <span
-                                className={cn(
-                                    "size-[38px] shrink-0 rounded-[10px] border flex items-center justify-center",
-                                    style.box
-                                )}
-                            >
-                                {st === "done" && !doneShowsOwnIcon(list, i) ? (
-                                    <Check className={cn("size-4", style.iconColor)} />
-                                ) : st === "error" ? (
-                                    <X className={cn("size-4", style.iconColor)} />
-                                ) : (
-                                    <Icon
-                                        className={cn(
-                                            "size-4",
-                                            style.iconColor,
-                                            st === "active" && "animate-pulse"
-                                        )}
-                                    />
-                                )}
-                            </span>
-                            <div className="flex flex-col items-center gap-0.5 w-full">
-                                <span
-                                    className={cn(
-                                        "text-xs leading-[16px] font-semibold text-center",
-                                        st === "pending" ? "text-text-2" : "text-text-1"
-                                    )}
-                                >
-                                    {s.label}
-                                </span>
-                                <span className="font-mono text-[10px] leading-[14px] font-normal text-text-3 text-center w-full">
-                                    {subs?.[s.stage] ?? s.sub}
-                                </span>
-                            </div>
-                        </div>
-                    );
-                })}
             </div>
 
             {/* 底部链接行（正常流成员，仅当有可查看的任务） */}
@@ -326,16 +328,16 @@ export function ShiftRail({
                 </footer>
             )}
 
-            {/* 日志控制台：定高 3 行（80px）+ 框内滚动，与任务详情页读同一份日志尾。
-                高度按 1200×800 默认窗口纵向预算锁死：页面 712 可用 − 头部/上半行/间距
-                后只剩 ~80px，再高就会顶出滚动条。滚动条样式见 App.css，新行自动贴底 */}
+            {/* 日志控制台：与任务详情页读同一份日志尾，框内滚动、高度不顶卡。
+                12.5vh 上限 100：1200×800 下正好 100（≈4 行），窗口变矮时跟着收，
+                不至于把整张轨道卡挤出默认视口。滚动条样式见 App.css，新行自动贴底 */}
             <div className="relative">
                 <div
                     ref={logBoxRef}
-                    className="log-scroll h-[100px] overflow-y-auto rounded-lg border border-stroke-soft bg-bg-app px-4 py-2.5 flex flex-col gap-1.5"
+                    className="log-scroll h-[clamp(56px,12.5vh,100px)] overflow-y-auto rounded-lg border border-stroke-soft bg-bg-app px-4 py-2.5 flex flex-col gap-1.5"
                 >
                     {logs.length === 0 && waiting ? (
-                        <p className="flex items-center gap-2 font-mono text-[11px]">
+                        <p className="flex items-center gap-2 font-mono text-[11px] leading-[16px]">
                             <span className="font-semibold text-text-3">{waiting.title}</span>
                             {waiting.detail && (
                                 <span className="text-text-3">{waiting.detail}</span>
@@ -377,7 +379,7 @@ export function ShiftRail({
     );
 }
 
-/** 轨道两端芯片：surface-2 底 + stroke 描边（客户端包 / 服务端包） */
+/** 轨道两端芯片：surface-2 底 + stroke 描边（客户端包 / 服务端包），排在轨道主体两端 */
 function EndChip({
                      icon: Icon,
                      label,
@@ -392,7 +394,7 @@ function EndChip({
     return (
         <span
             className={cn(
-                "absolute h-8 flex items-center gap-[7px] rounded-lg border border-stroke bg-surface-2 px-2.5 text-[11px] font-semibold text-text-2",
+                "h-8 flex items-center gap-[7px] rounded-lg border border-stroke bg-surface-2 px-2.5 text-[11px] leading-[14px] font-semibold text-text-2",
                 className
             )}
         >

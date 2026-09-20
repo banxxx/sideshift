@@ -10,7 +10,7 @@ use std::path::Path;
 
 use serde::Deserialize;
 
-use crate::models::{LoaderKind, PackManifest};
+use crate::models::{LoaderKind, PackManifest, SideFlag};
 
 /// mrpack 中单个文件条目（spec: modrinth.index.json）
 #[derive(Debug, Clone)]
@@ -27,10 +27,10 @@ pub struct PackFile {
     /// 物理条目是否在源 zip 内（mrpack 规范要求 index 文件全部内嵌）。
     /// true = 构建时 ZipEntry 直取、不产生网络流量；false = index 声明了但包里没有，需按 URL 补下
     pub in_pack: bool,
-    /// env.server != unsupported
-    pub server_required: bool,
-    /// 条目是否声明了 env 段（声明则按 env 精确判定，否则走名称启发式）
-    pub env_declared: bool,
+    /// env.server 声明（mrpack 规范取值 required/unsupported）；None = 条目没写 env 段
+    pub env_server: Option<SideFlag>,
+    /// env.client 声明，同上
+    pub env_client: Option<SideFlag>,
     /// 非可选依赖的 project_id 列表（mrpack files[].depends；裸 zip 为空）
     pub depends: Vec<String>,
 }
@@ -137,6 +137,20 @@ struct RawFile {
 #[derive(Deserialize)]
 struct RawEnv {
     server: Option<String>,
+    #[serde(default)]
+    client: Option<String>,
+}
+
+/// mrpack env 取值 → 支持度：规范只有 required/unsupported，见到别的值按可选待。
+/// **缺键必须返回 None**（很多包整个 `env` 段都不写）：写成 Optional 会让下游以为
+/// 「作者声明过」，既吃掉证据阶梯的后几层，也永远判不出剔除。
+fn env_flag(v: Option<&str>) -> Option<SideFlag> {
+    let raw = v?.to_lowercase();
+    match raw.as_str() {
+        "required" => Some(SideFlag::Required),
+        "unsupported" => Some(SideFlag::Unsupported),
+        _ => Some(SideFlag::Optional),
+    }
 }
 
 /// mrpack files[].depends[]：指向包内另一 Modrinth 文件版本的项目引用
@@ -208,7 +222,7 @@ fn parse_mrpack(path: &Path) -> Result<ParsedPack, String> {
             .file_name()
             .map(|s| s.to_string_lossy().to_string())
             .unwrap_or_else(|| norm_path.clone());
-        let server_side = f.env.as_ref().and_then(|e| e.server.as_deref());
+        let env = f.env.as_ref();
         // index 声明但物理缺失（残缺包）→ in_pack=false，构建时按 URL 补下载
         let entry_size = entry_sizes.get(&norm_path).copied();
         // downloads 为空 = 包内自带（local）文件：同样计入模组与方案，
@@ -220,8 +234,8 @@ fn parse_mrpack(path: &Path) -> Result<ParsedPack, String> {
             sha1: f.hashes.get("sha1").cloned(),
             size_bytes: entry_size.or(f.file_size).unwrap_or(0),
             in_pack: entry_size.is_some(),
-            server_required: server_side != Some("unsupported"),
-            env_declared: f.env.as_ref().and_then(|e| e.server.clone()).is_some(),
+            env_server: env_flag(env.and_then(|e| e.server.as_deref())),
+            env_client: env_flag(env.and_then(|e| e.client.as_deref())),
             depends: f
                 .depends
                 .iter()
@@ -266,8 +280,8 @@ fn parse_mrpack(path: &Path) -> Result<ParsedPack, String> {
                     sha1: None,
                     size_bytes: size,
                     in_pack: true,
-                    server_required: true,
-                    env_declared: false,
+                    env_server: None,
+                    env_client: None,
                     depends: Vec::new(),
                 });
             }
@@ -283,8 +297,8 @@ fn parse_mrpack(path: &Path) -> Result<ParsedPack, String> {
             sha1: None,
             size_bytes: size,
             in_pack: true,
-            server_required: true,
-            env_declared: false,
+            env_server: None,
+            env_client: None,
             depends: Vec::new(),
         });
     }
@@ -372,8 +386,8 @@ fn parse_plain_zip(path: &Path) -> Result<ParsedPack, String> {
                 sha1: None,
                 size_bytes: *size,
                 in_pack: true, // 裸 zip 的 jar 全部物理在包内
-                server_required: true,
-                env_declared: false,
+                env_server: None,
+                env_client: None,
                 depends: Vec::new(),
             });
         } else if let Some(i) = lower.find('/') {
@@ -388,8 +402,8 @@ fn parse_plain_zip(path: &Path) -> Result<ParsedPack, String> {
                     sha1: None,
                     size_bytes: *size,
                     in_pack: true,
-                    server_required: true,
-                    env_declared: false,
+                    env_server: None,
+                    env_client: None,
                     depends: Vec::new(),
                 });
             }
@@ -414,7 +428,8 @@ fn parse_plain_zip(path: &Path) -> Result<ParsedPack, String> {
         size_bytes: std::fs::metadata(path).map(|m| m.len()).unwrap_or(0),
         parsed: true,
         error: None,
-        source_path: None,
+        // 裸 zip 的 jar 全在同一个文件里：env 取证层要按这个路径重开包读 jar 元数据
+        source_path: Some(path.to_string_lossy().to_string()),
     };
     Ok(ParsedPack {
         manifest,
@@ -561,6 +576,22 @@ mod tests {
         assert!(parsed.manifest.parsed, "{:?}", parsed.manifest.error);
         assert_eq!(parsed.manifest.mc_version, "1.21.1");
         assert_eq!(parsed.loader_version.as_deref(), Some("0.16.9"));
+    }
+
+    #[test]
+    fn mrpack_without_env_declares_no_side_flag() {
+        // 上面的 fixture 全程没写 env 段：真实包里这是常态。
+        // 若这里补成 Optional，下游会误当「作者已声明」，证据阶梯后几层全部失效。
+        let path = write_fake_mrpack();
+        let parsed = parse(&path);
+        let _ = std::fs::remove_file(&path);
+        for f in &parsed.mod_files {
+            assert!(
+                f.env_client.is_none() && f.env_server.is_none(),
+                "{} 无 env 声明时不应有端标志",
+                f.path
+            );
+        }
     }
 
     #[test]

@@ -13,6 +13,7 @@ import type {
     ModVersionEntry,
     PackDirNode,
     PackManifest,
+    PlanClassification,
     PlanMod,
     StartResult,
     TaskLogLine,
@@ -54,15 +55,15 @@ export function mockParsePack(path: string): PackManifest {
  * 让"查看全部 41 项剔除清单"弹窗、保留计数等 UI 都有真实体量的数据可渲染。
  */
 const REMOVE_SAMPLES: PlanMod[] = [
-    { id: "optifine", name: "OptiFine", version: "F9M2+1.20.1", disposition: "remove", clientOnly: true, needsReview: false, autoSupplement: false },
-    { id: "xaeros-minimap", name: "Xaero's Minimap", version: "23.10.0", loader: "Fabric", disposition: "remove", clientOnly: true, needsReview: false, autoSupplement: false },
-    { id: "viafabricplus", name: "ViaFabricPlus", version: "3.4.11", loader: "客户端/服务端两可用", disposition: "remove", clientOnly: false, needsReview: true, autoSupplement: false },
-    { id: "geckolib", name: "GeckoLib", version: "4.4.7", loader: "Fabric", disposition: "remove", clientOnly: false, needsReview: true, autoSupplement: false },
+    { id: "optifine", name: "OptiFine", version: "F9M2+1.20.1", disposition: "remove", clientOnly: true, needsReview: false, autoSupplement: false, envSource: "mrpack", clientSide: "required", serverSide: "unsupported" },
+    { id: "xaeros-minimap", name: "Xaero's Minimap", version: "23.10.0", loader: "Fabric", disposition: "remove", clientOnly: true, needsReview: false, autoSupplement: false, envSource: "modrinthHash", clientSide: "required", serverSide: "optional" },
+    { id: "viafabricplus", name: "ViaFabricPlus", version: "3.4.11", loader: "客户端/服务端两可用", disposition: "remove", clientOnly: false, needsReview: true, autoSupplement: false, envSource: "modrinthProject", clientSide: "required", serverSide: "optional" },
+    { id: "geckolib", name: "GeckoLib", version: "4.4.7", loader: "Fabric", disposition: "remove", clientOnly: false, needsReview: true, autoSupplement: false, envSource: "jarMetadata", clientSide: "unsupported", serverSide: "required" },
 ];
 
 const ADD_SAMPLES: PlanMod[] = [
-    { id: "fabric-api", name: "Fabric API", version: "0.92.2+1.20.1", loader: "Fabric", disposition: "add", clientOnly: false, needsReview: false, autoSupplement: true },
-    { id: "spark", name: "spark", version: "1.10.53", loader: "Fabric", disposition: "add", clientOnly: false, needsReview: false, autoSupplement: false },
+    { id: "fabric-api", name: "Fabric API", version: "0.92.2+1.20.1", loader: "Fabric", disposition: "add", clientOnly: false, needsReview: false, autoSupplement: true, envSource: "jarMetadata", clientSide: "optional", serverSide: "required" },
+    { id: "spark", name: "spark", version: "1.10.53", loader: "Fabric", disposition: "add", clientOnly: false, needsReview: false, autoSupplement: false, envSource: "modrinthProject", clientSide: "optional", serverSide: "optional" },
 ];
 
 /** 客户端专属模组名池（渲染/输入/小地图/HUD 类，服务端一律剔除） */
@@ -96,6 +97,10 @@ function buildKept(count: number): PlanMod[] {
         clientOnly: false,
         needsReview: false,
         autoSupplement: false,
+        // 每 6 行留 1 行「无证据」，演示未判定态（保留、不标待确认）
+        envSource: (i % 6 === 5 ? "unknown" : "jarMetadata") as PlanMod["envSource"],
+        clientSide: i % 6 === 5 ? undefined : ("required" as const),
+        serverSide: i % 6 === 5 ? undefined : ("required" as const),
     }));
 }
 
@@ -110,6 +115,9 @@ export const mockPlanMods: PlanMod[] = [
         clientOnly: true,
         needsReview: false,
         autoSupplement: false,
+        envSource: "mrpack",
+        clientSide: "required",
+        serverSide: "unsupported",
     })),
     ...buildKept(146),
     ...ADD_SAMPLES,
@@ -160,6 +168,28 @@ export async function mockEstimateDownload(
     }
     downloadBytes += options.loaderVersion ? (options.mcVersion === "1.20.1" ? 12_000_000 : 25_000_000) : 0;
     return { downloadBytes, fromPackBytes, complete: true };
+}
+
+/** 自动分类（浏览器 dev 兜底）：按与 Rust 侧同一套裁决口径重算处置，证据字段原样保留 */
+export async function mockClassify(plan: PlanMod[]): Promise<PlanClassification> {
+    await new Promise((r) => setTimeout(r, 200));
+    const rows = plan.map((m) => {
+        // 新增行与「需人工确认」行是样例设计意图（跨版本组件），不参与重算
+        if (m.disposition === "add" || m.needsReview) return m;
+        const { clientSide: c, serverSide: s } = m;
+        const strip =
+            s === "unsupported" ||
+            (c === "required" && (s === "optional" || s === undefined));
+        const source = m.envSource ?? "unknown";
+        return {
+            ...m,
+            disposition: strip && source !== "unknown" ? ("remove" as const) : ("keep" as const),
+            clientOnly: strip && source !== "unknown",
+            envSource: source,
+        };
+    });
+    // 浏览器预览没有联网层，一次到位
+    return { plan: rows, onlinePending: false };
 }
 
 /** MC 版本下拉 */
@@ -644,6 +674,7 @@ export const mockDefaultSettings: AppSettings = {
     outputDir: "~/Documents/SideShift/output",
     cacheDir: "D:\\SideShift\\cache",
     stripClientOnly: true,
+    autoClassifyOnline: true,
     verifyAfterBuild: false,
     downloadSource: "official",
     concurrency: 6,

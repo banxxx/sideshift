@@ -1,7 +1,9 @@
 /**
  * 整合包拖放卡（SS.pen Home·Idle `k0nEJ` / Home `pqC6C`）
  *
- * Idle 大卡（760×360，含帮助说明行）与选包后紧凑卡（540 宽）共用本组件。
+ * Idle 大卡（760×360，含帮助说明行）与选包后紧凑卡共用本组件。紧凑卡随窗口流体：
+ * 宽度挂在 4px 悬停壳上（壳是行内 flex 项，百分比才有确定包含块），卡片 w-full 铺满，
+ * 1200 窗口下即设计稿的 540。
  * 动画全部由 motion 驱动（App.css 只保留 --dz-glow 主题色与 .dz-ants-rect 尺寸）：
  * - 常态：$surface 底 + $stroke 描边；
  * - 激活（悬停或拖拽同一套效果）：描边透明、SVG 蚂蚁线圆角跑动边框接管四边，
@@ -115,7 +117,14 @@ export function Dropzone({
         // 边缘光标点会被位移甩进甩出形成高频闪烁（扩热区也无效——热区跟着一起动）。
         // 这层壳几何永不移位，padding 4px > 位移 2px，构成真正的滞回带。
         <div
-            className={cn("-m-[4px] p-[4px]", compact && "shrink-0")}
+            className={cn(
+                "-m-[4px] p-[4px]",
+                // 紧凑态的流体宽度写在这层壳上：壳是行内的 flex 项，百分比相对行宽解析
+                // 才有效；若把百分比写在卡片上，壳会先收缩到内容宽 → 百分比按 auto 解析、
+                // 整张卡塌成文字宽度。idle 保持设计稿的 760 定宽（最小窗口内容区 844，
+                // 永远放得下），不用 self-stretch 撑满——那会把整行变成悬停热区。
+                compact && "shrink-0 w-[clamp(428px,59.3%,648px)]"
+            )}
             onMouseEnter={() => setHovering(true)}
             onMouseLeave={() => setHovering(false)}
         >
@@ -171,9 +180,11 @@ export function Dropzone({
                 className={cn(
                     "group relative rounded-[12px] bg-surface border px-7 py-8 flex flex-col items-center justify-center gap-4 cursor-pointer select-none transition-colors duration-200",
                     active ? "border-transparent" : "border-stroke",
+                    // 紧凑态：卡片铺满壳（宽度由壳给出）
+                    // idle 态：设计稿 760 定宽 + 高度按视口收（45vh 在 800 高窗口正好 360）
                     compact
-                        ? "h-full w-[540px]"
-                        : "w-[760px] h-[360px]",
+                        ? "h-full w-full"
+                        : "w-[760px] h-[clamp(288px,45vh,360px)]",
                     busy && "opacity-70",
                     className
                 )}

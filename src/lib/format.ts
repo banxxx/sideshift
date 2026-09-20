@@ -4,7 +4,7 @@
  * 这些格式化在 Home/Task/Tasks/Report 多页复用（设计稿中统一为 mono 风格），
  * 抽到公共模块避免各页各写一份导致文案格式漂移。
  */
-import type { LoaderKind } from "./types";
+import type { EnvSource, LoaderKind } from "./types";
 
 /** 84.0 MB / 512 MB / 1.2 GB —— ≥1024 才进阶单位，保留一位小数 */
 export function formatSize(bytes: number): string {
@@ -54,6 +54,18 @@ export function formatRate(bytesPerSec: number): string {
 /** 加载器显示名：fabric → Fabric（芯片/下拉/弹窗副标题统一口径） */
 export function loaderLabel(loader: LoaderKind): string {
     return { fabric: "Fabric", forge: "Forge", neoforge: "NeoForge" }[loader];
+}
+
+/** 端判定依据的直白说法：Convert 卡行与「查看全部」弹窗共用同一口径，别两处各写一份 */
+export function evidenceLabel(source: EnvSource = "unknown"): string {
+    return {
+        mrpack: "作者声明",
+        jarMetadata: "jar 自证",
+        modrinthHash: "平台构建",
+        modrinthProject: "平台项目",
+        nameHeuristic: "名称推断",
+        unknown: "无依据",
+    }[source];
 }
 
 /** 由整合包文件名推导服务端输出名：xxx.mrpack → xxx-server.zip */
