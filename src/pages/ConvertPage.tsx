@@ -10,7 +10,7 @@
  *  - 计数/摘要/下发后端的方案一律由 plan+extras+overrides+disabledIds 派生，保证口径不漂移
  */
 import { AlertTriangle, Archive, ChevronRight, Download, File, Folder, Globe, Info, Layers, Plus, X } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { AnimatePresence, motion, type Variants } from "motion/react";
 import * as api from "@/lib/api";
 import { useNavigation } from "@/lib/navigation";
@@ -77,6 +77,11 @@ function findDirNode(nodes: PackDirNode[], path: string): PackDirNode | undefine
  *  其余走「查看全部」弹窗 */
 const PREVIEW_ROWS = 5;
 
+/** 入场节拍：一批里每行错开 110ms 从右侧插入，一档一行。
+ *  档数就取预览行数（卡内最多 5 行，排满即覆盖整个可见区，多余的行等「查看全部」弹窗） */
+const LAND_STAGGER_MS = 110;
+const LAND_MAX_STEPS = PREVIEW_ROWS - 1;
+
 /** 页面入场：容器管节奏，各卡依次上浮（与 Home idle 分支同一支弹簧手感） */
 const PAGE_RISE: Variants = {
     hidden: {},
@@ -116,7 +121,15 @@ export function ConvertPage() {
     const [loaderOptions, setLoaderOptions] = useState<SelectOption[]>([]);
     const [javaOptions, setJavaOptions] = useState<SelectOption[]>([]);
     // 处置清单弹窗：null=关；remove/keep 决定壳的视角（剔除/保留共用一壳）
-    const [listFocus, setListFocus] = useState<ListFocus | null>(null);
+    /** 「全部清单」弹窗：视角与开关分两个状态。
+     *  关闭只翻 listOpen——视角一旦跟着清空，退场那 200ms（base-ui 在 data-[ending-style] 期间仍挂着
+     *  Popup）focus 会退回默认「剔除」，人就看到清单突然换成剔除的数据再消失。 */
+    const [listOpen, setListOpen] = useState(false);
+    const [listFocus, setListFocus] = useState<ListFocus>("remove");
+    const openList = (f: ListFocus) => {
+        setListFocus(f);
+        setListOpen(true);
+    };
     const [onlineOpen, setOnlineOpen] = useState(false);
     const [starting, setStarting] = useState(false);
     /** 全局设置：摘要卡展示默认输出目录（本次覆写为空时回落它） */
@@ -126,16 +139,26 @@ export function ConvertPage() {
     const [dirModalOpen, setDirModalOpen] = useState(false);
     /** 自动分类进行中：离线层是同步返回，在线层补全后走 classified 事件再刷一次 */
     const [classifying, setClassifying] = useState(false);
+    /** 手动重跑的那一小段：列表已被清空、离线结论还没回来（只用来挑文案） */
+    const [reclassifying, setReclassifying] = useState(false);
     /** 「清空我的修改」两段式确认（弹窗纪律：不用遮罩/确认框，第二次点击才执行） */
     const [confirmClear, setConfirmClear] = useState(false);
 
     /** 自动分类主入口：进页默认执行，「重新自动分类」手动再跑一次。
      *  手动处置存在 overrides，方案整体替换也不会覆盖用户改动。
-     *  命令返回只代表离线层跑完；联网反查在后台补全，收尾靠 classified 事件 */
+     *  命令返回只代表离线层跑完；联网反查在后台补全，收尾靠 classified 事件。
+     *  手动重跑先清空方案：不清的话第二轮只要给出同样的处置，行的 id 集合就没变过，
+     *  既不出场也不入场 → 读起来是「整屏一起刷新」，逐行插入的节拍出不来（失败时回滚，别把列表清丢）。 */
     async function runClassify(manual: boolean) {
+        const prevPlan = plan;
         setClassifying(true);
+        if (manual) {
+            setReclassifying(true);
+            setPlan([]);
+        }
         try {
             const res = await api.classifyPack();
+            setReclassifying(false);
             setPlan(res.plan);
             setClassifying(res.onlinePending);
             if (manual) {
@@ -148,6 +171,8 @@ export function ConvertPage() {
                 );
             }
         } catch {
+            setReclassifying(false);
+            if (manual) setPlan(prevPlan);
             notify("自动分类失败，当前方案保持不变", "error");
             setClassifying(false);
         }
@@ -227,15 +252,82 @@ export function ConvertPage() {
     /** 参与构建的行（停用行除外）：计数、预下载聚合、下发后端的方案都用它 */
     const activeMods = useMemo(() => mods.filter((m) => !m.disabled), [mods]);
 
+    /** 分类期间的「待定」行 = 服务端轴还没有端证据、用户也没手动处置过的行。
+     *  离线层面对 Forge 包（mods.toml 无端字段）和打包者乱填 env 的 mrpack，整包都答不上，
+     *  旧口径会把它们全渲染成「剔除 + 需人工确认」，联网结论到达后再成批翻回保留 = 一闪而过的假结论。
+     *  现在待定行不进任何计数、不进清单，只由卡底的分类进度交代；serverSide 一有值就自动落地。 */
+    const pendingIds = useMemo(() => {
+        if (!classifying) return new Set<string>();
+        return new Set(
+            mods.filter(
+                (m) =>
+                    m.disposition !== "add" &&
+                    m.serverSide === undefined &&
+                    (m.envSource ?? "unknown") === "unknown" &&
+                    !(m.id in overrides)
+            ).map((m) => m.id)
+        );
+    }, [classifying, mods, overrides]);
+
+    /** 已判定行：页签计数 / 预览行 / 依赖警告只看这一批 */
+    const settledMods = useMemo(
+        () => activeMods.filter((m) => !pendingIds.has(m.id)),
+        [activeMods, pendingIds]
+    );
+
+    /** 卡内预览行（页签里可见的最多 5 行）：待人工确认的行置顶（与「全部清单」弹窗同一口径），待定行不出现。
+     *  提到 hooks 区计算，是为了让下面的入场节拍能盯着「谁进了可见列表」。 */
+    const previewRows = useMemo(
+        () =>
+            reviewFirst(
+                mods.filter((m) => m.disposition === tab && !pendingIds.has(m.id))
+            ).slice(0, PREVIEW_ROWS),
+        [mods, tab, pendingIds]
+    );
+
+    /* 入场节拍：谁「进入可见列表」谁拿一档（0、1、2…按可见顺序自上而下），换页签即重置。
+       ——必须在渲染期算，不能放 effect：motion 在挂载那一趟 layout effect 里就启动 initial→animate，
+       之后再改 transition.delay 也不会重启动画，effect 补档位已经晚了
+       （这就是「重跑分类时五行一起出现」的原因；切页签看着正常只是骗人——外层 mode="wait"
+       要等旧页签淡出，新行挂载时 effect 早就补好了档位）。
+       用 previewRows 的引用当幂等闩：同一批数据只算一次，StrictMode 双跑也只算一次。 */
+    const cadence = useRef({
+        rows: null as PlanMod[] | null,
+        tab: "" as ModDisposition,
+        shown: new Set<string>(),
+        slots: new Map<string, number>(),
+    }).current;
+    if (cadence.tab !== tab) {
+        cadence.tab = tab;
+        cadence.shown.clear();
+        cadence.slots.clear();
+    }
+    if (cadence.rows !== previewRows) {
+        const visible = new Set(previewRows.map((m) => m.id));
+        // 离开的行既忘掉「已见过」也忘掉旧档位：再回到列表就算新入场
+        cadence.shown.forEach((id) => {
+            if (!visible.has(id)) cadence.shown.delete(id);
+        });
+        cadence.slots.forEach((_, id) => {
+            if (!visible.has(id)) cadence.slots.delete(id);
+        });
+        const fresh = previewRows.filter((m) => !cadence.shown.has(m.id));
+        fresh.forEach((m) => cadence.shown.add(m.id));
+        // 增量合并而不是整表替换：上一批还在排队的行不能被后来的批次抢走档位
+        fresh.forEach((m, i) => cadence.slots.set(m.id, Math.min(i, LAND_MAX_STEPS)));
+        cadence.rows = previewRows;
+    }
+    const landDelayOf = (id: string) => (cadence.slots.get(id) ?? 0) * LAND_STAGGER_MS;
+
     const counts = useMemo(
         () => ({
-            remove: activeMods.filter((m) => m.disposition === "remove").length,
-            keep: activeMods.filter((m) => m.disposition === "keep").length,
+            remove: settledMods.filter((m) => m.disposition === "remove").length,
+            keep: settledMods.filter((m) => m.disposition === "keep").length,
             // add = 生效新增数（停用不计）；addTotal = 清单行数（弹窗「查看全部」口径）
-            add: activeMods.filter((m) => m.disposition === "add").length,
+            add: settledMods.filter((m) => m.disposition === "add").length,
             addTotal: mods.filter((m) => m.disposition === "add").length,
         }),
-        [activeMods, mods]
+        [settledMods, mods]
     );
 
     /** 本地兜底聚合（后端答不上来时展示）：联网行按源 fileSize 求和 */
@@ -289,15 +381,16 @@ export function ConvertPage() {
 
     const estimate = remoteEstimate ?? localEstimate;
 
-    /** 反向依赖警告：生效行依赖了被剔除或被停用的行（mrpack depends 元数据，按缺失项聚合） */
+    /** 反向依赖警告：生效行依赖了被剔除或被停用的行（mrpack depends 元数据，按缺失项聚合）。
+     *  待定行不参与——它们只是还没判完，报「依赖被剔除的 X」是假告警 */
     const depWarnings = useMemo(() => {
         const byId = new Map(mods.map((m) => [m.id, m]));
         const groups = new Map<string, { missing: PlanMod; hosts: PlanMod[] }>();
-        for (const m of activeMods) {
+        for (const m of settledMods) {
             if (m.disposition === "remove") continue;
             for (const d of m.depends ?? []) {
                 const t = byId.get(d);
-                if (t && (t.disposition === "remove" || t.disabled)) {
+                if (t && !pendingIds.has(d) && (t.disposition === "remove" || t.disabled)) {
                     const g = groups.get(d) ?? { missing: t, hosts: [] };
                     g.hosts.push(m);
                     groups.set(d, g);
@@ -305,7 +398,7 @@ export function ConvertPage() {
             }
         }
         return [...groups.values()];
-    }, [mods, activeMods]);
+    }, [mods, settledMods, pendingIds]);
 
     /** 本地 .jar 添加的模组 id（徽章显示「本地」而非「推荐」） */
     const localIds = useMemo(
@@ -499,8 +592,12 @@ export function ConvertPage() {
         );
     }
 
-    // 预览行：待人工确认的行永远排在最前（与「全部清单」弹窗同一口径）
-    const rows = reviewFirst(mods.filter((m) => m.disposition === tab)).slice(0, PREVIEW_ROWS);
+    // 预览行：见上方 previewRows（口径唯一，节拍也按它算）
+    const rows = previewRows;
+    /** 方案是否已有行（分类首屏的空卡要说「正在读取整合包…」而不是「暂无模组」） */
+    const totalRows = mods.length;
+    /** 手动重跑会先清空方案，那一瞬不能说「正在读取整合包」（包早就读过了） */
+    const readingLabel = reclassifying ? "正在重新自动分类…" : "正在读取整合包…";
     const loader = loaderLabel(manifest.loader);
     const patch = (p: Partial<ConversionOptions>) => setOptions((o) => (o ? { ...o, ...p } : o));
 
@@ -593,40 +690,92 @@ export function ConvertPage() {
                                 <AnimatePresence mode="wait" initial={false}>
                                     <motion.div
                                         key={tab}
-                                        initial={{ opacity: 0, y: 10 }}
-                                        animate={{ opacity: 1, y: 0 }}
-                                        exit={{ opacity: 0, y: -10 }}
-                                        transition={{ duration: 0.18, ease: "easeOut" }}
+                                        /* 容器只做淡入：换页签时的位移全部交给下面的逐行插入，
+                                           否则「整块上下浮 + 逐行左右插」两支动画会互相抢读感 */
+                                        initial={{ opacity: 0 }}
+                                        animate={{ opacity: 1 }}
+                                        exit={{ opacity: 0 }}
+                                        transition={{ duration: 0.14, ease: "easeOut" }}
                                         className="flex min-h-0 shrink flex-col gap-2.5 overflow-hidden"
                                     >
                                         {rows.length === 0 ? (
-                                            <p className="flex h-[140px] w-full items-center justify-center text-[11px] text-text-3">
-                                                该分类下暂无模组
+                                            <p className="flex h-[140px] w-full items-center justify-center px-6 text-center text-[11px] leading-[16px] text-text-3">
+                                                {classifying
+                                                    ? totalRows === 0
+                                                        ? readingLabel
+                                                        : "判定结果会逐条出现在这里"
+                                                    : "该分类下暂无模组"}
                                             </p>
                                         ) : (
-                                            rows.map((m) => (
-                                                <PlanModRow
-                                                    key={m.id}
-                                                    mod={m}
-                                                    badge={badgeFor(m, localIds.has(m.id))}
-                                                    onToggle={() =>
-                                                        m.disposition === "add"
-                                                            ? toggleAddActive(m)
-                                                            : setDisposition(
-                                                                  m.id,
-                                                                  m.disposition === "remove"
-                                                                      ? "keep"
-                                                                      : "remove"
-                                                              )
-                                                    }
-                                                    onRemove={
-                                                        m.disposition === "add" &&
-                                                        extrasIds.has(m.id)
-                                                            ? () => removeRow(m)
-                                                            : undefined
-                                                    }
-                                                />
-                                            ))
+                                            /* 逐行进出：新进入可见列表的行从右侧一档一档插进来，
+                                               改判离开的行往左退场，其余行由 layout 弹簧补位。
+                                               这里必须允许首帧入场（不写 initial={false}）：
+                                               切页签时整块内容是新挂载的，一旦禁掉首帧，
+                                               新页签的五行就只跟着容器淡入、读不出逐行插入 */
+                                            <AnimatePresence mode="popLayout">
+                                                {rows.map((m) => {
+                                                    /* 一档 110ms：本批新进入可见列表的行自上而下依次从右侧插入；
+                                                       单独一行的档位天然是 0，所以手动勾选仍是立即响应 */
+                                                    const step = landDelayOf(m.id);
+                                                    return (
+                                                        <motion.div
+                                                            key={m.id}
+                                                            layout="position"
+                                                            initial={{ opacity: 0, x: 44 }}
+                                                            animate={{ opacity: 1, x: 0 }}
+                                                            exit={{
+                                                                opacity: 0,
+                                                                x: -26,
+                                                                transition: {
+                                                                    duration: 0.16,
+                                                                    ease: "easeIn",
+                                                                },
+                                                            }}
+                                                            transition={{
+                                                                /* layout 不排队：补位要立刻跟上，
+                                                                   否则后面的行会先僵住再弹走 */
+                                                                layout: {
+                                                                    type: "spring",
+                                                                    stiffness: 420,
+                                                                    damping: 34,
+                                                                    mass: 0.7,
+                                                                },
+                                                                /* 轻微回弹，落位时「顿」一下 */
+                                                                default: {
+                                                                    type: "spring",
+                                                                    stiffness: 400,
+                                                                    damping: 28,
+                                                                    mass: 0.8,
+                                                                    delay: step / 1000,
+                                                                },
+                                                            }}
+                                                            className="min-w-0"
+                                                        >
+                                                            <PlanModRow
+                                                                mod={m}
+                                                                badge={badgeFor(m, localIds.has(m.id))}
+                                                                onToggle={() =>
+                                                                    m.disposition === "add"
+                                                                        ? toggleAddActive(m)
+                                                                        : setDisposition(
+                                                                              m.id,
+                                                                              m.disposition ===
+                                                                                  "remove"
+                                                                                  ? "keep"
+                                                                                  : "remove"
+                                                                          )
+                                                                }
+                                                                onRemove={
+                                                                    m.disposition === "add" &&
+                                                                    extrasIds.has(m.id)
+                                                                        ? () => removeRow(m)
+                                                                        : undefined
+                                                                }
+                                                            />
+                                                        </motion.div>
+                                                    );
+                                                })}
+                                            </AnimatePresence>
                                         )}
                                     </motion.div>
                                 </AnimatePresence>
@@ -676,7 +825,23 @@ export function ConvertPage() {
 
                             {/* 出口区（行区内、钉在卡底）：剔除/保留态取链接自然高（~18），
                                 新增态=查看链接居左、两枚 h32 添加按钮居右；上下不虚占固定高 */}
-                            <div className="mt-auto flex shrink-0 flex-col">
+                            <div className="mt-auto flex shrink-0 flex-col gap-2">
+                                {/* 分类中整卡锁定：出口只给「一句数 + 一条 rail」，
+                                    查看全部清单 / 重新自动分类 / 添加模组 都要等结论落定才露出 */}
+                                {classifying && (
+                                    <div className="flex w-full items-center gap-2.5">
+                                        <span className="shrink-0 text-[11px] leading-[16px] text-text-3">
+                                            {totalRows === 0
+                                                ? readingLabel
+                                                : "自动分类中 · 判定完成的模组逐条归组"}
+                                        </span>
+                                        {/* 不确定式扫描条（复用 Shift Rail 的 sheen 语言）：在线反查按批回结论，
+                                            按批算百分比会一步跳到 100%，所以这里只说「还在跑」，
+                                            进度交给上面逐行落地的动效表达 */}
+                                        <span className="rail-flow h-1.5 min-w-0 flex-1 rounded-full" />
+                                    </div>
+                                )}
+                                {!classifying && (
                                 <AnimatePresence mode="wait" initial={false}>
                                     <motion.div
                                         key={tab}
@@ -688,7 +853,7 @@ export function ConvertPage() {
                                     >
                                         {(tab === "remove" || tab === "keep") && (
                                             <>
-                                                <LinkBtn chevron onClick={() => setListFocus(tab)}>
+                                                <LinkBtn chevron onClick={() => openList(tab)}>
                                                     查看全部 {tab === "remove" ? counts.remove : counts.keep} 项
                                                     {tab === "remove" ? "剔除" : "保留"}清单
                                                 </LinkBtn>
@@ -697,44 +862,36 @@ export function ConvertPage() {
                                                 <div className="flex min-w-0 items-center gap-2.5">
                                                     {/* 两枚计数提示已收进弹窗：待确认数 = 剔除清单的「需人工确认」tab，
                                                         同装数 = 保留清单每行说明尾部，卡底只留操作 */}
-                                                    {classifying ? (
-                                                        <span className="text-[11px] leading-[16px] text-text-3">
-                                                            自动分类中…
-                                                        </span>
-                                                    ) : (
-                                                        <>
-                                                            <LinkBtn size="sm" onClick={() => void runClassify(true)}>
-                                                                重新自动分类
+                                                    <LinkBtn size="sm" onClick={() => void runClassify(true)}>
+                                                        重新自动分类
+                                                    </LinkBtn>
+                                                    {manualEdits > 0 &&
+                                                        (confirmClear ? (
+                                                            <>
+                                                                <LinkBtn
+                                                                    size="sm"
+                                                                    className="text-redstone"
+                                                                    onClick={clearEdits}
+                                                                >
+                                                                    确认清空 {manualEdits} 项
+                                                                </LinkBtn>
+                                                                <LinkBtn
+                                                                    size="sm"
+                                                                    className="text-text-3"
+                                                                    onClick={() => setConfirmClear(false)}
+                                                                >
+                                                                    取消
+                                                                </LinkBtn>
+                                                            </>
+                                                        ) : (
+                                                            <LinkBtn
+                                                                size="sm"
+                                                                className="text-text-2"
+                                                                onClick={() => setConfirmClear(true)}
+                                                            >
+                                                                清空我的修改
                                                             </LinkBtn>
-                                                            {manualEdits > 0 &&
-                                                                (confirmClear ? (
-                                                                    <>
-                                                                        <LinkBtn
-                                                                            size="sm"
-                                                                            className="text-redstone"
-                                                                            onClick={clearEdits}
-                                                                        >
-                                                                            确认清空 {manualEdits} 项
-                                                                        </LinkBtn>
-                                                                        <LinkBtn
-                                                                            size="sm"
-                                                                            className="text-text-3"
-                                                                            onClick={() => setConfirmClear(false)}
-                                                                        >
-                                                                            取消
-                                                                        </LinkBtn>
-                                                                    </>
-                                                                ) : (
-                                                                    <LinkBtn
-                                                                        size="sm"
-                                                                        className="text-text-2"
-                                                                        onClick={() => setConfirmClear(true)}
-                                                                    >
-                                                                        清空我的修改
-                                                                    </LinkBtn>
-                                                                ))}
-                                                        </>
-                                                    )}
+                                                        ))}
                                                 </div>
                                             </>
                                         )}
@@ -742,7 +899,7 @@ export function ConvertPage() {
                                             <>
                                                 <div className="flex min-w-0 items-center gap-2.5">
                                                     {counts.addTotal > 0 && (
-                                                        <LinkBtn chevron onClick={() => setListFocus("add")}>
+                                                        <LinkBtn chevron onClick={() => openList("add")}>
                                                             查看全部 {counts.addTotal} 项新增清单
                                                         </LinkBtn>
                                                     )}
@@ -777,6 +934,7 @@ export function ConvertPage() {
                                         )}
                                     </motion.div>
                                 </AnimatePresence>
+                                )}
                             </div>
                             </div>
                         </Panel>
@@ -996,7 +1154,7 @@ export function ConvertPage() {
                         <Btn
                             variant="primary"
                             full
-                            disabled={!options || starting || !options.loaderVersion.trim()}
+                            disabled={!options || starting || classifying || !options.loaderVersion.trim()}
                             onClick={() => void start()}
                         >
                             {starting ? "创建任务中…" : "开始转换"}
@@ -1006,20 +1164,22 @@ export function ConvertPage() {
                             返回首页
                         </Btn>
                         <p className="w-full text-center text-[10px] leading-[14px] font-normal text-text-3">
-                            {options && !options.loaderVersion.trim()
-                                ? "正在获取 Loader 版本列表，选定后方可开始转换"
-                                : "转换过程可随时取消，已下载依赖自动缓存复用"}
+                            {classifying
+                                ? "自动分类进行中，方案落定后方可开始构建"
+                                : options && !options.loaderVersion.trim()
+                                  ? "正在获取 Loader 版本列表，选定后方可开始转换"
+                                  : "转换过程可随时取消，已下载依赖自动缓存复用"}
                         </p>
                     </Panel>
                 </motion.aside>
             </div>
 
             <PlanListModal
-                open={listFocus !== null}
-                onClose={() => setListFocus(null)}
-                focus={listFocus ?? "remove"}
+                open={listOpen}
+                onClose={() => setListOpen(false)}
+                focus={listFocus}
                 // 三窗各列本处置的行（窗内全部展示，滚动）
-                mods={mods.filter((m) => m.disposition === (listFocus ?? "remove"))}
+                mods={mods.filter((m) => m.disposition === listFocus)}
                 onDisposition={(id, d) => {
                     // 新增清单里取消勾选 = 停用该行（与卡片行内取消同语义；勾选回来即恢复）
                     const row = mods.find((m) => m.id === id);

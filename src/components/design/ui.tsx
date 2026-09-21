@@ -981,7 +981,13 @@ export function TextInput({
 /* ---------------- 弹窗壳：$surface + $stroke 1px r12 padding20 gap12 ----------------
  * 头：标题 14/600 + 副标 11 $text-3（gap3），可选 40×40 图标盒（Mod Detail），右侧 28×28 返回/关闭
  * 脚：1px $stroke 分隔 + 左摘要文本 11 $text-3 + 右按钮组（gap8）
+ * 尺寸是流体的：width/height = 设计稿最小尺寸（窗口再小也不缩），随视口放大到 1.35× 封顶。
+ * 四个弹窗共用同一系数，所以「搜索 ↔ 详情」两屏永远同尺寸，跳转不会跳大跳小。
  */
+
+/** 弹窗最大放大倍率（对设计稿尺寸而言） */
+const MODAL_SCALE_MAX = 1.35;
+
 export function ModalShell({
     open,
     onClose,
@@ -1000,7 +1006,9 @@ export function ModalShell({
 }: {
     open: boolean;
     onClose: () => void;
+    /** 最小宽度（px）：设计稿宽度 */
     width: number;
+    /** 最小高度（px）：省略则由内容决定 */
     height?: number;
     title: string;
     /** 标题右侧的一枚标签（模组详情视图：标签只挂在模组名上，版本行不再重复） */
@@ -1016,6 +1024,13 @@ export function ModalShell({
     /** 防误触：点遮罩/按 Esc 不关闭，只能走按钮（目录勾选弹窗用） */
     persistent?: boolean;
 }) {
+    const sizeStyle = {
+        width: `clamp(${width}px, 62vw, ${Math.round(width * MODAL_SCALE_MAX)}px)`,
+        height: height
+            ? `clamp(${height}px, 70vh, ${Math.round(height * MODAL_SCALE_MAX)}px)`
+            : undefined,
+    };
+
     return (
         <DialogPrimitive.Root
             open={open}
@@ -1038,7 +1053,7 @@ export function ModalShell({
                         "data-[starting-style]:opacity-0 data-[starting-style]:scale-[0.96]",
                         "data-[ending-style]:opacity-0 data-[ending-style]:scale-[0.96]"
                     )}
-                    style={{ width, height }}
+                    style={sizeStyle}
                 >
                     <div className="flex w-full items-center justify-between gap-2.5">
                         {iconNode ??

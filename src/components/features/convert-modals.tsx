@@ -319,18 +319,6 @@ export function PlanListModal({
         focus === "remove" ? "keep" : focus === "keep" ? "remove" : "add";
     const batchUndo: ModDisposition = focus === "add" ? "remove" : focus;
     const batchDone = filtered.length > 0 && filtered.every((m) => dispOf(m) === batchTarget);
-    const batchLabel =
-        focus === "remove"
-            ? batchDone
-                ? "全部维持剔除"
-                : "全部勾回保留"
-            : focus === "keep"
-              ? batchDone
-                  ? "全部恢复保留"
-                  : "全部改判剔除"
-              : batchDone
-                ? "全部停用"
-                : "全部生效";
     const runBatch = () =>
         setDraft((d) => {
             const next = { ...d };
@@ -391,7 +379,9 @@ export function PlanListModal({
                     ) : (
                         <MinusSquare className="size-3.5 text-accent" />
                     )}
-                    {batchLabel}
+                    {/* 名称不随视角定制（「全部勾回保留」这类自造词有歧义）：
+                        勾/不勾的语义由行勾选位本身表达，这里只做可见行的全选 */}
+                    {batchDone ? "取消全部" : "全部"}
                 </button>
                 {/* 极端组合（六档全有 + 长计数）兜一层横向滚动，不把 Tab 挤成换行 */}
                 <div className="min-w-0 overflow-x-auto">
