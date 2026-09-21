@@ -5,6 +5,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use tauri::{AppHandle, Emitter, State};
+use tauri_plugin_opener::OpenerExt;
 
 use crate::core::detector;
 use crate::core::downloader::Downloader;
@@ -563,24 +564,36 @@ pub fn retry_task(
 }
 
 #[tauri::command]
-pub fn delete_task(app: AppHandle, state: S<'_>, id: String) {
-    let mut inner = lock(&state);
-    // 运行中的行不允许直接删（先取消）
-    if inner.current.as_deref() == Some(id.as_str()) {
-        return;
+pub async fn delete_task(app: AppHandle, state: S<'_>, id: String) -> Result<(), String> {
+    {
+        let mut inner = lock(&state);
+        // 运行中的行不允许直接删（先取消）
+        if inner.current.as_deref() == Some(id.as_str()) {
+            return Ok(());
+        }
+        inner.tasks.remove(&id);
+        inner.reports.remove(&id);
+        inner.plans.remove(&id);
+        inner.cancel.remove(&id);
+        task_engine::save_tasks(&app, &inner);
     }
-    inner.tasks.remove(&id);
-    inner.reports.remove(&id);
-    inner.plans.remove(&id);
-    inner.cancel.remove(&id);
-    task_engine::save_tasks(&app, &inner);
-    // 行都删了，暂存目录没有留下的理由
+    // 行都删了，暂存目录没有留下的理由。guard 必须先在上面的块里结束：
+    // remove_task_staging 会再锁同一把非重入 Mutex，嵌套即自死锁；命令 async 化后
+    // 落盘与递归删除也不再占主线程（同步命令跑在主线程，慢 IO 会让窗口卡住）。
     task_engine::remove_task_staging(&state, &id);
+    Ok(())
 }
 
 #[tauri::command]
 pub fn get_report(state: S<'_>, task_id: String) -> Option<ConversionReport> {
     lock(&state).reports.get(&task_id).cloned()
+}
+
+/// 某个任务创建时确认过的方案快照（报告页展开真实剔除/保留/新增清单）。
+/// 不能用 `get_plan`：那个返回的是「最近一次解析的包」，用户换个包再看旧报告就会张冠李戴。
+#[tauri::command]
+pub fn get_task_plan(state: S<'_>, task_id: String) -> Vec<PlanMod> {
+    lock(&state).plans.get(&task_id).cloned().unwrap_or_default()
 }
 
 /* ---------------- 设置 / 元信息 ---------------- */
@@ -592,6 +605,8 @@ pub fn get_settings(state: S<'_>) -> AppSettings {
 
 #[tauri::command]
 pub fn set_settings(app: AppHandle, state: S<'_>, settings: AppSettings) {
+    // 手输/粘贴的目录可能带正斜杠，存下来一律先归成本机分隔符（否则 opener 打不开）
+    let settings = settings.with_native_dirs();
     task_engine::save_settings(&app, &settings);
     lock(&state).settings = settings;
 }
@@ -634,4 +649,27 @@ pub async fn check_update(state: S<'_>) -> Result<String, String> {
         .map_err(|e| e.to_string())?;
     let tag = v["tag_name"].as_str().unwrap_or(env!("CARGO_PKG_VERSION"));
     Ok(tag.trim_start_matches('v').to_string())
+}
+
+/* ---------------- 系统集成 ---------------- */
+
+/// 用系统默认程序打开目录/文件（列表卡「打开输出目录」、报告页「打开文件夹」）。
+///
+/// 为什么在后端开而不让 JS 调 `openPath`：插件的 JS 命令受 capability scope 约束，
+/// 只能命中清单里预先声明的目录（`$HOME/**` 那类），而输出目录是用户在原生对话框里
+/// 自选的，可能是任意盘任意路径，枚举不完；命中不了就报 `opener:006 Not allowed to open path`。
+/// 后端调用与其余文件 IO 同属可信代码，且分隔符在这里统一成本机写法，前端不必再关心。
+#[tauri::command]
+pub async fn open_local_path(app: AppHandle, path: String) -> Result<(), String> {
+    app.opener()
+        .open_path(native_path(&path), None::<&str>)
+        .map_err(|e| e.to_string())
+}
+
+/// 在系统文件管理器中定位文件
+#[tauri::command]
+pub async fn reveal_local_path(app: AppHandle, path: String) -> Result<(), String> {
+    app.opener()
+        .reveal_item_in_dir(native_path(&path))
+        .map_err(|e| e.to_string())
 }

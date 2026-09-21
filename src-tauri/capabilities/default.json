@@ -7,8 +7,6 @@
     "core:default",
     "dialog:default",
     "opener:allow-open-url",
-    "opener:allow-open-path",
-    "opener:allow-reveal-item-in-dir",
     "fs:default",
     "fs:allow-read-file",
     "fs:allow-write-file",

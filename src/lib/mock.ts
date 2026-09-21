@@ -699,6 +699,9 @@ export function mockReport(taskId: string): ConversionReport | undefined {
     ensureSeeded();
     const task = tasks.get(taskId);
     if (!task) return undefined;
+    const o = task.options;
+    const generated = ["eula.txt", "server.properties", "README-SideShift.txt"];
+    if (o.generateScripts) generated.unshift("start.bat", "start.sh");
     return {
         taskId,
         outputFileName: task.outputFileName ?? outputNameOf(task.pack.fileName),
@@ -709,7 +712,20 @@ export function mockReport(taskId: string): ConversionReport | undefined {
         added: task.counts?.add ?? mockPlanCounts.add,
         pendingReview: ["ViaFabricPlus"],
         options: task.options,
+        // 演示口径：包根文件 + mods/config 两个目录的条目数
+        fileCount: (task.counts?.keep ?? mockPlanCounts.keep) + (task.counts?.add ?? mockPlanCounts.add) + generated.length + 12,
+        generatedFiles: generated,
+        startJar: "fabric-server-launch.jar",
     };
+}
+
+/** 任务方案快照：按该行任务的计数截取，好让展开清单与报告数字对得上 */
+export function mockGetTaskPlan(taskId: string): PlanMod[] {
+    ensureSeeded();
+    const c = tasks.get(taskId)?.counts ?? mockPlanCounts;
+    const take = (d: PlanMod["disposition"], n: number) =>
+        mockPlanMods.filter((m) => m.disposition === d).slice(0, n);
+    return [...take("remove", c.remove), ...take("keep", c.keep), ...take("add", c.add)];
 }
 
 /* ---------------- 设置：localStorage 持久化 ---------------- */

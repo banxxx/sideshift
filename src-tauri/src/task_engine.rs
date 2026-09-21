@@ -105,7 +105,8 @@ pub fn load_settings(app: &AppHandle) -> AppSettings {
             output_dir: if s.output_dir.is_empty() { defaults.output_dir.clone() } else { s.output_dir },
             cache_dir: if s.cache_dir.is_empty() { defaults.cache_dir.clone() } else { s.cache_dir },
             ..s
-        },
+        }
+        .with_native_dirs(),
         None => defaults,
     }
 }
@@ -1642,6 +1643,9 @@ async fn run_pipeline(app: AppHandle, state: Arc<AppState>, id: String) {
             added: counts.add,
             pending_review: review.clone(),
             options: t.options.clone(),
+            file_count: built.entries as u32,
+            generated_files: built.generated.clone(),
+            start_jar: built.start_jar.clone(),
         };
         emit_progress(&app, t);
         inner.reports.insert(id.clone(), report);

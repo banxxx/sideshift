@@ -53,13 +53,7 @@ export function TasksPage() {
         return () => window.clearInterval(timer);
     }, []);
 
-    const visible = tasks.filter((t) =>
-        filter === "all"
-            ? true
-            : filter === "running"
-              ? t.status === "running" || t.status === "queued"
-              : t.status === filter
-    );
+    const visible = tasks.filter((t) => matchesFilter(filter, t));
 
     return (
         <div className="flex flex-col gap-5">
@@ -97,18 +91,26 @@ function summary(tasks: ConversionTask[]): string {
     )}`;
 }
 
+/** 四档筛选覆盖五个状态：排队/运行归「运行中」，取消归「失败」（都是没跑成）。 */
+function matchesFilter(filter: Filter, t: ConversionTask): boolean {
+    if (filter === "all") return true;
+    if (filter === "running") return t.status === "running" || t.status === "queued";
+    if (filter === "failed") return t.status === "failed" || t.status === "cancelled";
+    return t.status === filter;
+}
+
 function countOf(tasks: ConversionTask[], filter: Exclude<Filter, "all">): number {
-    return tasks.filter((t) =>
-        filter === "running" ? t.status === "running" || t.status === "queued" : t.status === filter
-    ).length;
+    return tasks.filter((t) => matchesFilter(filter, t)).length;
 }
 
 /* ---------------- 空态（YBR4K） ---------------- */
 
+/** 空态块高度：70vh 在 1200×800 基准下正好等于设计稿的 560；窗口变矮先收这里（下限 400 保证
+ *  图标盒+两行文案+按钮 176 的内容不破版），变高封顶 640，免得拉成一整屏空白。 */
 function EmptyTasks() {
     const { switchPrimary } = useNavigation();
     return (
-        <div className="flex h-[560px] flex-col items-center justify-center gap-4 rounded-[12px] bg-bg-app px-5 py-10">
+        <div className="flex h-[clamp(400px,70vh,640px)] flex-col items-center justify-center gap-4 rounded-[12px] bg-bg-app px-5 py-10">
             <div className="flex flex-col items-center gap-4">
                 <span className="flex size-14 items-center justify-center rounded-2xl bg-surface-2">
                     <Inbox className="size-6 text-text-3" />
@@ -157,10 +159,28 @@ function TaskCard({ task }: { task: ConversionTask }) {
         notify("任务已取消，已下载的文件保留在缓存", "info");
     };
 
-    const openOutput = () =>
-        void api
-            .resolveOutputPath(outName, task.options.outputOverride)
-            .then((p) => void api.openDir(api.dirOf(p)));
+    /** 删除同样不许静默失败（列表 1s 轮询会收掉这行，所以成功时无需提示） */
+    const del = async () => {
+        try {
+            await api.deleteTask(task.id);
+        } catch (e) {
+            notify(`删除任务失败：${e instanceof Error ? e.message : String(e)}`, "error");
+        }
+    };
+
+    /** 打开产物所在目录。此前两处 `void` 把 openPath 的 reject 吞掉了，表现为「点了没反应」；
+     *  现在失败一律走 notify 并带上错误原文。路径口径同时改为优先用后端回传的真实产物路径
+     *  outputPath（旧记录缺该字段时才按输出目录 + 文件名重建），不再凭猜测拼路径。 */
+    const openOutput = async () => {
+        try {
+            const p =
+                task.outputPath ??
+                (await api.resolveOutputPath(outName, task.options.outputOverride));
+            await api.openDir(api.dirOf(p));
+        } catch (e) {
+            notify(`打开输出目录失败：${e instanceof Error ? e.message : String(e)}`, "error");
+        }
+    };
 
     return (
         <Panel gap={12}>
@@ -203,7 +223,7 @@ function TaskCard({ task }: { task: ConversionTask }) {
             {/* 失败态：错误盒（$bg-app + $redstone-dim 描边） */}
             {task.status === "failed" && task.error && (
                 <div className="w-full rounded-lg border border-redstone-dim bg-bg-app px-4 py-3">
-                    <span className="font-mono text-[11px] leading-[16px] font-normal text-redstone">
+                    <span className="break-words font-mono text-[11px] leading-[16px] font-normal text-redstone">
                         {task.error.title} · {task.error.detail}
                     </span>
                 </div>
@@ -234,10 +254,10 @@ function TaskCard({ task }: { task: ConversionTask }) {
                         </>
                     ) : task.status === "success" ? (
                         <>
-                            <Btn variant="danger" size="sm" onClick={() => void api.deleteTask(task.id)}>
+                            <Btn variant="danger" size="sm" onClick={() => void del()}>
                                 删除
                             </Btn>
-                            <Btn size="sm" onClick={openOutput}>
+                            <Btn size="sm" onClick={() => void openOutput()}>
                                 打开输出目录
                             </Btn>
                             <Btn
@@ -251,7 +271,7 @@ function TaskCard({ task }: { task: ConversionTask }) {
                         </>
                     ) : task.status === "failed" ? (
                         <>
-                            <Btn variant="danger" size="sm" onClick={() => void api.deleteTask(task.id)}>
+                            <Btn variant="danger" size="sm" onClick={() => void del()}>
                                 删除
                             </Btn>
                             <Btn size="sm" onClick={() => navigate("task", { taskId: task.id })}>
@@ -263,7 +283,7 @@ function TaskCard({ task }: { task: ConversionTask }) {
                         </>
                     ) : (
                         <>
-                            <Btn variant="danger" size="sm" onClick={() => void api.deleteTask(task.id)}>
+                            <Btn variant="danger" size="sm" onClick={() => void del()}>
                                 删除
                             </Btn>
                             <Btn size="sm" onClick={() => navigate("task", { taskId: task.id })}>

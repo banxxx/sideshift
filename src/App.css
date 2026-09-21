@@ -239,6 +239,13 @@
   scrollbar-gutter: stable;
 }
 
+/* 页面滚动区（App.tsx 的 <main>）同理：滚动条出现与否不得改变内容宽度，
+ * 否则页头右对齐的分段页签会整体左移 10px（= 上面的胶囊滚动条宽度）并触发一次弹簧动画。
+ * 代价是短页右侧也常驻这 10px 空位，且右留白看上去比左多一条滚动条的宽度。 */
+.page-scroll {
+  scrollbar-gutter: stable;
+}
+
 /* ============ Shift Rail 进行中腿 ============ */
 /* accent 实底 + 一圈很淡的外发光，上面跑一条「暗→亮→暗」的高光带（sheen）。
  * 位移用 background-position 而不是 transform：width 过渡占着几何，两者会互相抢。 */

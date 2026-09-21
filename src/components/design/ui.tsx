@@ -833,6 +833,7 @@ export function CountRow({
 /**
  * 报告「变更明细」行：14px 图标 + 12/500 标题 + 11 $text-3 依据 + 右侧等宽 13/600 计数。
  * 与 CountRow（Convert 摘要，无图标/依据，计数 14）刻意分开，避免两屏互相牵制。
+ * 给了 onClick 就整行可展开（右侧露一枚旋转的 V），不另设第二个点击区。
  */
 export function ChangeRow({
     icon: Icon,
@@ -840,15 +841,19 @@ export function ChangeRow({
     title,
     sub,
     count,
+    onClick,
+    open,
 }: {
     icon: LucideIcon;
     tone: Tone;
     title: string;
     sub: string;
     count: number;
+    onClick?: () => void;
+    open?: boolean;
 }) {
-    return (
-        <div className="flex w-full items-center gap-2.5">
+    const row = (
+        <>
             <Icon className={cn("size-3.5 shrink-0", TONE_TEXT[tone])} />
             <span className="shrink-0 text-[12px] leading-[18px] font-medium text-text-1">
                 {title}
@@ -864,7 +869,27 @@ export function ChangeRow({
             >
                 {count}
             </span>
-        </div>
+            {onClick && (
+                <ChevronDown
+                    className={cn(
+                        "size-3 shrink-0 text-text-3 transition-transform duration-200",
+                        open && "rotate-180"
+                    )}
+                />
+            )}
+        </>
+    );
+    const shell = "flex w-full items-center gap-2.5 -mx-1 px-1 rounded-lg";
+    return onClick ? (
+        <button
+            onClick={onClick}
+            aria-expanded={open}
+            className={cn(shell, "text-left transition-colors hover:bg-surface-2")}
+        >
+            {row}
+        </button>
+    ) : (
+        <div className={shell}>{row}</div>
     );
 }
 

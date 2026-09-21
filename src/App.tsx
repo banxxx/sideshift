@@ -59,7 +59,7 @@ function Shell() {
             <div className="flex-1 flex min-h-0">
                 <Sidebar />
                 {/* 页面内容区：设计稿 MainArea padding [24,32]（纵向 24 / 横向 32） */}
-                <main className="flex-1 overflow-auto px-8 py-6">
+                <main className="page-scroll flex-1 overflow-auto px-8 py-6">
                     <Page />
                 </main>
             </div>

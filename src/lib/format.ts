@@ -26,6 +26,15 @@ export function formatClock(d: Date | number = new Date()): string {
     return `${p(t.getHours())}:${p(t.getMinutes())}:${p(t.getSeconds())}`;
 }
 
+/** 完整时刻「2026-09-21 15:32」：任务/报告的起止时间用它。
+ *  只给 HH:MM 不够用——任务存档是长期留存的，回看上周的成功记录时「14:32」无法定位是哪天。
+ *  日志行时间戳是同一会话内的相对量，仍用 formatClock。 */
+export function formatStamp(d: Date | number): string {
+    const t = new Date(d);
+    const p = (n: number) => String(n).padStart(2, "0");
+    return `${t.getFullYear()}-${p(t.getMonth() + 1)}-${p(t.getDate())} ${p(t.getHours())}:${p(t.getMinutes())}`;
+}
+
 /** 耗时：短于 1 分钟显示 "42 秒"，否则 "2分 14秒"（报告页口径） */
 export function formatDuration(ms: number): string {
     const s = Math.max(0, Math.round(ms / 1000));

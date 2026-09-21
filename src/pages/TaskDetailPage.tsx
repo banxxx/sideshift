@@ -31,6 +31,7 @@ import {
     formatClock,
     formatDuration,
     formatSize,
+    formatStamp,
     loaderLabel,
     outputNameOf,
     truncateMiddle,
@@ -43,7 +44,7 @@ import { Bar, Btn, Divider, InfoRow, PageHeader, Panel, PanelHead, ToneChip } fr
 import { useLogFollow } from "@/lib/log-view";
 import { cn } from "@/lib/utils";
 
-/** HH:MM（设计稿时间口径，不含秒） */
+/** HH:MM（状态行短语用；字段级的时间一律 formatStamp 带年月日） */
 const hm = (t: number) => formatClock(t).slice(0, 5);
 
 /**
@@ -323,7 +324,7 @@ export function TaskDetailPage() {
                                     </span>
                                     <span
                                         className={cn(
-                                            "min-w-0 flex-1 font-mono text-[10px] leading-[14px] font-normal",
+                                            "min-w-0 flex-1 break-words font-mono text-[10px] leading-[14px] font-normal",
                                             l.level === "error"
                                                 ? "text-redstone"
                                                 : l.level === "warn"
@@ -343,7 +344,7 @@ export function TaskDetailPage() {
                 <aside className="w-[280px] shrink-0">
                     <Panel gap={10}>
                         <PanelHead title="任务信息" />
-                        <InfoRow label="开始时间" value={hm(started)} />
+                        <InfoRow label="开始时间" value={formatStamp(started)} />
                         <InfoRow label="已用时长" value={formatDuration(elapsed)} />
                         <InfoRow
                             label="转换方案"

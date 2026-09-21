@@ -421,6 +421,15 @@ pub struct ConversionReport {
     pub added: u32,
     pub pending_review: Vec<String>,
     pub options: ConversionOptions,
+    /// 打进 zip 的文件数（builder 实数，非估算）
+    #[serde(default)]
+    pub file_count: u32,
+    /// 本次实际写入包根的文件（start.bat / eula.txt / server.properties / …）
+    #[serde(default)]
+    pub generated_files: Vec<String>,
+    /// 启动脚本指向的 jar 名：Fabric 是服务端一体化 jar，Forge/NeoForge 是 installer
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub start_jar: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -559,6 +568,16 @@ fn default_online_classify() -> bool {
     true
 }
 
+/// 资源管理器/`openPath` 侧的目录串：Windows 上把正斜杠统一成反斜杠。
+/// Rust 自己的 IO 两种斜杠都吃，所以这条只在把路径交给系统前用一次。
+pub fn native_path(s: &str) -> String {
+    if cfg!(windows) {
+        s.replace('/', "\\")
+    } else {
+        s.to_string()
+    }
+}
+
 impl Default for AppSettings {
     fn default() -> Self {
         Self {
@@ -576,14 +595,76 @@ impl Default for AppSettings {
 impl AppSettings {
     pub fn defaults_for(home: &std::path::Path) -> Self {
         Self {
-            output_dir: home.join("SideShift/output").display().to_string(),
-            cache_dir: home.join("SideShift/cache").display().to_string(),
+            // 一段一段 join：写成 join("SideShift/output") 在 Windows 上会得到
+            // `C:\Users\you\SideShift/output` 这种混合分隔符，见 native_path 的说明
+            output_dir: native_path(&home.join("SideShift").join("output").display().to_string()),
+            cache_dir: native_path(&home.join("SideShift").join("cache").display().to_string()),
             strip_client_only: true,
             verify_after_build: false,
             download_source: DownloadSource::Official,
             concurrency: 6,
             auto_classify_online: true,
         }
+    }
+
+    /// 读写两端各过一遍：把两个目录字段统一成本机分隔符（见 `native_path`）
+    pub fn with_native_dirs(mut self) -> Self {
+        self.output_dir = native_path(&self.output_dir);
+        self.cache_dir = native_path(&self.cache_dir);
+        self
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn defaults_use_native_separators() {
+        let s = AppSettings::defaults_for(std::path::Path::new(if cfg!(windows) {
+            "C:\\Users\\ban"
+        } else {
+            "/home/ban"
+        }));
+        assert!(!s.output_dir.contains('/'), "输出目录残留正斜杠: {}", s.output_dir);
+        assert!(!s.cache_dir.contains('/'), "缓存目录残留正斜杠: {}", s.cache_dir);
+        assert_eq!(
+            AppSettings {
+                output_dir: "D:/mc/out".into(),
+                ..Default::default()
+            }
+            .with_native_dirs()
+            .output_dir,
+            if cfg!(windows) { "D:\\mc\\out" } else { "D:/mc/out" }
+        );
+    }
+
+    /// 报告新增字段必须能吃下旧存档：tasks.json 里的历史报告没有这些键，
+    /// 一旦反序列化失败整个存档都会被当作损坏丢掉（用户看到的是「任务全没了」）
+    #[test]
+    fn legacy_report_json_still_loads_with_defaults() {
+        let mut v = serde_json::to_value(ConversionReport {
+            task_id: "t1".into(),
+            output_file_name: "a-server.zip".into(),
+            output_size_bytes: 1024,
+            duration_sec: 30,
+            removed: 3,
+            kept: 9,
+            added: 1,
+            pending_review: vec!["X".into()],
+            options: ConversionOptions::default(),
+            file_count: 42,
+            generated_files: vec!["start.bat".into()],
+            start_jar: Some("fabric-server-launch.jar".into()),
+        })
+        .unwrap();
+        let obj = v.as_object_mut().unwrap();
+        obj.remove("fileCount");
+        obj.remove("generatedFiles");
+        obj.remove("startJar");
+        let old: ConversionReport = serde_json::from_value(v).unwrap();
+        assert_eq!((old.file_count, old.start_jar), (0, None));
+        assert!(old.generated_files.is_empty());
     }
 }
 

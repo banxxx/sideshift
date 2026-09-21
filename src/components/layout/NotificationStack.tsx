@@ -41,7 +41,9 @@ function NoticeCard({ notice }: { notice: Notice }) {
             >
                 <Icon className={cn("size-3", tone)} />
             </span>
-            <span className="min-w-0 flex-1 text-[11px] leading-[16px] text-text-2">
+            {/* break-words 是硬要求：提示里常带路径/文件名这类无空格长串（`C:\Users\...\output`、
+             *  jar 名），默认不断行的词会直接顶穿卡片描边 */}
+            <span className="min-w-0 flex-1 break-words text-[11px] leading-[16px] text-text-2">
                 {notice.text}
             </span>
             <button

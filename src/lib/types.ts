@@ -302,6 +302,12 @@ export interface ConversionReport {
     /** 待人工确认项 */
     pendingReview: string[];
     options: ConversionOptions;
+    /** 打进 zip 的文件数（builder 实数） */
+    fileCount: number;
+    /** 本次实际写入包根的文件（start.bat / eula.txt / server.properties / …） */
+    generatedFiles: string[];
+    /** 启动脚本指向的 jar 名：Fabric 为服务端 jar，Forge/NeoForge 为 installer */
+    startJar?: string;
 }
 
 /** 版本下拉项（对应 Convert · Version Dropdown） */

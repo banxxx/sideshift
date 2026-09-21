@@ -45,6 +45,8 @@ pub struct BuildReport {
     pub entries: usize,
     /// 覆写了本任务上一次的产物（同名序号只给别人的包）
     pub overwritten: bool,
+    /// 启动脚本指向的 jar 名（报告页据此写出真实的手动启动命令）
+    pub start_jar: Option<String>,
 }
 
 /// 打包过程事件：Plan 先给总量（实时条的分母），File 逐文件累加字节，
@@ -128,6 +130,10 @@ pub fn build(
         generated,
         entries: plan.len(),
         overwritten,
+        start_jar: input
+            .server_jar_name
+            .clone()
+            .or_else(|| input.installer_jar_name.clone()),
     })
 }
 

@@ -256,6 +256,14 @@ export async function getReport(taskId: string): Promise<ConversionReport | unde
     ).then((r) => r ?? undefined);
 }
 
+/** 任务创建时确认过的方案快照（Rust: get_task_plan(taskId)）：报告页展开真实清单用 */
+export async function getTaskPlan(taskId: string): Promise<PlanMod[]> {
+    if (!isTauri) return mock.mockGetTaskPlan(taskId);
+    return invokeOrMock("get_task_plan", { taskId }, () =>
+        mock.mockGetTaskPlan(taskId)
+    );
+}
+
 /** 订阅流水线进度事件（浏览器 mock 模式无事件流，返回空取消函数） */
 export function onProgress(cb: (e: ProgressEvent) => void): Promise<UnlistenFn> {
     if (!isTauri) return Promise.resolve(() => {});
@@ -326,18 +334,26 @@ export async function resolveOutputPath(
     return joinPath(overrideDir?.trim() || outputDir, fileName);
 }
 
-/** 在系统文件管理器中定位文件（浏览器 dev 下为空操作） */
+/** Windows 路径统一成反斜杠。历史脏数据里留过 `C:\Users\you\SideShift/output` 这类
+ *  混合写法（旧 settings.json、旧任务记录的 outputPath），交给资源管理器会解析失败。
+ *  判据取串里出现过反斜杠——POSIX 路径基本不会有反斜杠，所以 macOS/Linux 上原样返回。
+ *  后端命令里也会再归一一次，这里只是让展示与传给系统的串一致。 */
+function nativeSlashes(path: string): string {
+    return path.includes("\\") ? path.replace(/\//g, "\\") : path;
+}
+
+/** 在系统文件管理器中定位文件（浏览器 dev 下为空操作）。
+ *  走后端而不是插件的 `revealItemInDir`：JS 侧那条命令受 capability scope 白名单约束，
+ *  用户自选的目录枚举不完，见 commands.rs 的 `open_local_path`。 */
 export async function revealPath(path: string): Promise<void> {
     if (!isTauri) return;
-    const { revealItemInDir } = await import("@tauri-apps/plugin-opener");
-    await revealItemInDir(path);
+    await invoke("reveal_local_path", { path: nativeSlashes(path) });
 }
 
 /** 用系统默认程序打开目录（报告页「打开文件夹」/ 列表卡「打开输出目录」） */
 export async function openDir(path: string): Promise<void> {
     if (!isTauri) return;
-    const { openPath } = await import("@tauri-apps/plugin-opener");
-    await openPath(path);
+    await invoke("open_local_path", { path: nativeSlashes(path) });
 }
 
 /** 在系统浏览器打开外链（设置页 GitHub 按钮） */
