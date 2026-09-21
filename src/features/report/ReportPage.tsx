@@ -5,14 +5,14 @@
  * 右栏 = 输出与操作卡。数值全部来自 getReport + getTask + getTaskPlan，不写死设计稿文案；
  * 「下一步」按本次真实选项生成条目（序号随之重排），开关没踩到的坑不占步骤位。
  */
-import { Archive, Check, FileText, Minus, Plus } from "lucide-react";
+import { AlertTriangle, Archive, Check, CircleCheck, CircleX, FileText, Minus, Plus } from "lucide-react";
 import { useEffect, useState } from "react";
 import { motion } from "motion/react";
 import * as api from "@/lib/api";
 import { useNavigation } from "@/lib/navigation";
 import { notify } from "@/lib/notify";
 import { formatDuration, formatSize, formatStamp, loaderLabel, truncateMiddle } from "@/lib/format";
-import type { ConversionReport, ConversionTask, ModDisposition, PlanMod } from "@/lib/types";
+import type { CheckResult, ConversionReport, ConversionTask, ModDisposition, PlanMod } from "@/lib/types";
 import {
     Btn,
     ChangeRow,
@@ -347,6 +347,39 @@ export function ReportPage() {
                         )}
                     </Panel>
 
+                    {/* 构建自检：逐项对账真实落盘产物。措辞口径——它证明的是「包齐不齐」，
+                        不是「开服能跑」，所以底部保留那句限定，别让绿勾被读成实机验证 */}
+                    {report.checks.length > 0 && (
+                        <Panel gap={12}>
+                            <PanelHead
+                                title="构建自检"
+                                right={
+                                    <span
+                                        className={`text-[11px] leading-[16px] font-medium ${
+                                            report.checks.every((c) => c.status === "pass")
+                                                ? "text-emerald"
+                                                : report.checks.some((c) => c.status === "fail")
+                                                  ? "text-redstone"
+                                                  : "text-gold"
+                                        }`}
+                                    >
+                                        {report.checks.every((c) => c.status === "pass")
+                                            ? `全部通过 · ${report.checks.length} 项`
+                                            : `${report.checks.filter((c) => c.status !== "pass").length} 项需关注`}
+                                    </span>
+                                }
+                            />
+                            <div className="flex w-full flex-col gap-2">
+                                {report.checks.map((c) => (
+                                    <CheckLine key={c.id} check={c} />
+                                ))}
+                            </div>
+                            <span className="text-[11px] leading-[16px] text-text-3">
+                                离线核对产物完整性，未实机启动服务端
+                            </span>
+                        </Panel>
+                    )}
+
                     <Panel gap={12}>
                         <PanelHead title="下一步" />
                         {steps.map((text, i) => (
@@ -503,6 +536,41 @@ function Step({ index, text }: { index: number; text: string }) {
             <span className="min-w-0 flex-1 break-words text-[12px] leading-[18px] font-medium text-text-1">
                 {text}
             </span>
+        </div>
+    );
+}
+
+/**
+ * 自检单行：状态图标 + 项目名 + 带数字的结论；有对象清单时补一行等宽小字。
+ * 明细全来自后端实数（缺哪几个文件、哪几个 jar 坏了），这里不补任何判断。
+ */
+function CheckLine({ check }: { check: CheckResult }) {
+    const Icon =
+        check.status === "pass" ? CircleCheck : check.status === "fail" ? CircleX : AlertTriangle;
+    const tone =
+        check.status === "pass"
+            ? "text-emerald"
+            : check.status === "fail"
+              ? "text-redstone"
+              : "text-gold";
+    return (
+        <div className="flex w-full items-start gap-2">
+            <Icon className={`mt-[2px] size-3.5 shrink-0 ${tone}`} />
+            <div className="flex min-w-0 flex-1 flex-col gap-0.5">
+                <div className="flex min-w-0 flex-wrap items-baseline gap-x-2">
+                    <span className="shrink-0 text-[11px] leading-[16px] font-semibold text-text-1">
+                        {check.label}
+                    </span>
+                    <span className="min-w-0 break-words text-[11px] leading-[16px] text-text-2">
+                        {check.detail}
+                    </span>
+                </div>
+                {(check.items?.length ?? 0) > 0 && (
+                    <span className="break-words font-mono text-[10px] leading-[15px] text-text-3">
+                        {check.items!.join("、")}
+                    </span>
+                )}
+            </div>
         </div>
     );
 }

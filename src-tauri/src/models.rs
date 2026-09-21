@@ -430,6 +430,34 @@ pub struct ConversionReport {
     /// 启动脚本指向的 jar 名：Fabric 是服务端一体化 jar，Forge/NeoForge 是 installer
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub start_jar: Option<String>,
+    /// 构建后静态自检结论（core::verify）；空 = 没开这个开关
+    #[serde(default)]
+    pub checks: Vec<CheckResult>,
+}
+
+/// 自检单项结论的三态：通过 / 提示（不致命但值得看一眼）/ 未通过（产物确实缺东西）
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum CheckStatus {
+    Pass,
+    Warn,
+    Fail,
+}
+
+/// 构建后静态自检的一项结果。全离线：只核对「打进 zip 的东西齐不齐、坏没坏」，
+/// 不起服务端进程——所以它不能承诺「能开服」，措辞也就不能写成校验通过=可运行
+#[derive(Serialize, Deserialize, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct CheckResult {
+    /// 稳定标识（files / jars / deps / start / root / keep）：前端按它排布，不认中文标题
+    pub id: String,
+    pub label: String,
+    pub status: CheckStatus,
+    /// 一句话结论（带真实数字），报告页直接显示
+    pub detail: String,
+    /// 涉及的对象名（缺哪几个文件、哪几个 jar 坏了），已截断
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub items: Vec<String>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -546,7 +574,26 @@ pub struct AddedModSide {
 pub enum DownloadSource {
     Official,
     Bmclapi,
-    Github,
+    /// 旧 settings.json 里可能留着已下掉的档位（曾经的 github 源）：认成占位值，
+    /// 不能让整份设置因为一个无效枚举值反序列化失败而全丢（见 persist::load_settings）
+    #[serde(other)]
+    Unspecified,
+}
+
+impl DownloadSource {
+    /// 只有明确选了 BMCLAPI 才走镜像，占位值按官方
+    pub fn is_mirror(self) -> bool {
+        self == Self::Bmclapi
+    }
+
+    /// `other` 反序列化出来的占位值会被写成 "unspecified"，落盘前归一掉
+    pub fn normalized(self) -> Self {
+        if self == Self::Bmclapi {
+            Self::Bmclapi
+        } else {
+            Self::Official
+        }
+    }
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -607,10 +654,12 @@ impl AppSettings {
         }
     }
 
-    /// 读写两端各过一遍：把两个目录字段统一成本机分隔符（见 `native_path`）
-    pub fn with_native_dirs(mut self) -> Self {
+    /// 读写两端各过一遍：两个目录字段统一成本机分隔符（见 `native_path`），
+    /// 无效下载源归位官方（否则设置页的下拉会显示成一个不存在的选项）
+    pub fn normalized(mut self) -> Self {
         self.output_dir = native_path(&self.output_dir);
         self.cache_dir = native_path(&self.cache_dir);
+        self.download_source = self.download_source.normalized();
         self
     }
 }
@@ -633,7 +682,7 @@ mod tests {
                 output_dir: "D:/mc/out".into(),
                 ..Default::default()
             }
-            .with_native_dirs()
+            .normalized()
             .output_dir,
             if cfg!(windows) { "D:\\mc\\out" } else { "D:/mc/out" }
         );
@@ -656,15 +705,18 @@ mod tests {
             file_count: 42,
             generated_files: vec!["start.bat".into()],
             start_jar: Some("fabric-server-launch.jar".into()),
+            checks: Vec::new(),
         })
         .unwrap();
         let obj = v.as_object_mut().unwrap();
         obj.remove("fileCount");
         obj.remove("generatedFiles");
         obj.remove("startJar");
+        obj.remove("checks");
         let old: ConversionReport = serde_json::from_value(v).unwrap();
         assert_eq!((old.file_count, old.start_jar), (0, None));
         assert!(old.generated_files.is_empty());
+        assert!(old.checks.is_empty());
     }
 }
 

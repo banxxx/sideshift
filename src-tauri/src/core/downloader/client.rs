@@ -9,10 +9,12 @@ use reqwest::Client;
 use serde_json::Value;
 
 use super::offline::{self, CopyJob, OfflineJob, COPY_CHUNK};
+use super::source;
 use super::types::{
     DownloadError, Fetch, FetchSource, ItemOutcome, ItemSpec, OnDone, OnTransfer, TransferProgress,
 };
 use super::util::{cache_path_for, verify_cache_for};
+use crate::models::DownloadSource;
 
 const USER_AGENT: &str = "SideShift/0.1 (desktop pack converter)";
 const RETRIES: u32 = 3;
@@ -21,7 +23,9 @@ const RETRIES: u32 = 3;
 enum Attempt {
     /// 换个时间再试可能成功（连接重置、429/5xx）：退避后重试
     Retry(String),
-    /// 重试也不会变好（sha1 不符、磁盘写不进）：立即结束本条目
+    /// 这个源给的内容不对（sha1 对不上）：换一个源试；已是最后一个源则等同失败
+    BadHost(String),
+    /// 重试也不会变好（磁盘写不进）：立即结束本条目
     Fatal(DownloadError),
 }
 
@@ -48,6 +52,8 @@ pub struct Downloader {
     cache_dir: PathBuf,
     concurrency: usize,
     transfer: Option<Arc<OnTransfer>>,
+    /// 下载源档位：只影响「哪些 URL 先试镜像」，不改校验锚点（见 `source` 模块头）
+    source: DownloadSource,
 }
 
 impl Downloader {
@@ -62,12 +68,19 @@ impl Downloader {
             cache_dir,
             concurrency: concurrency.clamp(1, 16),
             transfer: None,
+            source: DownloadSource::Official,
         }
     }
 
     /// 挂上字节进度出口：流水线据此渲染「联网下载中」实时条
     pub fn with_transfer(mut self, f: Arc<OnTransfer>) -> Self {
         self.transfer = Some(f);
+        self
+    }
+
+    /// 挂上设置里的下载源：未调用即官方源（保持默认行为）
+    pub fn with_source(mut self, source: DownloadSource) -> Self {
+        self.source = source;
         self
     }
 
@@ -275,32 +288,48 @@ impl Downloader {
 
     /// 流式取回一个 URL：边收块边写临时文件、边增量算 sha1，校验通过才落到缓存与目标位。
     /// 旧写法 `resp.bytes()` 把整个 jar 囤在内存里、且收完之前一个字节进度都没有。
-    /// 传输类失败退避重试至多 RETRIES 次；校验/磁盘类失败就地结束。
+    ///
+    /// 候选源按 `source::candidates` 顺序试（镜像在前、官方在后）：**非末位源只给一次机会**，
+    /// 换源要快，不能把退避预算耗在一个明显不通的镜像上；最后一个源才吃满 `RETRIES`。
+    /// 内容校验不过（`BadHost`）不换时间重试、直接换源——同一个镜像再下三遍还是错的。
+    /// 返回的 retries 是「到成功为止一共失败了几次」，跨源累计，日志里就是用户看到的重试数。
     async fn stream_url(
         &self,
         item: &ItemSpec,
         url: &str,
         cache: Option<&Path>,
     ) -> Result<(u64, u32), DownloadError> {
+        let candidates = source::candidates(url, self.source);
         let mut last_cause = String::from("unknown");
-        for attempt in 1..=RETRIES {
-            match self.stream_attempt(item, url, cache, attempt).await {
-                Ok(bytes) => return Ok((bytes, attempt - 1)),
-                Err(Attempt::Fatal(e)) => return Err(e),
-                Err(Attempt::Retry(cause)) => {
-                    last_cause = cause;
-                    if attempt < RETRIES {
-                        tokio::time::sleep(std::time::Duration::from_millis(
-                            500 * attempt as u64,
-                        ))
-                        .await;
+        let mut fails: u32 = 0;
+        for (i, cand) in candidates.iter().enumerate() {
+            let is_last = i + 1 == candidates.len();
+            let budget = if is_last { RETRIES } else { 1 };
+            for attempt in 1..=budget {
+                match self.stream_attempt(item, cand, cache, attempt).await {
+                    Ok(bytes) => return Ok((bytes, fails)),
+                    Err(Attempt::Fatal(e)) => return Err(e),
+                    Err(Attempt::BadHost(cause)) => {
+                        last_cause = cause;
+                        fails += 1;
+                        break; // 内容不对：原地重试没意义，换下一个源
+                    }
+                    Err(Attempt::Retry(cause)) => {
+                        last_cause = cause;
+                        fails += 1;
+                        if attempt < budget {
+                            tokio::time::sleep(std::time::Duration::from_millis(
+                                500 * attempt as u64,
+                            ))
+                            .await;
+                        }
                     }
                 }
             }
         }
         Err(DownloadError::Failed {
             file_name: item.file_name.clone(),
-            attempts: RETRIES,
+            attempts: fails,
             cause: last_cause,
         })
     }
@@ -336,7 +365,7 @@ impl Downloader {
     }
 
     /// 收流写临时文件：边写边增量算 sha1，每个响应块向 transfer 出口报一次字节；
-    /// 校验不通过算确定性失败（Fatal），不占用重试次数
+    /// 校验不通过算「这个源给错了东西」（BadHost）——换源再试，而不是原地重试
     async fn write_to_temp(
         &self,
         item: &ItemSpec,
@@ -390,13 +419,9 @@ impl Downloader {
                 .map(|b| format!("{b:02x}"))
                 .collect();
             if !got.eq_ignore_ascii_case(expect) {
-                return Err(Attempt::Fatal(DownloadError::Failed {
-                    file_name: item.file_name.clone(),
-                    attempts: attempt.saturating_sub(1),
-                    cause: format!(
-                        "{url} sha1 校验不一致（期望 {expect} · 实际 {got} · 已收 {written} 字节）"
-                    ),
-                }));
+                return Err(Attempt::BadHost(format!(
+                    "{url} sha1 校验不一致（期望 {expect} · 实际 {got} · 已收 {written} 字节）"
+                )));
             }
         }
         Ok(written)
@@ -412,22 +437,32 @@ impl Downloader {
         self.cache_path_opt(item).is_some_and(|c| c.exists())
     }
 
-    /// HEAD 取 Content-Length（下载量预估的兜底大小来源）；进程级缓存，
-    /// 预估随方案编辑高频触发，同一坐标的大小不会变
+    /// HEAD 取 Content-Length（下载量预估的兜底大小来源）；进程级缓存按**官方 URL** 记账，
+    /// 与下载源无关。预估随方案编辑高频触发，同一坐标的大小不会变。
+    /// 某个源 HEAD 不通（镜像未同步、403）就换下一个候选，全失败才报无尺寸。
     pub async fn head_size(&self, url: &str) -> Option<u64> {
         use std::collections::HashMap;
         use std::sync::{Mutex, OnceLock};
         static SIZES: OnceLock<Mutex<HashMap<String, u64>>> = OnceLock::new();
         let cache = SIZES.get_or_init(Default::default);
-        if let Some(s) = cache.lock().unwrap().get(url) {
-            return Some(*s);
+        let hit = cache.lock().unwrap().get(url).copied();
+        if let Some(s) = hit {
+            return Some(s);
         }
-        let resp = self.client.head(url).send().await.ok()?;
-        let len = resp.content_length()?;
-        if len > 0 {
-            cache.lock().unwrap().insert(url.to_string(), len);
+        for cand in source::candidates(url, self.source) {
+            let len = self
+                .client
+                .head(&cand)
+                .send()
+                .await
+                .ok()
+                .and_then(|r| r.content_length());
+            if let Some(len) = len.filter(|l| *l > 0) {
+                cache.lock().unwrap().insert(url.to_string(), len);
+                return Some(len);
+            }
         }
-        Some(len)
+        None
     }
 
     /// Maven 系 URL 带伴生 `<jar>.sha1` 文本：为无校验值的条目 best-effort 补上
@@ -461,6 +496,8 @@ impl Downloader {
         spec.sha1 = found;
     }
 
+    /// 单次 GET，**不做下载源重写**：走哪条 URL 由调用方决定。
+    /// `attach_side_sha1` 因此天然只信官方站的伴生校验值，不让镜像自证清白。
     async fn fetch_bytes(&self, url: &str) -> Result<Vec<u8>, DownloadError> {
         let resp = self
             .client
@@ -488,10 +525,19 @@ impl Downloader {
         Ok(bytes.to_vec())
     }
 
+    /// 读一个 JSON 文档：按下载源的候选链试（镜像在前、官方在后）。
+    /// 解析失败也换源——镜像未同步时常给 200 + 错误页，只有官方那次的结果才算数。
     pub(crate) async fn get_json(&self, url: &str) -> Result<Value, DownloadError> {
-        let bytes = self.fetch_bytes(url).await?;
-        let v: Value = serde_json::from_slice(&bytes)?;
-        Ok(v)
+        let mut last_err = DownloadError::NotFound(url.to_string());
+        for cand in source::candidates(url, self.source) {
+            match self.fetch_bytes(&cand).await.and_then(|b| {
+                serde_json::from_slice(&b).map_err(DownloadError::from)
+            }) {
+                Ok(v) => return Ok(v),
+                Err(e) => last_err = e,
+            }
+        }
+        Err(last_err)
     }
 
     /// 读一个 JSON 值（POST 版本：`get_json` 只能取）

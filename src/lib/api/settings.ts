@@ -15,7 +15,7 @@ export async function getSettings(): Promise<AppSettings> {
     return invokeOrMock("get_settings", undefined, () => mock.mockLoadSettings());
 }
 
-/** 保存设置（Rust: set_settings） */
+/** 保存设置（Rust: set_settings -> Result；写盘失败会 reject，由设置页外显并回滚） */
 export async function saveSettings(s: AppSettings): Promise<void> {
     if (!isTauri) return mock.mockSaveSettings(s);
     return invokeOrMock("set_settings", { settings: s }, () =>
@@ -29,7 +29,7 @@ export async function listDownloadSources(): Promise<VersionOption[]> {
     return invokeOrMock("list_download_sources", undefined, () => mock.mockDownloadSources);
 }
 
-/** 打开系统目录选择器（设置页「工作缓存目录 · 选择」） */
+/** 打开系统目录选择器（设置页两行目录的「选择」，取消返回 null） */
 export async function pickDirectory(): Promise<string | null> {
     if (!isTauri) return "D:\\SideShift\\cache";
     const { open } = await import("@tauri-apps/plugin-dialog");

@@ -4,3 +4,4 @@ pub mod detector;
 pub mod downloader;
 pub mod builder;
 pub mod estimate;
+pub mod verify;

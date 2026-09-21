@@ -8,12 +8,13 @@ use std::sync::{Arc, Mutex};
 
 use tauri::AppHandle;
 
-use crate::core::builder::{self, BuildEvent, BuildInput};
+use crate::core::builder::{self, BuildEvent, BuildInput, BuilderError};
 use crate::core::detector;
 use crate::core::downloader::{
     DownloadError, Downloader, Fetch, FetchSource, ItemSpec, TransferProgress,
 };
 use crate::core::parser::{self, ParsedPack};
+use crate::core::verify;
 use crate::models::*;
 use super::activity::{
     apply_fetch_counts, build_progress, fetch_group_label, flush_groups, group_line,
@@ -213,7 +214,8 @@ async fn run_pipeline(app: AppHandle, state: Arc<AppState>, id: String) {
     let dl = Downloader::new(
         PathBuf::from(&settings.cache_dir),
         settings.concurrency as usize,
-    );
+    )
+    .with_source(settings.download_source.normalized());
     let source_path = parsed
         .manifest
         .source_path
@@ -422,6 +424,12 @@ async fn run_pipeline(app: AppHandle, state: Arc<AppState>, id: String) {
     }
 
     let total = items.len() as u32;
+    // 自检要对账「计划落进 mods/ 的文件」，items 随后被 download_all 吃掉，此刻快照一次
+    let expected_mod_files: Vec<String> = items
+        .iter()
+        .filter(|i| i.dest.starts_with(&mods_dir))
+        .map(|i| i.file_name.clone())
+        .collect();
     // 取件构成：只有「Fetch::Url 且未命中下载缓存」的条目真正走网络，
     // 包内条目与本地 jar 零流量 —— 界面据此不再把全程称作假下载的「下载中」
     let mut tally = FetchTally {
@@ -648,6 +656,9 @@ async fn run_pipeline(app: AppHandle, state: Arc<AppState>, id: String) {
         .get(&id)
         .and_then(|t| t.output_path.clone());
     let build_cancel = cancel.clone();
+    // 自检开关：打包一结束、staging 还没回收时对账产物（离线六项，零子进程）
+    let verify_on = settings.verify_after_build;
+    let build_start_jar = loader_jar.clone();
     let build_result = tokio::task::spawn_blocking(move || {
         let mut agg = ZipActivity::default();
         let (a, s, i) = (build_app, build_state, build_id);
@@ -663,7 +674,7 @@ async fn run_pipeline(app: AppHandle, state: Arc<AppState>, id: String) {
             readme_lines: readme,
         };
         // 打包是 CPU + 磁盘活，进度事件按窗口节流；取消后不再写任务表
-        builder::build(&input, &mut |ev| {
+        let built = builder::build(&input, &mut |ev| {
             if build_cancel.load(Ordering::Relaxed) {
                 return;
             }
@@ -705,11 +716,26 @@ async fn run_pipeline(app: AppHandle, state: Arc<AppState>, id: String) {
                     );
                 }
             }
-        })
+        })?;
+        let checks = if verify_on {
+            verify::run(&verify::Input {
+                staging: &staging,
+                options: &build_options,
+                loader: build_loader,
+                plan: &plan,
+                start_jar: build_start_jar.as_deref(),
+                generated: &built.generated,
+                expected_mod_files: &expected_mod_files,
+                expected_keep_dirs: &kept_by_dir,
+            })
+        } else {
+            Vec::new()
+        };
+        Ok::<_, BuilderError>((built, checks))
     })
     .await;
 
-    let built = match build_result {
+    let (built, checks) = match build_result {
         Ok(Ok(v)) => v,
         Ok(Err(e)) => {
             fail(&app, &state, &id, TaskError {
@@ -791,6 +817,33 @@ async fn run_pipeline(app: AppHandle, state: Arc<AppState>, id: String) {
         LogLevel::Info,
         &format!("输出路径 {}", built.path.display()),
     );
+    // 自检只出一条汇总日志：逐项明细进报告卡，逐项写日志等于用日志量换看不完的字
+    if !checks.is_empty() {
+        let bad: Vec<&CheckResult> = checks
+            .iter()
+            .filter(|c| c.status != CheckStatus::Pass)
+            .collect();
+        let msg = if bad.is_empty() {
+            format!("构建自检 {} 项 · 全部通过", checks.len())
+        } else {
+            let first = bad.first().unwrap();
+            format!(
+                "构建自检 {} 项 · {} 项需关注：{} — {}",
+                checks.len(),
+                bad.len(),
+                first.label,
+                first.detail
+            )
+        };
+        push_log(
+            &app,
+            &state,
+            &id,
+            PipelineStage::Builder,
+            if bad.is_empty() { LogLevel::Info } else { LogLevel::Warn },
+            &msg,
+        );
+    }
     // zip 已在输出目录生成，暂存目录即刻回收（文件本体留在 cache/files 供跨任务复用）
     let _ = std::fs::remove_dir_all(&staging_path);
     let finished = now_ms();
@@ -839,6 +892,7 @@ async fn run_pipeline(app: AppHandle, state: Arc<AppState>, id: String) {
             file_count: built.entries as u32,
             generated_files: built.generated.clone(),
             start_jar: built.start_jar.clone(),
+            checks,
         };
         emit_progress(&app, t);
         inner.reports.insert(id.clone(), report);

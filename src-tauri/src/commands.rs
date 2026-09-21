@@ -29,6 +29,7 @@ fn last_parsed(state: &S<'_>) -> Option<Arc<ParsedPack>> {
 fn downloader_of(state: &S<'_>) -> Downloader {
     let s = lock(&state).settings.clone();
     Downloader::new(PathBuf::from(&s.cache_dir), s.concurrency as usize)
+        .with_source(s.download_source.normalized())
 }
 
 /* ---------------- 解析 / 选项 ---------------- */
@@ -604,31 +605,29 @@ pub fn get_settings(state: S<'_>) -> AppSettings {
 }
 
 #[tauri::command]
-pub fn set_settings(app: AppHandle, state: S<'_>, settings: AppSettings) {
+pub fn set_settings(app: AppHandle, state: S<'_>, settings: AppSettings) -> Result<(), String> {
     // 手输/粘贴的目录可能带正斜杠，存下来一律先归成本机分隔符（否则 opener 打不开）
-    let settings = settings.with_native_dirs();
-    task_engine::save_settings(&app, &settings);
+    let settings = settings.normalized();
+    // 先落盘再改内存：写失败时内存仍是旧值，前端据此回滚，不会出现「界面已生效、重启又变回去」
+    task_engine::save_settings(&app, &settings)?;
     lock(&state).settings = settings;
+    Ok(())
 }
 
+/// 下载源档位。**只列真实存在的两条**：原来的「GitHub Releases」既不是 Maven 镜像、
+/// 也没有任何代码走它，留着等于给用户一个假选项（镜像覆盖边界见 `core::downloader::source`）。
 #[tauri::command]
 pub fn list_download_sources() -> Vec<VersionOption> {
     vec![
         VersionOption {
             value: "official".into(),
-            label: "官方源 · Mojang + Forge".into(),
+            label: "官方源".into(),
             recommended: Some(true),
             group: None,
         },
         VersionOption {
             value: "bmclapi".into(),
-            label: "BMCLAPI · 国内镜像".into(),
-            recommended: Some(false),
-            group: None,
-        },
-        VersionOption {
-            value: "github".into(),
-            label: "GitHub Releases".into(),
+            label: "BMCLAPI 国内镜像".into(),
             recommended: Some(false),
             group: None,
         },

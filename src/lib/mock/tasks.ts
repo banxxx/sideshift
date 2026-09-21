@@ -3,6 +3,7 @@
  * 并预置一组历史样例让列表 / 详情 / 报告 / 错误卡都能直接走查。
  */
 import type {
+    CheckResult,
     ConversionOptions,
     ConversionReport,
     ConversionTask,
@@ -18,6 +19,7 @@ import {
     mockPlanCounts,
     mockPlanMods,
 } from "./data";
+import { mockLoadSettings } from "./settings";
 
 /** 任务内存仓（页面刷新即重置——真实实现中由 Rust 持久化） */
 const tasks = new Map<string, ConversionTask>();
@@ -361,6 +363,39 @@ export function mockReport(taskId: string): ConversionReport | undefined {
     const o = task.options;
     const generated = ["eula.txt", "server.properties", "README-SideShift.txt"];
     if (o.generateScripts) generated.unshift("start.bat", "start.sh");
+    const mods = (task.counts?.keep ?? mockPlanCounts.keep) + (task.counts?.add ?? mockPlanCounts.add);
+    // 自检明细只在开关打开时给（与 Rust 侧一致：关着不该凭空冒出一张卡）
+    const checks: CheckResult[] = mockLoadSettings().verifyAfterBuild
+        ? [
+              { id: "files", label: "取件完整", status: "pass", detail: `模组 ${mods} 个全部落位` },
+              { id: "jars", label: "jar 可用", status: "pass", detail: `${mods + 1} 个 jar 容器可读` },
+              { id: "deps", label: "依赖闭合", status: "pass", detail: "12 条依赖引用全部指向包内" },
+              o.generateScripts
+                  ? {
+                        id: "start",
+                        label: "启动指向",
+                        status: "pass",
+                        detail: "fabric-server-launch.jar 就位 · start 脚本直接可跑",
+                    }
+                  : {
+                        id: "start",
+                        label: "启动指向",
+                        status: "warn",
+                        detail: "fabric-server-launch.jar 就位；本次未生成启动脚本，需自行启动",
+                    },
+              { id: "root", label: "包根文件", status: "pass", detail: `包根 ${generated.length} 个文件全部就位` },
+              ...(o.keepDirs.length
+                  ? [
+                        {
+                            id: "keep",
+                            label: "保留目录",
+                            status: "pass" as const,
+                            detail: `${o.keepDirs.length} 个目录 · 12 个文件已带入`,
+                        },
+                    ]
+                  : []),
+          ]
+        : [];
     return {
         taskId,
         outputFileName: task.outputFileName ?? outputNameOf(task.pack.fileName),
@@ -375,6 +410,7 @@ export function mockReport(taskId: string): ConversionReport | undefined {
         fileCount: (task.counts?.keep ?? mockPlanCounts.keep) + (task.counts?.add ?? mockPlanCounts.add) + generated.length + 12,
         generatedFiles: generated,
         startJar: "fabric-server-launch.jar",
+        checks,
     };
 }
 

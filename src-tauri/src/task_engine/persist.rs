@@ -46,20 +46,23 @@ pub fn load_settings(app: &AppHandle) -> AppSettings {
             cache_dir: if s.cache_dir.is_empty() { defaults.cache_dir.clone() } else { s.cache_dir },
             ..s
         }
-        .with_native_dirs(),
+        .normalized(),
         None => defaults,
     }
 }
 
-pub fn save_settings(app: &AppHandle, s: &AppSettings) {
-    if let Some(p) = settings_path(app) {
-        if let Some(dir) = p.parent() {
-            let _ = std::fs::create_dir_all(dir);
-        }
-        if let Ok(json) = serde_json::to_string_pretty(s) {
-            let _ = std::fs::write(p, json);
-        }
+/// 写 settings.json：失败要报给调用方。静默失败等于「用户改完设置、重启后回退」，
+/// 而他看到的是保存成功的界面——这种账没法查，所以宁可吵一句。
+pub fn save_settings(app: &AppHandle, s: &AppSettings) -> Result<(), String> {
+    let Some(p) = settings_path(app) else {
+        return Err("找不到应用配置目录，设置未能保存".to_string());
+    };
+    if let Some(dir) = p.parent() {
+        std::fs::create_dir_all(dir)
+            .map_err(|e| format!("设置写入失败：{e}（{}）", dir.display()))?;
     }
+    let json = serde_json::to_string_pretty(s).map_err(|e| format!("设置序列化失败：{e}"))?;
+    std::fs::write(&p, json).map_err(|e| format!("设置写入失败：{e}（{}）", p.display()))
 }
 
 /* ---------------- 任务存档 ---------------- */

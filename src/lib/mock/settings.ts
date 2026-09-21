@@ -13,11 +13,10 @@ export const mockDefaultSettings: AppSettings = {
     concurrency: 6,
 };
 
-/** 下载源下拉（Settings · 网络） */
+/** 下载源下拉（Settings · 网络）：与 Rust `list_download_sources` 同序同文案 */
 export const mockDownloadSources: VersionOption[] = [
-    { value: "official", label: "官方源 · Mojang + Forge", recommended: true },
-    { value: "bmclapi", label: "BMCLAPI · 国内镜像" },
-    { value: "github", label: "GitHub Releases" },
+    { value: "official", label: "官方源", recommended: true },
+    { value: "bmclapi", label: "BMCLAPI 国内镜像" },
 ];
 
 export function mockLoadSettings(): AppSettings {
