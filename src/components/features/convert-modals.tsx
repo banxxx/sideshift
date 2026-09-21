@@ -4,15 +4,25 @@
  * 定稿规则：
  *  - 遮罩 50% 黑；模态 $surface + $stroke 1px r12 padding20 gap12；页脚 = 1px $stroke + 摘要 + 按钮组
  *  - 网络添加与模组详情是同壳二级视图，尺寸强制一致 800×464（“跳转后弹窗不能变小”）
- *  - 处置清单壳剔除/保留/新增共用（focus 区分）：行勾选语义 = 是否处于该处置；
- *    取消勾选即「反向待办」（金色行 + 描边徽章）；勾选只进弹窗草稿，
+ *  - 处置清单壳剔除/保留/新增共用（focus 区分）：勾选位 = 是否进服务端包，
+ *    与卡内 CheckBox 同方向（剔除窗默认全不勾、保留/新增窗默认全勾）；
+ *    金色行 = 相对本清单处置被改判、还没应用；勾选只进弹窗草稿，
  *    「应用」时才把差异行回写页面（「取消」/关闭按钮放弃草稿）
  */
-import { Check, ChevronDown, ChevronLeft, ChevronRight, Folder, MinusSquare, Puzzle, Search, Square, SquareCheck } from "lucide-react";
+import { Check, ChevronDown, ChevronLeft, ChevronRight, Folder, MinusSquare, Puzzle, Search, SquareCheck } from "lucide-react";
 import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { AnimatePresence, motion } from "motion/react";
 import * as api from "@/lib/api";
-import { evidenceLabel, formatSize, loaderLabel, reviewFirst, sideTagLabel, sideTagOf } from "@/lib/format";
+import {
+    clientInstallNeeded,
+    evidenceLabel,
+    formatSize,
+    loaderLabel,
+    reviewFirst,
+    sideTagLabel,
+    sideTagOf,
+    type SideTag,
+} from "@/lib/format";
 import type {
     LoaderKind,
     ModDisposition,
@@ -29,6 +39,7 @@ import {
     ModalShell,
     SEG_PILL_SPRING,
     SearchBox,
+    SegTabs,
     TagChip,
     ToneChip,
 } from "@/components/design/ui";
@@ -38,22 +49,27 @@ import { cn } from "@/lib/utils";
 
 export type ListFocus = ModDisposition;
 
-/** 三清单共壳（focus 区分）：行勾选语义 = 是否处于该处置；add 视角取消勾选 = 停用（行保留在清单，不参与构建） */
+/**
+ * 三清单共壳（focus 区分）。勾选位统一 = **「这一项进不进服务端包」**，与卡内每行同方向：
+ * 剔除窗默认全不勾（勾上 = 改判保留），保留/新增窗默认全勾（取消 = 改判剔除 / 停用）。
+ * 金色告警态只跟随「被改判了、还没应用」，不跟随勾选位——否则剔除窗一进来就是满屏黄。
+ */
 const LIST_COPY: Record<
     ListFocus,
     {
         title: string;
         sub: string;
-        toolbar: (on: number, off: number) => string;
+        /** (维持原处置, 已改判) */
         note: (on: number, off: number) => string;
+        /** 改判态行尾的徽章 */
         offBadge: string;
+        /** 改判态行的说明文字 */
         rowOff: string;
     }
 > = {
     remove: {
         title: "剔除清单",
         sub: "不进服务端包的模组（含判不出两端的待确认项）· 可逐项改回保留",
-        toolbar: (on, off) => `已标记 ${on} · 改为保留 ${off}`,
         note: (on, off) => `${on} 项将剔除 · ${off} 项改为保留`,
         offBadge: "待恢复",
         rowOff: "勾选后改为保留 · 服务端将不剔除",
@@ -61,15 +77,13 @@ const LIST_COPY: Record<
     keep: {
         title: "保留清单",
         sub: "将随服务端包构建的模组 · 可逐项改回剔除",
-        toolbar: (on, off) => `保留 ${on} · 改为剔除 ${off}`,
         note: (on, off) => `${on} 项将保留 · ${off} 项改为剔除`,
         offBadge: "待剔除",
-        rowOff: "勾选后改为剔除 · 不再进入服务端包",
+        rowOff: "取消勾选改为剔除 · 不再进入服务端包",
     },
     add: {
         title: "新增清单",
         sub: "本次转换新增的模组 · 右侧标注端归属，取消勾选即停用，行保留可随时勾回",
-        toolbar: (on, off) => `生效 ${on} · 已停用 ${off}`,
         note: (on, off) => `${on} 项将新增 · ${off} 项停用`,
         offBadge: "已停用",
         rowOff: "停用中 · 不进入服务端包，勾选即恢复",
@@ -77,9 +91,49 @@ const LIST_COPY: Record<
 };
 
 /**
- * 端标签芯片（三张清单 + 卡内新增行共用）：客户端 / 服务端 / 两端 / 需人工确认。
- * 两端都要的模组不再谎报成「服务端」；两侧都没证据才是金色待确认。
- * warnClient = 新增清单里的客户端行标红——那是「误下载」最典型的一种
+ * 行尾芯片 = 筛选档位（同一个 `rowTagOf` 判出来，筛出来的一类必然就是行上看到的那枚标签）：
+ * 自动补齐 > 需人工确认 > 端标签。原先这里的计数文字（「已标记 N · 改为保留 M」）与页脚摘要重复，
+ * 位置腾给筛选更有用。
+ */
+type RowTag = SideTag | "autoSupplement";
+
+/** Tab 从左到右的固定顺序；当前清单里计数为 0 的档位不出 Tab */
+const ROW_TAG_ORDER: RowTag[] = [
+    "autoSupplement",
+    "serverRequired",
+    "serverOptional",
+    "clientRequired",
+    "clientOptional",
+    "review",
+];
+
+function rowTagOf(m: PlanMod, focus: ListFocus): RowTag {
+    if (focus === "add" && m.autoSupplement) return "autoSupplement";
+    if (m.needsReview) return "review";
+    return sideTagOf(m);
+}
+
+function rowTagLabel(tag: RowTag): string {
+    return tag === "autoSupplement" ? "自动补齐" : sideTagLabel(tag);
+}
+
+/** 行尾那枚芯片：优先级只在 `rowTagOf` 一处定义，调用处别再各判一遍 */
+function RowTagChip({ m, focus }: { m: PlanMod; focus: ListFocus }) {
+    const tag = rowTagOf(m, focus);
+    if (tag === "autoSupplement") return <TagChip square>自动补齐</TagChip>;
+    if (tag === "review")
+        return (
+            <TagChip square tone="gold">
+                需人工确认
+            </TagChip>
+        );
+    return <SideChip sides={m} square warnClient={focus === "add"} />;
+}
+
+/**
+ * 端标签芯片（三张清单 + 卡内新增行共用）：服务端必装 / 服务端可选 / 客户端必装 / 客户端可选 / 需人工确认。
+ * 判据与 detector 同轴，所以保留组的标签只说服务端、剔除组的标签只说客户端，不会与页签打架。
+ * warnClient = 新增清单里的客户端行标红（误下载最典型的一种）
  */
 export function SideChip({
     sides,
@@ -91,15 +145,14 @@ export function SideChip({
     warnClient?: boolean;
 }) {
     const tag = sideTagOf(sides);
-    if (tag === "review") {
-        return (
-            <TagChip square={square} tone="gold">
-                {sideTagLabel(tag)}
-            </TagChip>
-        );
-    }
+    const clientSide = tag === "clientRequired" || tag === "clientOptional";
     return (
-        <TagChip square={square} tone={warnClient && tag === "client" ? "redstone" : undefined}>
+        <TagChip
+            square={square}
+            tone={
+                tag === "review" ? "gold" : warnClient && clientSide ? "redstone" : undefined
+            }
+        >
             {sideTagLabel(tag)}
         </TagChip>
     );
@@ -117,11 +170,13 @@ function stripReason(m: PlanMod): string {
     const why =
         m.serverSide === "unsupported"
             ? "服务端不支持"
-            : m.clientSide === "required" && m.serverSide === "optional"
-              ? "客户端必需、服务端仅可选"
+            : m.serverSide === "optional"
+              ? m.clientSide === "required"
+                    ? "客户端必需、服务端仅可选"
+                    : "服务端仅可选"
               : m.clientSide === "required"
-                ? "仅声明客户端必需"
-                : "客户端专属";
+                ? "客户端必需、服务端没声明"
+                : "服务端没声明支持";
     return (
         `剔除原因：${why} · 依据：${evidenceLabel(m.envSource)}` +
         `${m.envConflict ? " · 与整合包声明不一致" : ""}` +
@@ -146,8 +201,10 @@ function keepReason(m: PlanMod): string {
               : m.serverSide === "unsupported"
                 ? "服务端不支持，本行未自动剔除"
                 : null;
+    // 两端必需 = 光进服务端包不算装完，长句说清「还要通知玩家」这件事
+    const both = clientInstallNeeded(m) ? " · 玩家客户端需同装" : "";
     return why
-        ? `保留原因：${why} · 依据：${evidenceLabel(m.envSource)}${m.envConflict ? " · 与整合包声明不一致" : ""}`
+        ? `保留原因：${why} · 依据：${evidenceLabel(m.envSource)}${m.envConflict ? " · 与整合包声明不一致" : ""}${both}`
         : `无端证据 · 未自动判定，本行由你保留在包里${hint}`;
 }
 
@@ -161,9 +218,15 @@ function rowOnSub(m: PlanMod, focus: ListFocus): string {
               ? "本地 jar · 构建时直接复制"
               : "在线添加 · 已钉住所选构建";
         // 误下载最常见的就是这条：把「服务端不需要」写在行上，而不是等人自己猜
-        return sideTagOf(m) === "client"
-            ? `${base} · 判为客户端模组，服务端包通常不需要`
-            : base;
+        const tag = sideTagOf(m);
+        if (tag === "clientRequired" || tag === "clientOptional") {
+            return `${base} · 判为客户端模组，服务端包通常不需要`;
+        }
+        // 两端都必需 = 装进服务端包还不够，玩家客户端也得装同一个
+        if (clientInstallNeeded(m)) {
+            return `${base} · 两端必需，玩家客户端需同装`;
+        }
+        return base;
     }
     return keepReason(m);
 }
@@ -177,7 +240,7 @@ export function PlanListModal({
 }: {
     open: boolean;
     onClose: () => void;
-    /** 清单视角：remove=剔除态为“开”，keep=保留态为“开” */
+    /** 清单视角：决定标题/文案与「改判基准」的处置（勾选位恒定 = 进不进服务端包） */
     focus: ListFocus;
     /** 该清单的全部候选（视角过滤由调用方做好后传入） */
     mods: PlanMod[];
@@ -185,40 +248,93 @@ export function PlanListModal({
     onDisposition: (id: string, d: ModDisposition) => void;
 }) {
     const copy = LIST_COPY[focus];
-    const other: ModDisposition = focus === "remove" ? "keep" : "remove";
     const [query, setQuery] = useState("");
+    /** 行标签筛选档位（与行尾芯片同源），all = 不按标签筛 */
+    const [tagFilter, setTagFilter] = useState<RowTag | "all">("all");
     /** 弹窗内暂存：勾选只改 draft，「应用」才回写页面 */
     const [draft, setDraft] = useState<Partial<Record<string, ModDisposition>>>({});
 
-    // 每次打开重建暂存与搜索（上次未应用的草稿不带入）
+    // 每次打开重建暂存、搜索与筛选（上次未应用的草稿不带入）
     useEffect(() => {
         if (open) {
             setDraft({});
             setQuery("");
+            setTagFilter("all");
         }
     }, [open]);
 
-    // 待人工确认的行永远在最前（与模组方案卡同一口径）
+    /* 筛选 Tab：整张清单里真实存在（计数 > 0）的标签才出档位，顺序固定；
+       只看「有没有这一类」，数量不上 Tab（标题与页脚已经把数说完了），打字时档位也不跳 */
+    const tagItems = useMemo(() => {
+        const present = new Set<RowTag>(mods.map((m) => rowTagOf(m, focus)));
+        return [
+            { key: "all" as RowTag | "all", label: "全部" },
+            ...ROW_TAG_ORDER.filter((t) => present.has(t)).map((t) => ({
+                key: t,
+                label: rowTagLabel(t),
+            })),
+        ];
+    }, [mods, focus]);
+
+    // 待人工确认的行永远在最前（与模组方案卡同一口径）；搜索与标签是 AND
     const filtered = useMemo(
-        () => reviewFirst(mods.filter((m) => !query || m.name.toLowerCase().includes(query.toLowerCase()))),
-        [mods, query]
+        () =>
+            reviewFirst(
+                mods.filter(
+                    (m) =>
+                        (!query || m.name.toLowerCase().includes(query.toLowerCase())) &&
+                        (tagFilter === "all" || rowTagOf(m, focus) === tagFilter)
+                )
+            ),
+        [mods, query, tagFilter, focus]
     );
 
-    /** 行当前处置草稿：停用行未编辑时的基线视为「关」（add 视角 = 停用即 off） */
+    /** 行当前处置草稿 = 这一块的唯一真相源，勾选/金色/计数/批量全由它派生。
+     *  停用行未编辑时的基线视为「关」（add 视角 = 停用即 remove 态） */
     const dispOf = (m: PlanMod): ModDisposition =>
         draft[m.id] ?? (focus === "add" && m.disabled ? "remove" : m.disposition);
-    const on = mods.filter((m) => dispOf(m) === focus).length;
-    const off = mods.length - on;
 
-    const setRow = (m: PlanMod, target: ModDisposition) =>
-        setDraft((d) => ({ ...d, [m.id]: target }));
+    /** 勾选 = 进服务端包（与卡内 CheckBox 同方向，三张清单一致）：
+     *  剔除清单默认全不勾、保留/新增清单默认全勾。 */
+    const checkedOf = (m: PlanMod): boolean => dispOf(m) !== "remove";
+    /** 金色告警 = 相对本清单处置被改判了、还没应用（只跟改判走，不跟勾选走） */
+    const pendingOf = (m: PlanMod): boolean => dispOf(m) !== focus;
+    /** 页脚「维持原处置」数：剔除=将剔除、保留=将保留、新增=生效 */
+    const onN = mods.filter((m) => dispOf(m) === focus).length;
 
-    /** 全选/取消全选（切换式）：作用于当前搜索可见的行，只写草稿 */
-    const allOn = filtered.length > 0 && filtered.every((m) => dispOf(m) === focus);
-    const setAll = (target: ModDisposition) =>
+    /** 取消「不进包」时回到的处置：剔除清单里回到保留，保留/新增清单里回到原处置
+     *  （新增清单必须回到 add，落成 keep 会被页脚的「生效↔停用」判定当成没改过） */
+    const restoreOf = (m: PlanMod): ModDisposition =>
+        m.disposition === "remove" ? "keep" : m.disposition;
+
+    const setRow = (m: PlanMod) =>
+        setDraft((d) => ({
+            ...d,
+            [m.id]: dispOf(m) === "remove" ? restoreOf(m) : "remove",
+        }));
+
+    /** 批量按钮：目标写死成处置而不是翻转勾选位，作用域 = 搜索 + 标签筛后的可见行。
+     *  新增清单的「常态」是生效，所以再点一次的回落位不能等于 focus，得显式停用 */
+    const batchTarget: ModDisposition =
+        focus === "remove" ? "keep" : focus === "keep" ? "remove" : "add";
+    const batchUndo: ModDisposition = focus === "add" ? "remove" : focus;
+    const batchDone = filtered.length > 0 && filtered.every((m) => dispOf(m) === batchTarget);
+    const batchLabel =
+        focus === "remove"
+            ? batchDone
+                ? "全部维持剔除"
+                : "全部勾回保留"
+            : focus === "keep"
+              ? batchDone
+                  ? "全部恢复保留"
+                  : "全部改判剔除"
+              : batchDone
+                ? "全部停用"
+                : "全部生效";
+    const runBatch = () =>
         setDraft((d) => {
             const next = { ...d };
-            filtered.forEach((m) => (next[m.id] = target));
+            filtered.forEach((m) => (next[m.id] = batchDone ? batchUndo : batchTarget));
             return next;
         });
 
@@ -245,7 +361,7 @@ export function PlanListModal({
             height={480}
             title={`${copy.title} · ${mods.length} 个模组`}
             sub={copy.sub}
-            footerNote={copy.note(on, off)}
+            footerNote={copy.note(onN, mods.length - onN)}
             footerActions={
                 <>
                     <Btn size="sm" className="px-3.5" onClick={onClose}>
@@ -264,39 +380,44 @@ export function PlanListModal({
                 className="border border-stroke"
             />
 
-            {/* toolbar：左全选（切换式） + 右计数 */}
+            {/* toolbar：左批量动作（作用域=当前可见行） + 右标签筛选（计数为 0 的档位不出 Tab） */}
             <div className="flex w-full shrink-0 items-center justify-between gap-2">
                 <button
-                    className="flex items-center gap-2 text-[11px] leading-[16px] font-medium text-text-2 transition-colors hover:text-text-1"
-                    onClick={() => setAll(allOn ? other : focus)}
+                    className="flex shrink-0 items-center gap-2 text-[11px] leading-[16px] font-medium text-text-2 transition-colors hover:text-text-1"
+                    onClick={runBatch}
                 >
-                    {allOn ? (
-                        <MinusSquare className="size-3.5 text-accent" />
-                    ) : (
+                    {batchDone ? (
                         <SquareCheck className="size-3.5 text-accent" />
+                    ) : (
+                        <MinusSquare className="size-3.5 text-accent" />
                     )}
-                    {allOn ? "取消全选" : "全选"}
+                    {batchLabel}
                 </button>
-                <span className="font-mono text-[11px] leading-[16px] font-normal tabular-nums text-text-3">
-                    {copy.toolbar(on, off)}
-                </span>
+                {/* 极端组合（六档全有 + 长计数）兜一层横向滚动，不把 Tab 挤成换行 */}
+                <div className="min-w-0 overflow-x-auto">
+                    <SegTabs
+                        size="sm"
+                        items={tagItems}
+                        value={tagFilter}
+                        onChange={setTagFilter}
+                    />
+                </div>
             </div>
 
             {/* list：gap2；行 padding[8,4]；全部展示（滚动） */}
             <div className="-mx-1 flex min-h-0 flex-1 flex-col gap-0.5 overflow-auto px-1">
                 {filtered.map((m) => {
-                    const isOn = dispOf(m) === focus;
+                    const checked = checkedOf(m);
+                    const pending = pendingOf(m);
                     return (
                         <ListRow
                             key={m.id}
-                            className={cn("cursor-pointer", !isOn && "bg-gold-dim")}
-                            onClick={() => setRow(m, isOn ? other : focus)}
+                            className={cn("cursor-pointer", pending && "bg-gold-dim")}
+                            onClick={() => setRow(m)}
                         >
-                            {isOn ? (
-                                <SquareCheck className="size-[15px] shrink-0 text-accent" />
-                            ) : (
-                                <Square className="size-[15px] shrink-0 text-gold" />
-                            )}
+                            {/* 勾选框不接 onChange：点击冒泡到整行，避免一行两处状态源；
+                                颜色不跟勾选走（剔除清单的默认未勾选是常态，不该报金） */}
+                            <CheckBox checked={checked} onChange={() => {}} />
                             <span className="flex min-w-0 flex-1 flex-col gap-0.5">
                                 <span className="truncate font-mono text-[12px] leading-[18px] font-medium text-text-1">
                                     {m.name} {m.version}
@@ -304,26 +425,18 @@ export function PlanListModal({
                                 <span
                                     className={cn(
                                         "truncate text-[10px] leading-[14px] font-normal",
-                                        isOn ? "text-text-3" : "text-gold"
+                                        pending ? "text-gold" : "text-text-3"
                                     )}
                                 >
-                                    {isOn ? rowOnSub(m, focus) : copy.rowOff}
+                                    {pending ? copy.rowOff : rowOnSub(m, focus)}
                                 </span>
                             </span>
-                            {isOn ? (
-                                focus === "add" && m.autoSupplement ? (
-                                    <TagChip square>自动补齐</TagChip>
-                                ) : m.needsReview ? (
-                                    <TagChip square tone="gold">
-                                        需人工确认
-                                    </TagChip>
-                                ) : (
-                                    <SideChip sides={m} square warnClient={focus === "add"} />
-                                )
-                            ) : (
+                            {pending ? (
                                 <TagChip square outline className="text-gold">
                                     {copy.offBadge}
                                 </TagChip>
+                            ) : (
+                                <RowTagChip m={m} focus={focus} />
                             )}
                         </ListRow>
                     );
@@ -738,6 +851,14 @@ export function OnlineAddModal({
 
     const filterNote = `${verSel ? `Minecraft ${verSel}` : "全部版本"} · ${loSel ? loaderLabel(loSel) : "任意加载器"}`;
 
+    /* 模组名后那一枚端标签（全弹窗只此一处，列表行与版本行都不再挂）：
+       优先项目级支持度，平台只在构建级给数据时退到首个有声明的构建；两边都没有就不挂 */
+    const modTag = useMemo(() => {
+        if (!detail) return null;
+        if (detail.clientSide || detail.serverSide) return detail;
+        return shownVersions.find((v) => v.clientSide || v.serverSide) ?? null;
+    }, [detail, shownVersions]);
+
     /* ---- 二级视图：模组详情 + 版本列表（整行点击下载） ---- */
     if (view === "detail" && detail) {
         return (
@@ -751,6 +872,7 @@ export function OnlineAddModal({
                 icon={Puzzle}
                 iconNode={<ModIcon url={detail.iconUrl} className="size-10" puzzleClass="size-5" />}
                 title={detail.name}
+                titleTag={modTag ? <SideChip sides={modTag} warnClient /> : undefined}
                 sub={`${source === "modrinth" ? "Modrinth" : "CurseForge"} · 作者 ${detail.author} · ${formatCount(detail.downloads)} 次下载`}
             >
                 <p className="shrink-0 text-[13px] leading-[20px] font-normal text-text-2">
@@ -803,10 +925,6 @@ export function OnlineAddModal({
                                                 <ToneChip tone="gold" size="xs">
                                                     推荐
                                                 </ToneChip>
-                                            )}
-                                            {/* 构建级端声明：点这一行就是下载这一份，标签必须在这一步给出 */}
-                                            {(v.clientSide || v.serverSide) && (
-                                                <SideChip sides={v} square warnClient />
                                             )}
                                         </span>
                                         <span className="truncate text-[10px] leading-[14px] font-normal text-text-3">
@@ -952,10 +1070,6 @@ export function OnlineAddModal({
                                     <ToneChip tone="emerald" size="xs">
                                         已添加
                                     </ToneChip>
-                                )}
-                                {/* 端归属在点进详情之前就说清；平台没声明则不上牌（别整列表刷金色） */}
-                                {(m.clientSide || m.serverSide) && (
-                                    <SideChip sides={m} warnClient />
                                 )}
                                 <ChevronRight className="size-3.5 shrink-0 text-text-3" />
                             </ListRow>

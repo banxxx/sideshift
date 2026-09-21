@@ -15,7 +15,7 @@ import { AnimatePresence, motion, type Variants } from "motion/react";
 import * as api from "@/lib/api";
 import { useNavigation } from "@/lib/navigation";
 import { notify } from "@/lib/notify";
-import { formatSize, loaderLabel, outputNameOf, reviewFirst, sideTagOf, truncateMiddle } from "@/lib/format";
+import { formatSize, loaderLabel, outputNameOf, reviewFirst, truncateMiddle } from "@/lib/format";
 import type {
     AppSettings,
     ConversionOptions,
@@ -234,18 +234,8 @@ export function ConvertPage() {
             // add = 生效新增数（停用不计）；addTotal = 清单行数（弹窗「查看全部」口径）
             add: activeMods.filter((m) => m.disposition === "add").length,
             addTotal: mods.filter((m) => m.disposition === "add").length,
-            // 新增行里的客户端专属项：只提示不改判（用户显式添加的，删除动作留给他自己）
-            addClientOnly: activeMods.filter(
-                (m) => m.disposition === "add" && sideTagOf(m) === "client"
-            ).length,
         }),
         [activeMods, mods]
-    );
-
-    /** 判不出两端、被归进剔除清单等人工确认的行（卡底一句汇总，不逐行写长文） */
-    const pendingReview = useMemo(
-        () => mods.filter((m) => m.needsReview && m.disposition === "remove").length,
-        [mods]
     );
 
     /** 本地兜底聚合（后端答不上来时展示）：联网行按源 fileSize 求和 */
@@ -705,11 +695,8 @@ export function ConvertPage() {
                                                 {/* 自动分类出口：进页已默认跑过，这里只给重跑与回退手动改动的入口；
                                                     判不出两端的行已归进剔除清单，这里给一句汇总 */}
                                                 <div className="flex min-w-0 items-center gap-2.5">
-                                                    {pendingReview > 0 && (
-                                                        <span className="truncate text-[10px] leading-[14px] text-text-3">
-                                                            {pendingReview} 项无法判定 · 已放入剔除清单待确认
-                                                        </span>
-                                                    )}
+                                                    {/* 两枚计数提示已收进弹窗：待确认数 = 剔除清单的「需人工确认」tab，
+                                                        同装数 = 保留清单每行说明尾部，卡底只留操作 */}
                                                     {classifying ? (
                                                         <span className="text-[11px] leading-[16px] text-text-3">
                                                             自动分类中…
@@ -758,12 +745,6 @@ export function ConvertPage() {
                                                         <LinkBtn chevron onClick={() => setListFocus("add")}>
                                                             查看全部 {counts.addTotal} 项新增清单
                                                         </LinkBtn>
-                                                    )}
-                                                    {/* 误添加防线：只说清哪几行是客户端专属，改不改由用户决定 */}
-                                                    {counts.addClientOnly > 0 && (
-                                                        <span className="truncate text-[10px] leading-[14px] text-text-3">
-                                                            {counts.addClientOnly} 项判为客户端模组 · 服务端包通常不需要
-                                                        </span>
                                                     )}
                                                 </div>
                                                 {/* 两枚 h32 添加按钮：有清单时居右，空方案时整行居中 */}
@@ -1117,12 +1098,14 @@ function PlanModRow({
 }
 
 /** 卡内行右侧徽章只放「这行有什么特别的」：
- *  剔除/保留行 = 自动补齐 > 需人工确认 > 本地，端标签交给「全部清单」弹窗，卡内不重复占宽；
+ *  剔除/保留行 = 自动补齐 > 需人工确认 > 本地，端标签交给「全部清单」弹窗，卡内不重复占宽
+ *  （两端必需的保留行可能成批出现，卡底那句汇总才是它们该被看见的方式）；
  *  新增行 = 用户自己塞进来的（误下载、本地乱拿都在这一步），所以当场就要看到它是哪一端 */
 function badgeFor(mod: PlanMod, local: boolean): React.ReactNode {
     if (mod.autoSupplement) return <TagChip>自动补齐</TagChip>;
     if (mod.needsReview) return <ToneChip tone="gold" size="sm">需人工确认</ToneChip>;
-    if (mod.disposition === "add") return <SideChip sides={mod} warnClient />;
+    if (mod.disposition === "add")
+        return <SideChip sides={mod} warnClient />;
     if (local) return <TagChip>本地</TagChip>;
     return undefined;
 }

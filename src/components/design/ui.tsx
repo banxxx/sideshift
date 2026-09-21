@@ -201,7 +201,7 @@ export function ToneChip({
     );
 }
 
-/** 中性小徽章：$surface-2 底 10/600 $text-2（"客户端专属"等）；square 时 r6 + 10/500（剔除清单弹窗） */
+/** 中性小徽章：$surface-2 底 10/600 $text-2（"服务端必装"等端标签）；square 时 r6 + 10/500（清单弹窗） */
 export function TagChip({
     children,
     tone,
@@ -516,11 +516,14 @@ export function SegTabs<T extends string>({
     items,
     value,
     onChange,
+    size = "md",
     className,
 }: {
     items: Array<{ key: T; label: string; count?: number; icon?: LucideIcon }>;
     value: T;
     onChange: (k: T) => void;
+    /** md = 页面级页签（轨道 h36）；sm = 弹窗行内筛选（轨道 h28），别处别拿它当小号页签用 */
+    size?: "md" | "sm";
     className?: string;
 }) {
     // 选中态抽成一颗 layoutId 胶囊：切 Tab 时它在三项之间滑动，而不是瞬移换底色
@@ -528,7 +531,8 @@ export function SegTabs<T extends string>({
     return (
         <div
             className={cn(
-                "flex h-9 shrink-0 items-center gap-0.5 rounded-lg bg-surface-2 p-[3px]",
+                "flex shrink-0 items-center gap-0.5 rounded-lg bg-surface-2",
+                size === "sm" ? "h-7 p-[2px]" : "h-9 p-[3px]",
                 className
             )}
         >
@@ -540,10 +544,11 @@ export function SegTabs<T extends string>({
                         key={it.key}
                         onClick={() => onChange(it.key)}
                         className={cn(
-                            "relative inline-flex h-[30px] items-center justify-center rounded-md px-3 transition-colors",
-                            active
-                                ? "text-[12px] leading-[18px] font-semibold text-text-1"
-                                : "text-[12px] leading-[18px] font-medium text-text-3 hover:text-text-2"
+                            "relative inline-flex shrink-0 items-center justify-center rounded-md transition-colors",
+                            size === "sm"
+                                ? "h-[22px] px-2 text-[11px] leading-[16px]"
+                                : "h-[30px] px-3 text-[12px] leading-[18px]",
+                            active ? "font-semibold text-text-1" : "font-medium text-text-3 hover:text-text-2"
                         )}
                     >
                         {active && (
@@ -726,7 +731,7 @@ export function SearchSelect({
     );
 }
 
-/* ---------------- 勾选框：16×16 r4（Convert 模组行） ----------------
+/* ---------------- 勾选框：16×16 r4（Convert 模组行 + 处置清单弹窗行） ----------------
  * 选中 $accent + check 10 $accent-ink；未选 $surface + $stroke；待确认未选 $surface + $gold
  */
 export function CheckBox({
@@ -983,6 +988,7 @@ export function ModalShell({
     width,
     height,
     title,
+    titleTag,
     sub,
     icon: Icon,
     iconNode,
@@ -997,6 +1003,8 @@ export function ModalShell({
     width: number;
     height?: number;
     title: string;
+    /** 标题右侧的一枚标签（模组详情视图：标签只挂在模组名上，版本行不再重复） */
+    titleTag?: ReactNode;
     sub?: string;
     icon?: LucideIcon;
     /** 自定义头部图标（如模组真实头像）；给了它就替代 icon 的图标壳 */
@@ -1040,9 +1048,13 @@ export function ModalShell({
                                 </span>
                             ))}
                         <div className="flex min-w-0 flex-1 flex-col gap-[3px]">
-                            <DialogPrimitive.Title className="truncate text-[14px] leading-[20px] font-semibold text-text-1">
-                                {title}
-                            </DialogPrimitive.Title>
+                            {/* 标题 + 标签一行：标题继续 truncate，标签 shrink-0 不被挤掉 */}
+                            <span className="flex min-w-0 items-center gap-2">
+                                <DialogPrimitive.Title className="truncate text-[14px] leading-[20px] font-semibold text-text-1">
+                                    {title}
+                                </DialogPrimitive.Title>
+                                {titleTag && <span className="flex shrink-0 items-center">{titleTag}</span>}
+                            </span>
                             {sub && (
                                 <span className="truncate text-[11px] leading-[16px] font-normal text-text-3">
                                     {sub}

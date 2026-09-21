@@ -4,7 +4,7 @@
  * 这些格式化在 Home/Task/Tasks/Report 多页复用（设计稿中统一为 mono 风格），
  * 抽到公共模块避免各页各写一份导致文案格式漂移。
  */
-import type { EnvSource, LoaderKind, PlanMod, SideFlag } from "./types";
+import type { EnvSource, LoaderKind, PlanMod } from "./types";
 
 /** 84.0 MB / 512 MB / 1.2 GB —— ≥1024 才进阶单位，保留一位小数 */
 export function formatSize(bytes: number): string {
@@ -76,31 +76,48 @@ export function reviewFirst<T extends { needsReview: boolean }>(rows: T[]): T[] 
     return rows.slice().sort((a, b) => Number(b.needsReview) - Number(a.needsReview));
 }
 
-/** 端标签四态：客户端专属 / 服务端专属 / 两端都要 / 判不出来 */
-export type SideTag = "client" | "server" | "both" | "review";
+/** 端标签五态（文案一律 5 字）：保留组说服务端，剔除组说客户端，服务端轴没答上才是待确认 */
+export type SideTag =
+    | "serverRequired"
+    | "serverOptional"
+    | "clientRequired"
+    | "clientOptional"
+    | "review";
 
 const SIDE_TAG_LABEL: Record<SideTag, string> = {
-    client: "客户端",
-    server: "服务端",
-    both: "两端",
+    serverRequired: "服务端必装",
+    serverOptional: "服务端可选",
+    clientRequired: "客户端必装",
+    clientOptional: "客户端可选",
     review: "需人工确认",
 };
 
 /**
- * 两侧支持度 → 端标签。保留行不能再一概写「服务端」：绝大多数是两端都要，
- * 写成服务端等于谎报它是服务端专属。两个轴都没证据才是「需人工确认」。
+ * 两侧支持度 → 端标签。判据与 `detector::verdict` / 待确认口径同轴，所以标签永远不会与所在页签打架：
+ * (必,可) 被判剔 → 说「客户端必装」而不是「服务端可选」；服务端轴没答上的行不替它编结论。
  */
 export function sideTagOf(m: Pick<PlanMod, "clientSide" | "serverSide">): SideTag {
-    const on = (f?: SideFlag) => f === "required" || f === "optional";
-    if (on(m.clientSide) && on(m.serverSide)) return "both";
-    if (on(m.serverSide)) return "server";
-    if (on(m.clientSide)) return "client";
-    return "review";
+    // 服务端轴没答上（含 (必,无)：会被剔但没有服务端依据）→ 与 detector 的 server_undecided 同判据
+    if (m.serverSide === undefined) return "review";
+    if (m.serverSide === "required") return "serverRequired";
+    // 客户端必需 + 服务端非必需（可选/不支持）→ 裁决是剔除，标签就该说客户端
+    if (m.clientSide === "required") return "clientRequired";
+    if (m.serverSide === "optional") return "serverOptional";
+    // 服务端不支持 → 必剔；这种行只可能属于客户端，客户端那轴没说上也算「可装可不装」
+    return "clientOptional";
 }
 
 /** 端标签文案（三张清单与卡内共用，别各处再抄一份字符串） */
 export function sideTagLabel(tag: SideTag): string {
     return SIDE_TAG_LABEL[tag];
+}
+
+/**
+ * 两端都必需：这行进了服务端包，玩家的客户端也得装同一个模组，否则连不上或功能缺失。
+ * 只用于说明文字（不再做成标签——它不是「这行进不进包」的答案，页签已经答过了）。
+ */
+export function clientInstallNeeded(m: Pick<PlanMod, "clientSide" | "serverSide">): boolean {
+    return m.clientSide === "required" && m.serverSide === "required";
 }
 
 /** 由整合包文件名推导服务端输出名：xxx.mrpack → xxx-server.zip */

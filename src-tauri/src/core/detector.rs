@@ -171,6 +171,11 @@ pub fn build_plan(
             // 例外：关键字表（Via* 那类）本身就是「有服务端价值、默认保留」的口径，不并进来；
             // 自动剔除关掉时整条不生效（那是手动模式，不该满屏标待确认）。
             let pending = undecidable && !needs_review && strip_client_only;
+            // 「服务端轴没答上」= 这一行的处置缺的正是服务端那一条依据。分组照旧由裁决决定
+            // （(必,无) 剔、(可,无) 留），但一律标出来让人过一眼——与前端 sideTagOf 的 review 同判据。
+            // 被字节码按住名称层的那行不算：jar 里确有服务端注册，那是有依据的保留。
+            let server_undecided = server.is_none() && !vetoed && strip_client_only;
+            let review = server_undecided && !needs_review;
             PlanMod {
                 id,
                 name: title_from_id(&lower_file_stem(&f.file_name)),
@@ -182,7 +187,7 @@ pub fn build_plan(
                     ModDisposition::Keep
                 },
                 client_only,
-                needs_review: needs_review || pending,
+                needs_review: needs_review || review,
                 auto_supplement: false,
                 size_bytes: f.size_bytes,
                 // 只有「有 URL 可下且物理不在包内」才是真联网下载；
@@ -576,6 +581,46 @@ mod tests {
         let plan = build_plan(&parsed, true, &map, &CodeMap::new());
         assert_eq!(plan[0].disposition, ModDisposition::Remove);
         assert_eq!(plan[0].env_source, EnvSource::ModrinthHash);
+    }
+
+    #[test]
+    fn client_required_with_unknown_server_strips_but_asks_for_review() {
+        use SideFlag::{Optional, Required};
+        // 第三方 mrpack 常只写 client 一轴（服务端缺键）：剔除这一下没有服务端依据，
+        // 所以行落进剔除分组，但同时标「需人工确认」并置顶——与前端 sideTagOf 的 review 同判据
+        let mut map = EvidenceMap::new();
+        map.insert(
+            "mods/half-declared-1.0.jar".to_string(),
+            Evidence {
+                client: Some(Required),
+                server: None,
+                source: EnvSource::ModrinthProject,
+            },
+        );
+        map.insert(
+            "mods/half-declared-lib-1.0.jar".to_string(),
+            Evidence {
+                client: Some(Optional),
+                server: None,
+                source: EnvSource::ModrinthProject,
+            },
+        );
+        let parsed = pack(vec![
+            file("half-declared-1.0.jar", (None, None)),
+            file("half-declared-lib-1.0.jar", (None, None)),
+        ]);
+        let plan = build_plan(&parsed, true, &map, &CodeMap::new());
+        assert_eq!(plan[0].disposition, ModDisposition::Remove);
+        assert!(plan[0].needs_review, "服务端轴没答上 → 交给人");
+        assert!(plan[0].client_only, "客户端那一轴确实答上了：必需");
+        // 分组照旧由裁决决定：客户端只是可选 → 留在包里，但一样要人过一眼
+        assert_eq!(plan[1].disposition, ModDisposition::Keep);
+        assert!(plan[1].needs_review);
+        // 手动模式（自动剔除关掉）不该满屏标待确认
+        let manual = build_plan(&parsed, false, &map, &CodeMap::new());
+        assert_eq!(manual[0].disposition, ModDisposition::Keep);
+        assert!(!manual[0].needs_review);
+        assert!(!manual[1].needs_review);
     }
 
     #[test]

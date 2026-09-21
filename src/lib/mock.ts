@@ -88,6 +88,15 @@ const KEEP_POOL = [
     "Iron Furnaces",
 ];
 
+/** 保留行的两侧支持度：三档循环，让「两端必需 / 服务端必需 / 两端可选」在浏览器预览里都出现 */
+function keepSides(i: number): { clientSide?: SideFlag; serverSide?: SideFlag } {
+    if (i % 6 === 5) return {};
+    return {
+        clientSide: (i % 3 === 0 ? "required" : "optional") as SideFlag,
+        serverSide: (i % 3 === 2 ? "optional" : "required") as SideFlag,
+    };
+}
+
 /** 生成保留清单：146 项（设计稿计数），名称循环取自 KEEP_POOL */
 function buildKept(count: number): PlanMod[] {
     return Array.from({ length: count }, (_, i) => ({
@@ -102,8 +111,7 @@ function buildKept(count: number): PlanMod[] {
         // 每 6 行留 1 行「无证据」，各演示一种字节码提示：serverCode 那行属于「名称层被 jar
         // 事实按住」的有依据保留；clientOnlyShape 那行经 mockClassify 落进剔除分组标待确认
         envSource: (i % 6 === 5 ? "unknown" : "jarMetadata") as PlanMod["envSource"],
-        clientSide: i % 6 === 5 ? undefined : ("required" as const),
-        serverSide: i % 6 === 5 ? undefined : ("required" as const),
+        ...keepSides(i),
         bytecodeHint:
             i % 6 === 5 ? (i % 12 === 5 ? "serverCode" : "clientOnlyShape") : undefined,
     }));
@@ -195,6 +203,8 @@ export async function mockClassify(plan: PlanMod[]): Promise<PlanClassification>
             ...m,
             disposition: strip && source !== "unknown" ? ("remove" as const) : ("keep" as const),
             clientOnly: strip && source !== "unknown",
+            // 服务端轴没答上 → 标待确认（分组仍由裁决决定）；jar 内确有服务端注册的行算有依据的保留
+            needsReview: s === undefined && m.bytecodeHint !== "serverCode",
             envSource: source,
         };
     });
@@ -276,8 +286,9 @@ export const mockModVersions: ModVersionEntry[] = [
 ];
 
 /**
- * 本地 jar 取证（浏览器 dev 兜底）：按文件名演示三种结局——
- * 纯客户端（误下载的典型）、服务端可用、以及中文改名/陌生包三层取证全空。
+ * 本地 jar 取证（浏览器 dev 兜底）：按文件名演示四种结局——
+ * 纯客户端（误下载的典型）、服务端专属、两端必需（要提醒玩家客户端同装），
+ * 以及中文改名/陌生包三层取证全空。
  */
 export function mockInspectAdded(path: string): AddedModSide {
     const name = (path.split(/[\\/]/).pop() ?? path).toLowerCase();
@@ -285,10 +296,14 @@ export function mockInspectAdded(path: string): AddedModSide {
     if (/(sodium|iris|voxelmap|moreculling|litematica|minihud)/.test(name)) {
         return { clientSide: "required", serverSide: "unsupported", envSource: "modrinthHash", sizeBytes };
     }
-    if (/(spark|krypton|c2me|ferrite|fabric-api|server)/.test(name)) {
+    if (/(spark|krypton|c2me|ferrite|server)/.test(name)) {
         return { clientSide: "unsupported", serverSide: "required", envSource: "jarMetadata", sizeBytes };
     }
-    if (/(journeymap|xaero|jei|create)/.test(name)) {
+    // 两端都必需：装进服务端包还不够，玩家客户端也得装同一个模组
+    if (/(jei|create|botania|architectury)/.test(name)) {
+        return { clientSide: "required", serverSide: "required", envSource: "modrinthHash", sizeBytes };
+    }
+    if (/(journeymap|xaero|fabric-api)/.test(name)) {
         return { clientSide: "optional", serverSide: "required", envSource: "modrinthHash", sizeBytes };
     }
     return { envSource: "unknown", sizeBytes };
