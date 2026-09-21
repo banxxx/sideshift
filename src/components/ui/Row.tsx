@@ -4,6 +4,7 @@
 import { type ReactNode } from "react";
 import { type LucideIcon } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { Tip, TIP_TRIGGER } from "./Tip";
 
 /** 卡内单行：左 12/500 $text-1 标签 + 右控件（Convert 运行环境/启动参数各行） */
 export function InlineRow({
@@ -87,15 +88,22 @@ export function NoteRow({
     );
 }
 
-/** 弹窗列表行容器：padding[8,4] gap10 两端对齐（选中/悬停底色由 className 决定） */
-export function ListRow({ className, ...rest }: React.ComponentProps<"div">) {
+/**
+ * 弹窗列表行容器：padding[8,4] gap10 两端对齐（选中/悬停底色由 className 决定）
+ * title 同 Btn：不落 DOM，交给 Tip 画气泡（整宽行往左长会顶出弹窗，故贴左）
+ */
+export function ListRow({ className, title, children, ...rest }: React.ComponentProps<"div">) {
     return (
         <div
             className={cn(
                 "flex w-full items-center gap-2.5 rounded-lg px-1 py-2 transition-colors",
+                title && TIP_TRIGGER,
                 className
             )}
             {...rest}
-        />
+        >
+            {children}
+            <Tip label={title} align="start" />
+        </div>
     );
 }

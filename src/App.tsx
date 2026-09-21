@@ -49,7 +49,9 @@ function Shell() {
 
     return (
         <div
-            className="h-screen flex flex-col bg-background text-foreground"
+            // overflow-hidden：桌面应用的外壳永远不该有文档级滚动条。滚动只归 `main.page-scroll`；
+            // 少了这道裁剪，侧栏底部气泡那类「绝对定位但常驻 DOM」的隐藏件会把文档撑出常驻滚动条
+            className="h-screen flex flex-col overflow-hidden bg-background text-foreground"
             onContextMenu={
                 import.meta.env.PROD ? (e) => e.preventDefault() : undefined
             }

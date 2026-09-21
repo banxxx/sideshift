@@ -40,7 +40,7 @@ import type { ActivityInfo, ConversionTask } from "@/lib/types";
 import { TaskErrorCard } from "@/features/task/TaskErrorCard";
 import { ActivitySubBar, activityMeasure } from "@/features/task/ActivityBar";
 import { LogCopyButton } from "@/components/shared/LogCopyButton";
-import { Bar, Btn, Divider, InfoRow, PageHeader, Panel, PanelHead, ToneChip } from "@/components/ui";
+import { Bar, Btn, Divider, InfoRow, PageHeader, Panel, PanelHead, Tip, TIP_TRIGGER, ToneChip } from "@/components/ui";
 import { useLogFollow } from "@/lib/log-view";
 import { cn } from "@/lib/utils";
 
@@ -239,18 +239,21 @@ export function TaskDetailPage() {
                                 {task.progress}%
                             </span>
                         </div>
-                        {/* 第二行：有当前动作时是「正在弄哪个文件」，否则回落最后一条日志 */}
+                        {/* 第二行：有当前动作时是「正在弄哪个文件」，否则回落最后一条日志。
+                            完整文件名走 Tip（外层只管截断，气泡要在裁刀之外才不会被切掉） */}
                         <div className="flex w-full justify-between gap-3">
-                            <span
-                                title={act?.subject}
-                                className={cn(
-                                    "min-w-0 flex-1 truncate font-mono text-[11px] leading-[16px] font-normal",
-                                    act ? "text-text-2" : "text-text-3"
-                                )}
-                            >
-                                {act
-                                    ? `${act.kind === "net" ? "下载" : "打包"} · ${act.subject}`
-                                    : (lastLog?.message ?? "等待日志…")}
+                            <span className={cn(TIP_TRIGGER, "flex min-w-0 flex-1 items-center")}>
+                                <span
+                                    className={cn(
+                                        "min-w-0 truncate font-mono text-[11px] leading-[16px] font-normal",
+                                        act ? "text-text-2" : "text-text-3"
+                                    )}
+                                >
+                                    {act
+                                        ? `${act.kind === "net" ? "下载" : "打包"} · ${act.subject}`
+                                        : (lastLog?.message ?? "等待日志…")}
+                                </span>
+                                <Tip label={act?.subject ?? lastLog?.message} align="start" wide />
                             </span>
                             <span
                                 className={cn(

@@ -8,6 +8,7 @@
  */
 import { AnimatePresence, motion } from "motion/react";
 import { AlertTriangle, CircleCheck, CircleX, Info, X } from "lucide-react";
+import { Tip, TIP_TRIGGER } from "@/components/ui";
 import { cn } from "@/lib/utils";
 import { dismissNotice, useNotices, type Notice, type NoticeKind } from "@/lib/notify";
 
@@ -48,13 +49,15 @@ function NoticeCard({ notice }: { notice: Notice }) {
             </span>
             <button
                 onClick={() => dismissNotice(notice.id)}
-                title="关闭提示"
+                aria-label="关闭提示"
                 className={cn(
+                    TIP_TRIGGER,
                     "-mr-0.5 -mt-0.5 flex size-4 shrink-0 items-center justify-center rounded text-text-3",
                     "opacity-0 transition-opacity duration-150 hover:text-text-1 group-hover:opacity-100"
                 )}
             >
                 <X className="size-3" />
+                <Tip label="关闭提示" side="top" />
             </button>
         </motion.div>
     );

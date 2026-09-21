@@ -7,8 +7,9 @@
     <title>SideShift</title>
     <script>
       // 首帧前应用主题，避免深色模式闪白（与 src/lib/theme.ts 的 localStorage("theme") 约定一致）
+      // 默认值两处要一样：没存过 = system，跟随系统而非预设深色
       (function () {
-        var t = localStorage.getItem("theme") || "dark";
+        var t = localStorage.getItem("theme") || "system";
         var dark =
           t === "dark" ||
           (t === "system" &&

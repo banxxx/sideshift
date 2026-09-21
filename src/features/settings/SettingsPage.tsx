@@ -3,14 +3,14 @@
  *
  * 三个分组，每组 = 等宽小标题（11/600，字距 1.2）+ 一张无内边距卡片，
  * 行与行之间用 1px $stroke-soft 分隔（divide-y），行标尺 padding[14,20]。
- *  - 转换选项：服务端输出目录 / 工作缓存目录 / 剔除客户端专属资源 / 联网反查端信息 / 构建后自动校验
- *  - 网络：下载源 / 并发下载数
+ *  - 转换选项：服务端输出目录 / 工作缓存目录 / 剔除客户端专属资源 / 构建后自检
+ *  - 网络：下载源 / 联网反查端信息 / 并发下载数
  *  - 外观与关于：主题（三态分段）/ 版本（仓库外链 + 检查更新）
  * 读写走 @/lib/api 门面；主题走 @/lib/theme 单一真源（侧栏按钮同步）。
  * 设置是「改一处即持久化」，所以写盘失败必须外显（否则界面显示已生效、重启又回退），
  * 失败后从后端重读一次，让界面与真正常量的那份一致。
  */
-import { ExternalLink, Folder, FolderOpen, Monitor, Moon, RefreshCw, Sun } from "lucide-react";
+import { ExternalLink, Folder, Monitor, Moon, RefreshCw, Sun } from "lucide-react";
 import { useEffect, useState, type ReactNode } from "react";
 import * as api from "@/lib/api";
 import { notify } from "@/lib/notify";
@@ -18,7 +18,6 @@ import { useTheme, type Theme } from "@/lib/theme";
 import type { AppSettings } from "@/lib/types";
 import {
     Btn,
-    IconBtn,
     PageHeader,
     Panel,
     SearchSelect,
@@ -92,19 +91,6 @@ export function SettingsPage() {
         }
     };
 
-    /** 在资源管理器里打开目录：静默失败会被当成「按钮坏了」，一律外显 */
-    const revealDir = async (dir: string, label: string) => {
-        if (!dir.trim()) {
-            notify(`${label}还没设置，先点「选择」指定一个目录`, "warn");
-            return;
-        }
-        try {
-            await api.openDir(dir);
-        } catch (e) {
-            notify(`打开${label}失败：${errOf(e)}`, "error");
-        }
-    };
-
     const checkUpdate = async () => {
         setUpdate("checking");
         const latest = await api.checkUpdate();
@@ -131,11 +117,6 @@ export function SettingsPage() {
                             onClick={() => void pickDir("outputDir")}
                             className="w-[300px] cursor-pointer"
                         />
-                        <IconBtn
-                            icon={FolderOpen}
-                            title="在资源管理器中打开"
-                            onClick={() => void revealDir(settings.outputDir, "输出目录")}
-                        />
                         <Btn size="sm" onClick={() => void pickDir("outputDir")}>
                             选择
                         </Btn>
@@ -148,11 +129,6 @@ export function SettingsPage() {
                             value={settings.cacheDir}
                             onClick={() => void pickDir("cacheDir")}
                             className="w-[300px] cursor-pointer"
-                        />
-                        <IconBtn
-                            icon={FolderOpen}
-                            title="在资源管理器中打开"
-                            onClick={() => void revealDir(settings.cacheDir, "缓存目录")}
                         />
                         <Btn size="sm" onClick={() => void pickDir("cacheDir")}>
                             选择
@@ -182,16 +158,13 @@ export function SettingsPage() {
 
                 {/* ---- 网络 ---- */}
                 <Section title="网络">
-                    <SettingRow
-                        label="下载源"
-                        desc="版本表与加载器 jar 优先走国内镜像，不通自动回落官方（模组文件在 Modrinth，没有镜像）"
-                    >
+                    <SettingRow label="下载源" desc="版本表与加载器 jar 优先走国内镜像，不通自动回落官方">
                         <SearchSelect
                             plain
                             value={settings.downloadSource}
                             options={sources}
                             onChange={(v) => void patch({ downloadSource: v as AppSettings["downloadSource"] })}
-                            className="w-[280px]"
+                            className="w-[160px]"
                         />
                     </SettingRow>
                     <SettingRow
@@ -220,7 +193,7 @@ export function SettingsPage() {
 
                 {/* ---- 外观与关于 ---- */}
                 <Section title="外观与关于">
-                    <SettingRow label="主题" desc="深色为默认，跟随系统切换">
+                    <SettingRow label="主题" desc="默认跟随系统，也可锁定浅色 / 深色">
                         <SegTabs items={THEME_TABS} value={theme} onChange={setTheme} />
                     </SettingRow>
                     <SettingRow

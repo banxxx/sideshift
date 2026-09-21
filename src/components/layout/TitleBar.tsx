@@ -8,6 +8,7 @@
  * 并用 1×14 短竖线（$stroke）与最小化隔开。窗口控制逻辑见 @/lib/window-controls。
  */
 import { Minus, Square, X, Copy, Undo2 } from "lucide-react";
+import { Tip } from "@/components/ui";
 import { cn } from "@/lib/utils";
 import { useNavigation } from "@/lib/navigation";
 import { useWindowControls } from "@/lib/window-controls";
@@ -85,7 +86,10 @@ interface WindowButtonProps {
     children: React.ReactNode;
 }
 
-/** 单个窗口控件：34×26 r6 ghost；关闭按钮 hover 红石色（设计稿规范） */
+/**
+ * 单个窗口控件：34×26 r6 ghost；关闭按钮 hover 红石色（设计稿规范）
+ * title 不落 DOM（系统灰泡不受样式管）：补 aria-label 保住无障碍名，气泡交给 Tip
+ */
 function WindowButton({
                           onClick,
                           title,
@@ -95,15 +99,16 @@ function WindowButton({
     return (
         <button
             onClick={onClick}
-            title={title}
+            aria-label={title}
             className={cn(
-                "h-[26px] w-[34px] rounded-md flex items-center justify-center transition-colors",
+                "group/tip relative h-[26px] w-[34px] rounded-md flex items-center justify-center transition-colors",
                 "text-text-2 hover:bg-surface-2 hover:text-text-1",
                 variant === "close" &&
                 "hover:bg-redstone-dim hover:text-redstone"
             )}
         >
             {children}
+            <Tip label={title} />
         </button>
     );
 }

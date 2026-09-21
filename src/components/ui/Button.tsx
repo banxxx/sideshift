@@ -4,9 +4,13 @@
  * md：h36 padding[0,16] 13（primary 700 / outline 500）
  * sm：h32 padding[0,12] 12（primary 700 / outline 500）
  * xs：h28 padding[0,12] 11（Errors 卡内联按钮）
+ *
+ * title 一律不落到 DOM 上（系统灰泡不受样式管）：Btn/IconBtn 拿到它就补 aria-label、
+ * 挂触发类，气泡由 Tip 画。所以调用方照旧写 title="复制全部日志" 即可。
  */
 import { ChevronRight, type LucideIcon } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { Tip, TIP_TRIGGER } from "./Tip";
 
 type BtnVariant = "primary" | "outline" | "ghost" | "danger";
 type BtnSize = "md" | "sm" | "xs";
@@ -37,6 +41,8 @@ export function Btn({
     icon: Icon,
     full,
     className,
+    title,
+    "aria-label": ariaLabel,
     children,
     ...rest
 }: React.ComponentProps<"button"> & {
@@ -48,18 +54,21 @@ export function Btn({
 }) {
     return (
         <button
+            aria-label={ariaLabel ?? title}
             className={cn(
                 "inline-flex shrink-0 select-none items-center justify-center rounded-lg transition-colors",
                 "disabled:pointer-events-none disabled:opacity-60",
                 BTN_VARIANT[variant],
                 BTN_SIZE[size],
                 full && "w-full",
+                title && TIP_TRIGGER,
                 className
             )}
             {...rest}
         >
             {Icon && <Icon className={BTN_ICON[size]} />}
             {children}
+            <Tip label={title} />
         </button>
     );
 }
@@ -68,19 +77,24 @@ export function Btn({
 export function IconBtn({
     icon: Icon,
     className,
+    title,
+    "aria-label": ariaLabel,
     ...rest
 }: React.ComponentProps<"button"> & { icon: LucideIcon }) {
     return (
         <button
+            aria-label={ariaLabel ?? title}
             className={cn(
                 "inline-flex h-8 w-9 shrink-0 items-center justify-center rounded-lg",
                 "text-text-2 transition-colors hover:bg-surface-2 hover:text-text-1",
                 "disabled:pointer-events-none disabled:opacity-40",
+                title && TIP_TRIGGER,
                 className
             )}
             {...rest}
         >
             <Icon className="size-3.5" />
+            <Tip label={title} />
         </button>
     );
 }

@@ -1,7 +1,7 @@
 /* ---------------- 方案行（mod-row）：勾选框 16 + 名称/版本横排 + 右侧徽章（可删行悬停露出 ×） ---------------- */
 import { X } from "lucide-react";
 import type { PlanMod } from "@/lib/types";
-import { CheckBox, TagChip, ToneChip } from "@/components/ui";
+import { CheckBox, TagChip, Tip, TIP_TRIGGER, ToneChip } from "@/components/ui";
 import { cn } from "@/lib/utils";
 import { SideChip } from "./modals";
 
@@ -41,14 +41,18 @@ export function PlanModRow({
             {onRemove && (
                 <button
                     onClick={onRemove}
-                    title="从方案移除"
+                    aria-label="从方案移除"
                     className={cn(
-                        "flex size-6 shrink-0 items-center justify-center rounded-md text-text-3",
+                        // 具名组：本行父级已经是无名 `group`（悬停露出 ×），同名会互相误触发
+                        TIP_TRIGGER,
+                        "size-6 rounded-md text-text-3",
+                        "flex shrink-0 items-center justify-center",
                         "opacity-0 transition-[opacity,color,background-color] duration-150",
                         "hover:bg-redstone-dim hover:text-redstone group-hover:opacity-100 focus-visible:opacity-100"
                     )}
                 >
                     <X className="size-3" />
+                    <Tip label="从方案移除" />
                 </button>
             )}
         </div>

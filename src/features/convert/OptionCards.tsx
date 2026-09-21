@@ -21,9 +21,12 @@ import {
     SearchSelect,
     Stepper,
     TextInput,
+    Tip,
+    TIP_TRIGGER,
     Toggle,
     type SelectOption,
 } from "@/components/ui";
+import { cn } from "@/lib/utils";
 import { findDirNode, DIFFICULTY_OPTIONS, GAMEMODE_OPTIONS } from "./constants";
 
 /** 单包参数覆写入口（来自 ConvertPage 的 options state） */
@@ -58,6 +61,8 @@ export function RuntimeEnvCard({
                     label="Minecraft 版本"
                     value={options?.mcVersion ?? manifest.mcVersion}
                     options={mcOptions}
+                    searchable
+                    searchPlaceholder="搜索版本…"
                     onChange={(v) => patch({ mcVersion: v })}
                 />
                 <SearchSelect
@@ -65,6 +70,8 @@ export function RuntimeEnvCard({
                     label={`${loader} Loader`}
                     value={options?.loaderVersion ?? ""}
                     options={loaderOptions}
+                    searchable
+                    searchPlaceholder="搜索版本…"
                     onChange={(v) => patch({ loaderVersion: v })}
                 />
                 <SearchSelect
@@ -148,10 +155,16 @@ export function KeepDirsCard({
                                     )}
                                     <button
                                         onClick={() => onRemove(p)}
-                                        title="移除"
-                                        className="flex size-6 shrink-0 items-center justify-center rounded-md text-text-3 transition-colors hover:bg-redstone-dim hover:text-redstone"
+                                        aria-label="移除"
+                                        className={cn(
+                                            TIP_TRIGGER,
+                                            "size-6 rounded-md text-text-3",
+                                            "flex shrink-0 items-center justify-center transition-colors",
+                                            "hover:bg-redstone-dim hover:text-redstone"
+                                        )}
                                     >
                                         <X className="size-3" />
+                                        <Tip label="移除" />
                                     </button>
                                 </motion.div>
                             );

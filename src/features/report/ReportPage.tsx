@@ -13,6 +13,7 @@ import { useNavigation } from "@/lib/navigation";
 import { notify } from "@/lib/notify";
 import { formatDuration, formatSize, formatStamp, loaderLabel, truncateMiddle } from "@/lib/format";
 import type { CheckResult, ConversionReport, ConversionTask, ModDisposition, PlanMod } from "@/lib/types";
+import { cn } from "@/lib/utils";
 import {
     Btn,
     ChangeRow,
@@ -25,6 +26,8 @@ import {
     Panel,
     PanelHead,
     TagChip,
+    Tip,
+    TIP_TRIGGER,
 } from "@/components/ui";
 
 /** 展开清单一次最多铺多少行：真实整合包动辄几百个模组，全铺会把报告页撑成一堵墙 */
@@ -207,12 +210,13 @@ export function ReportPage() {
                         <div className="flex w-full items-center gap-2">
                             <Archive className="size-3.5 shrink-0 text-text-3" />
                             {/* 路径截断必须掐中间：掐尾巴会把文件名截没，而文件名才是这行的答案。
-                                truncateMiddle 按字符数估宽，CSS truncate 只做最后一道保险 */}
-                            <span
-                                title={outPath ?? undefined}
-                                className="min-w-0 flex-1 truncate font-mono text-[11px] leading-[16px] font-normal text-text-2"
-                            >
-                                {outPath ? truncateMiddle(outPath, 58) : "—"}
+                                truncateMiddle 按字符数估宽，CSS truncate 只做最后一道保险。
+                                完整路径走 Tip（内层才是截断件：外层裁刀开着，气泡塞进去会被裁掉） */}
+                            <span className={cn(TIP_TRIGGER, "flex min-w-0 flex-1 items-center")}>
+                                <span className="min-w-0 truncate font-mono text-[11px] leading-[16px] font-normal text-text-2">
+                                    {outPath ? truncateMiddle(outPath, 58) : "—"}
+                                </span>
+                                <Tip label={outPath ?? undefined} align="start" wide />
                             </span>
                             <LinkBtn size="sm" onClick={() => void openOutput()}>
                                 打开文件夹

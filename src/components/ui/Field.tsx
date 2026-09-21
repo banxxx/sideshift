@@ -5,6 +5,7 @@
  */
 import { Check, Minus, Plus, Search, X, type LucideIcon } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { Tip, TIP_TRIGGER } from "./Tip";
 
 /* ---------------- Stepper：−|值|+ 高 32 ----------------
  * 卡内态（Convert）：$surface + $stroke 1px，分隔 1×20，值区 padding[0,14]
@@ -183,11 +184,16 @@ export function SearchBox({
             />
             {value && (
                 <button
-                    title="清空搜索"
+                    aria-label="清空搜索"
                     onClick={() => onChange("")}
-                    className="flex size-4 shrink-0 items-center justify-center rounded text-text-3 transition-colors hover:bg-surface-2 hover:text-text-1"
+                    className={cn(
+                        TIP_TRIGGER,
+                        "size-4 rounded text-text-3 transition-colors hover:bg-surface-2 hover:text-text-1",
+                        "flex shrink-0 items-center justify-center"
+                    )}
                 >
                     <X className="size-3" />
+                    <Tip label="清空搜索" />
                 </button>
             )}
         </div>

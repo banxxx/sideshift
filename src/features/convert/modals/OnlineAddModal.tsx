@@ -9,16 +9,22 @@ import type {
     ModVersionEntry,
     VersionOption,
 } from "@/lib/types";
-import { Btn, ListRow, ModalShell, SearchBox, ToneChip } from "@/components/ui";
+import {
+    Btn,
+    ListRow,
+    ModalShell,
+    SearchBox,
+    SearchSelect,
+    type SelectOption,
+    ToneChip,
+} from "@/components/ui";
 import { cn } from "@/lib/utils";
 import { SideChip } from "./SideChip";
 import {
-    FilterSelect,
     formatCount,
     ListSkeleton,
     ModIcon,
     SourceSeg,
-    type FilterOpt,
     type Source,
 } from "./OnlineAddParts";
 
@@ -133,7 +139,7 @@ export function OnlineAddModal({
         setDetail(null);
     };
 
-    const verOpts = useMemo<FilterOpt[]>(
+    const verOpts = useMemo<SelectOption[]>(
         () => [
             { value: "", chip: "全部", label: "全部版本" },
             ...mcOptions.map((o) => ({
@@ -145,7 +151,7 @@ export function OnlineAddModal({
         ],
         [mcOptions]
     );
-    const loOpts = useMemo<FilterOpt[]>(
+    const loOpts = useMemo<SelectOption[]>(
         () => [
             { value: "", chip: "任意", label: "任意加载器" },
             { value: "fabric", chip: "Fabric", label: "Fabric" },
@@ -154,7 +160,7 @@ export function OnlineAddModal({
         ],
         []
     );
-    const catOpts = useMemo<FilterOpt[]>(
+    const catOpts = useMemo<SelectOption[]>(
         () => [
             { value: "all", chip: "全部", label: "全部类别" },
             ...categories.map((c) => ({ value: c, chip: c, label: c })),
@@ -202,14 +208,17 @@ export function OnlineAddModal({
                 </p>
                 <div className="flex h-[30px] w-full shrink-0 items-center gap-2">
                     <div className="flex h-7 items-center gap-2">
-                        <FilterSelect
+                        <SearchSelect
+                            variant="chip"
                             prefix="版本"
                             value={verSel}
                             options={verOpts}
                             searchable
+                            searchPlaceholder="搜索版本…"
                             onChange={setVerSel}
                         />
-                        <FilterSelect
+                        <SearchSelect
+                            variant="chip"
                             prefix="加载器"
                             value={loSel}
                             options={loOpts}
@@ -329,17 +338,20 @@ export function OnlineAddModal({
                     }}
                 />
                 <div className="flex h-7 items-center gap-2">
-                    <FilterSelect
+                    <SearchSelect
+                        variant="chip"
                         prefix="版本"
                         value={verSel}
                         options={verOpts}
                         searchable
+                        searchPlaceholder="搜索版本…"
                         onChange={(v) => {
                             setVerSel(v);
                             setPage(1);
                         }}
                     />
-                    <FilterSelect
+                    <SearchSelect
+                        variant="chip"
                         prefix="加载器"
                         value={loSel}
                         options={loOpts}
@@ -348,10 +360,13 @@ export function OnlineAddModal({
                             setPage(1);
                         }}
                     />
-                    <FilterSelect
+                    <SearchSelect
+                        variant="chip"
                         prefix="类别"
                         value={catSel}
                         options={catOpts}
+                        searchable
+                        searchPlaceholder="搜索类别…"
                         onChange={(v) => {
                             setCatSel(v);
                             setPage(1);

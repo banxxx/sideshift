@@ -1,19 +1,11 @@
-/* ================= 网络添加弹窗的复用件（分段器 / 头像 / 骨架屏 / 筛选下拉） ================= */
-import { Check, ChevronDown, Puzzle, Search } from "lucide-react";
-import { useEffect, useId, useRef, useState } from "react";
-import { AnimatePresence, motion } from "motion/react";
+/* ================= 网络添加弹窗的复用件（分段器 / 头像 / 骨架屏） ================= */
+import { Puzzle } from "lucide-react";
+import { useEffect, useId, useState } from "react";
+import { motion } from "motion/react";
 import { SEG_PILL_SPRING } from "@/components/ui";
 import { cn } from "@/lib/utils";
 
 export type Source = "modrinth" | "curseforge";
-
-/** 筛选下拉的一项：chip = 触发钮上的短文案，label = 列表项全文 */
-export interface FilterOpt {
-    value: string;
-    chip: string;
-    label: string;
-    group?: string;
-}
 
 /** 下载次数 → "1,204 万" / "8,412" */
 export function formatCount(n: number): string {
@@ -105,127 +97,6 @@ export function ListSkeleton({ rows = 6, icon = false }: { rows?: number; icon?:
                     </span>
                 </div>
             ))}
-        </div>
-    );
-}
-
-/** 筛选下拉 chip：外观同 FilterChip（h28 r6 + chevron），点开浮层单选；searchable 供长列表（版本）过滤，不自动聚焦 */
-export function FilterSelect({
-    prefix,
-    value,
-    options,
-    onChange,
-    searchable,
-    searchPlaceholder = "搜索…",
-}: {
-    prefix: string;
-    value: string;
-    options: FilterOpt[];
-    onChange: (v: string) => void;
-    searchable?: boolean;
-    searchPlaceholder?: string;
-}) {
-    const [open, setOpen] = useState(false);
-    const [q, setQ] = useState("");
-    const ref = useRef<HTMLDivElement>(null);
-
-    useEffect(() => {
-        if (!open) return;
-        const onDown = (e: MouseEvent) => {
-            if (!ref.current?.contains(e.target as Node)) setOpen(false);
-        };
-        window.addEventListener("mousedown", onDown);
-        return () => window.removeEventListener("mousedown", onDown);
-    }, [open]);
-
-    const current = options.find((o) => o.value === value);
-    const filtered = options.filter((o) => !q || o.label.toLowerCase().includes(q.toLowerCase()));
-
-    return (
-        <div ref={ref} className="relative shrink-0">
-            <button
-                onClick={() => setOpen((v) => !v)}
-                className={cn(
-                    "inline-flex h-7 shrink-0 items-center gap-1 rounded-md border bg-surface px-2.5 text-[11px] leading-[16px] font-medium text-text-1 transition-colors hover:bg-surface-2",
-                    open ? "border-accent" : "border-stroke"
-                )}
-            >
-                {prefix} {current?.chip ?? value}
-                <ChevronDown
-                    className={cn("size-3 text-text-2 transition-transform", open && "rotate-180")}
-                />
-            </button>
-            <AnimatePresence>
-                {open && (
-                    <motion.div
-                        initial={{ opacity: 0, y: -6, scaleY: 0.9 }}
-                        animate={{ opacity: 1, y: 0, scaleY: 1 }}
-                        exit={{ opacity: 0, y: -6, scaleY: 0.9 }}
-                        transition={{ duration: 0.16, ease: [0.16, 1, 0.3, 1] }}
-                        className="absolute top-full right-0 z-30 mt-1 flex max-h-[248px] min-w-[168px] origin-top flex-col gap-0.5 overflow-hidden rounded-lg border border-stroke bg-surface p-1.5 shadow-lg"
-                    >
-                        {searchable && (
-                            <>
-                                <div className="flex h-[26px] shrink-0 items-center gap-1.5 rounded-md px-2">
-                                    <Search className="size-3 shrink-0 text-text-3" />
-                                    <input
-                                        value={q}
-                                        onChange={(e) => setQ(e.target.value)}
-                                        placeholder={searchPlaceholder}
-                                        className="min-w-0 flex-1 bg-transparent text-[11px] text-text-1 outline-none placeholder:text-text-3"
-                                    />
-                                </div>
-                                <div className="h-px w-full shrink-0 bg-stroke" />
-                            </>
-                        )}
-                        <div className="flex min-h-0 flex-col gap-0.5 overflow-auto">
-                            {filtered.map((o, i) => {
-                                const active = o.value === value;
-                                const showGroup = !!o.group && filtered[i - 1]?.group !== o.group;
-                                return (
-                                    <div key={o.value || "any"} className="flex flex-col">
-                                        {showGroup && (
-                                            <span className="px-2 pt-1 pb-0.5 text-[10px] leading-[14px] font-normal text-text-3">
-                                                {o.group}
-                                            </span>
-                                        )}
-                                        <button
-                                            onClick={() => {
-                                                onChange(o.value);
-                                                setOpen(false);
-                                                setQ("");
-                                            }}
-                                            className={cn(
-                                                "flex h-[26px] w-full items-center justify-between gap-2 rounded-md px-2 transition-colors",
-                                                active ? "bg-surface-2" : "hover:bg-surface-2"
-                                            )}
-                                        >
-                                            <span
-                                                className={cn(
-                                                    "truncate font-mono text-[12px] leading-[18px]",
-                                                    active
-                                                        ? "font-semibold text-accent"
-                                                        : "font-normal text-text-1"
-                                                )}
-                                            >
-                                                {o.label}
-                                            </span>
-                                            {active && (
-                                                <Check className="size-3 shrink-0 text-accent" />
-                                            )}
-                                        </button>
-                                    </div>
-                                );
-                            })}
-                            {filtered.length === 0 && (
-                                <span className="px-2 py-3 text-center text-[11px] text-text-3">
-                                    无匹配项
-                                </span>
-                            )}
-                        </div>
-                    </motion.div>
-                )}
-            </AnimatePresence>
         </div>
     );
 }

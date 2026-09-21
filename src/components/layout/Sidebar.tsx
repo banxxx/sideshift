@@ -6,6 +6,7 @@
  */
 import { Home, ListChecks, Settings, Moon, Sun } from "lucide-react";
 import { NotificationStack } from "./NotificationStack";
+import { Tip, TIP_TRIGGER } from "@/components/ui";
 import { cn } from "@/lib/utils";
 import { isDark, useTheme } from "@/lib/theme";
 import {
@@ -78,10 +79,15 @@ export function Sidebar() {
                 <span className="font-mono text-[11px] text-text-3">v0.1.0</span>
                 <button
                     onClick={() => setTheme(dark ? "light" : "dark")}
-                    className="size-8 rounded-lg bg-surface-2 flex items-center justify-center text-text-2 hover:text-text-1 transition-colors"
-                    title={dark ? "切换到亮色" : "切换到暗色"}
+                    aria-label={dark ? "切换到亮色" : "切换到暗色"}
+                    className={cn(
+                        TIP_TRIGGER,
+                        "size-8 rounded-lg bg-surface-2 flex items-center justify-center text-text-2 hover:text-text-1 transition-colors"
+                    )}
                 >
                     {dark ? <Sun className="size-3.5" /> : <Moon className="size-3.5" />}
+                    {/* side="top"：这枚按钮离窗底只剩 pb-3，气泡朝下长会把整窗撑出一道常驻滚动条 */}
+                    <Tip label={dark ? "切换到亮色" : "切换到暗色"} side="top" />
                 </button>
             </div>
         </aside>

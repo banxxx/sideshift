@@ -10,6 +10,7 @@ import { ArrowLeft, X, type LucideIcon } from "lucide-react";
 import { type ReactNode } from "react";
 import { cn } from "@/lib/utils";
 import { Divider } from "./Panel";
+import { Tip, TIP_TRIGGER } from "./Tip";
 
 /** 弹窗最大放大倍率（对设计稿尺寸而言） */
 const MODAL_SCALE_MAX = 1.35;
@@ -106,18 +107,28 @@ export function ModalShell({
                             {back && (
                                 <button
                                     onClick={back}
-                                    title="返回"
-                                    className="flex size-7 items-center justify-center rounded-lg border border-stroke bg-surface text-text-2 transition-colors hover:bg-surface-2"
+                                    aria-label="返回"
+                                    className={cn(
+                                        TIP_TRIGGER,
+                                        "size-7 rounded-lg border border-stroke bg-surface text-text-2",
+                                        "flex items-center justify-center transition-colors hover:bg-surface-2"
+                                    )}
                                 >
                                     <ArrowLeft className="size-3.5" />
+                                    <Tip label="返回" />
                                 </button>
                             )}
                             <button
                                 onClick={onClose}
-                                title="关闭"
-                                className="flex size-7 items-center justify-center rounded-lg border border-stroke text-text-2 transition-colors hover:bg-surface-2"
+                                aria-label="关闭"
+                                className={cn(
+                                    TIP_TRIGGER,
+                                    "size-7 rounded-lg border border-stroke text-text-2",
+                                    "flex items-center justify-center transition-colors hover:bg-surface-2"
+                                )}
                             >
                                 <X className="size-3.5" />
+                                <Tip label="关闭" />
                             </button>
                         </div>
                     </div>
