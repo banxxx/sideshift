@@ -9,8 +9,22 @@
  */
 import { Check, RefreshCw, X, type LucideIcon } from "lucide-react";
 import type { ConversionTask, FetchTally, PipelineStage, TaskStatus } from "@/lib/types";
-import type { RailLog, RailStageStatus, RailTone } from "@/components/features/ShiftRail";
-import type { Tone } from "@/components/design/ui";
+import type { Tone } from "@/components/ui";
+
+/* ---- 轨道展示词表（ShiftRail 与本文件共用；定义放在视图模型层，避免 lib 反向依赖组件） ---- */
+
+/** 轨道站点状态 */
+export type RailStageStatus = "pending" | "active" | "done" | "error";
+
+export interface RailLog {
+    time?: string;
+    stage?: PipelineStage;
+    message: string;
+    level?: "muted" | "info" | "active" | "error";
+}
+
+/** 芯片/状态配色语义（与设计稿状态色一一对应） */
+export type RailTone = "emerald" | "gold" | "redstone" | "muted";
 
 const ORDER: PipelineStage[] = ["parser", "detector", "downloader", "builder"];
 

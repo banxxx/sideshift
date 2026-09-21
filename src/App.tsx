@@ -7,12 +7,12 @@ import { useEffect } from "react";
 import { MotionConfig } from "motion/react";
 import { Sidebar } from "@/components/layout/Sidebar";
 import { TitleBar } from "@/components/layout/TitleBar";
-import { HomePage } from "@/pages/HomePage";
-import { TasksPage } from "@/pages/TasksPage";
-import { SettingsPage } from "@/pages/SettingsPage";
-import { ConvertPage } from "@/pages/ConvertPage";
-import { TaskDetailPage } from "@/pages/TaskDetailPage";
-import { ReportPage } from "@/pages/ReportPage";
+import { HomePage } from "@/features/home/HomePage";
+import { TasksPage } from "@/features/tasks/TasksPage";
+import { SettingsPage } from "@/features/settings/SettingsPage";
+import { ConvertPage } from "@/features/convert/ConvertPage";
+import { TaskDetailPage } from "@/features/task/TaskDetailPage";
+import { ReportPage } from "@/features/report/ReportPage";
 import { PackStoreProvider } from "@/lib/pack-store";
 import {
     NavigationProvider,

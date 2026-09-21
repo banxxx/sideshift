@@ -1,0 +1,87 @@
+/** 任务生命周期（创建 / 查询 / 取消 / 重试 / 删除 / 报告 / 进度事件） */
+import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+import type {
+    ConversionOptions,
+    ConversionReport,
+    ConversionTask,
+    PackManifest,
+    PlanMod,
+    ProgressEvent,
+    StartResult,
+} from "@/lib/types";
+import { EVENTS } from "@/lib/types";
+import * as mock from "@/lib/mock";
+import { invokeOrMock, isTauri } from "./client";
+
+/** 创建转换任务（Rust: start_conversion(options, manifest, plan) -> StartResult）；
+ *  plan 为前端确认过的最终方案；同一时间只跑一条，已有任务在跑时新任务排队 */
+export async function startConversion(
+    options: ConversionOptions,
+    pack: PackManifest,
+    plan: PlanMod[]
+): Promise<StartResult> {
+    if (!isTauri) return mock.mockStartTask(options, pack);
+    return invokeOrMock(
+        "start_conversion",
+        { options, manifest: pack, plan },
+        () => mock.mockStartTask(options, pack)
+    );
+}
+
+/** 任务列表（Rust: list_tasks） */
+export async function listTasks(): Promise<ConversionTask[]> {
+    if (!isTauri) return mock.mockListTasks();
+    return invokeOrMock("list_tasks", undefined, () => mock.mockListTasks());
+}
+
+/** 单任务（Rust: get_task(id)） */
+export async function getTask(id: string): Promise<ConversionTask | undefined> {
+    if (!isTauri) return mock.mockGetTask(id);
+    return invokeOrMock("get_task", { id }, () =>
+        mock.mockGetTask(id)
+    ).then((t) => t ?? undefined);
+}
+
+/** 取消任务（Rust: cancel_task(id)） */
+export async function cancelTask(id: string): Promise<void> {
+    if (!isTauri) return mock.mockCancelTask(id);
+    return invokeOrMock("cancel_task", { id }, () => mock.mockCancelTask(id));
+}
+
+/** 重试任务（Rust: retry_task(id) -> StartResult | null，语义同 start_conversion） */
+export async function retryTask(id: string): Promise<StartResult | undefined> {
+    if (!isTauri) return mock.mockRetryTask(id);
+    return invokeOrMock<StartResult | undefined>(
+        "retry_task",
+        { id },
+        () => mock.mockRetryTask(id)
+    );
+}
+
+/** 删除任务记录（Rust: delete_task(id)） */
+export async function deleteTask(id: string): Promise<void> {
+    if (!isTauri) return mock.mockDeleteTask(id);
+    return invokeOrMock("delete_task", { id }, () => mock.mockDeleteTask(id));
+}
+
+/** 转换报告（Rust: get_report(taskId)） */
+export async function getReport(taskId: string): Promise<ConversionReport | undefined> {
+    if (!isTauri) return mock.mockReport(taskId);
+    return invokeOrMock("get_report", { taskId }, () =>
+        mock.mockReport(taskId)
+    ).then((r) => r ?? undefined);
+}
+
+/** 任务创建时确认过的方案快照（Rust: get_task_plan(taskId)）：报告页展开真实清单用 */
+export async function getTaskPlan(taskId: string): Promise<PlanMod[]> {
+    if (!isTauri) return mock.mockGetTaskPlan(taskId);
+    return invokeOrMock("get_task_plan", { taskId }, () =>
+        mock.mockGetTaskPlan(taskId)
+    );
+}
+
+/** 订阅流水线进度事件（浏览器 mock 模式无事件流，返回空取消函数） */
+export function onProgress(cb: (e: ProgressEvent) => void): Promise<UnlistenFn> {
+    if (!isTauri) return Promise.resolve(() => {});
+    return listen<ProgressEvent>(EVENTS.progress, (ev) => cb(ev.payload));
+}
