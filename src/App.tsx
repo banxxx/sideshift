@@ -12,7 +12,6 @@ import { TasksPage } from "@/features/tasks/TasksPage";
 import { SettingsPage } from "@/features/settings/SettingsPage";
 import { ConvertPage } from "@/features/convert/ConvertPage";
 import { TaskDetailPage } from "@/features/task/TaskDetailPage";
-import { ReportPage } from "@/features/report/ReportPage";
 import { PackStoreProvider } from "@/lib/pack-store";
 import {
     NavigationProvider,
@@ -28,7 +27,6 @@ const pages: Record<PageKey, ComponentType> = {
     settings: SettingsPage,
     convert: ConvertPage,
     task: TaskDetailPage,
-    report: ReportPage,
 };
 
 function Shell() {

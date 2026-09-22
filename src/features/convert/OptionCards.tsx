@@ -107,7 +107,7 @@ export function RuntimeEnvCard({
 export function KeepDirsCard({
     options,
     packDirs,
-    parsed,
+    parsed = true,
     onPick,
     onRemove,
     readOnly,
@@ -116,10 +116,11 @@ export function KeepDirsCard({
     /** 目录勾选弹窗数据源（含递归文件数） */
     packDirs: PackDirNode[];
     /** 源包是否还能解析出目录树：回看旧任务时源文件可能已被移走，那时不能谎称「包内没有资源」 */
-    parsed: boolean;
-    onPick: () => void;
+    parsed?: boolean;
+    /** 只读视图（任务详情「方案」签）不传写入口：静态渲染下没有触发路径 */
+    onPick?: () => void;
     /** 卡片行内移除单个保留目录（批量增删走 DirPickerModal 应用回写） */
-    onRemove: (path: string) => void;
+    onRemove?: (path: string) => void;
     readOnly?: boolean;
 }) {
     const keepDirs = options?.keepDirs ?? [];
@@ -129,7 +130,7 @@ export function KeepDirsCard({
                 title="客户端保留目录"
                 right={
                     readOnly ? undefined : (
-                        <Btn size="sm" icon={Plus} disabled={packDirs.length === 0} onClick={onPick}>
+                        <Btn size="sm" icon={Plus} disabled={packDirs.length === 0} onClick={() => onPick?.()}>
                             添加目录
                         </Btn>
                     )
@@ -175,7 +176,7 @@ export function KeepDirsCard({
                                     )}
                                     {!readOnly && (
                                         <button
-                                            onClick={() => onRemove(p)}
+                                            onClick={() => onRemove?.(p)}
                                             aria-label="移除"
                                             className={cn(
                                                 TIP_TRIGGER,

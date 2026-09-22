@@ -1,17 +1,22 @@
 /**
- * 任务详情页 Task（SS.pen Running `XjfIJ` / Failed `KdHjU` / Cancelled `ZKwyq`）
+ * 任务详情页 Task（SS.pen Running `XjfIJ` / Failed `KdHjU` / Cancelled `ZKwyq` / Success `Q45BPj`）
+ *
+ * 这里是任务列表唯一的下钻目的地：报告与方案都收进本页页签，不再各自占一条路由。
+ * 页签集合按状态给（不适用的签不出现），签与签之间不设跳转按钮——换看别的内容只顶上的页签。
+ *  - 概况：错误卡（失败时）+ 转换进度 + 日志
+ *  - 结果：报告全文（仅已完成）
+ *  - 方案：创建时确认过的方案快照，纯只读（排队/运行/失败/已取消）
  *
  * 布局与 Convert 同构：BodyRow gap20 = 左列（gap16）+ 右栏 280 任务信息卡。
- * 左列两张卡：
+ * 左列概况页两张卡：
  *  - 转换进度（gap12）：标题 + 状态芯片 → 进度条 h6 → 两行明细 → 分隔线 → 当前站/下一站微型轨道
  *  - 日志（gap12）：$surface-2 日志盒，行 = [stage] 等宽 10 紫 + 消息 等宽 10
- * 失败任务在左列顶部追加错误卡（Errors 族规范，提供重试/诊断出口）。
  *
- * 右栏按钮序（设计稿三态）：
- *  - running   查看转换方案 → 取消转换(红字) → 返回首页
- *  - failed    查看转换方案 → 重试转换(accent) → 返回首页
- *  - cancelled 查看转换方案 → 重新转换(accent) → 返回首页
- *  - success   查看转换报告(accent) → 返回首页
+ * 右栏是本页唯一的动作区，顺序固定为「主状态动作 → 次要动作 → 返回任务列表（永远最后一条）」：
+ *  - running/queued  取消转换(红字) → 返回任务列表
+ *  - failed          重试转换(accent) → 返回任务列表
+ *  - cancelled       重新转换(accent) → 返回任务列表
+ *  - success         打开输出位置(accent) → 复制转换方案 → 返回任务列表
  */
 import { useEffect, useRef, useState } from "react";
 import * as api from "@/lib/api";
@@ -36,11 +41,25 @@ import {
     outputNameOf,
     truncateMiddle,
 } from "@/lib/format";
-import type { ActivityInfo, ConversionTask } from "@/lib/types";
+import type { ActivityInfo, ConversionReport, ConversionTask } from "@/lib/types";
 import { TaskErrorCard } from "@/features/task/TaskErrorCard";
 import { ActivitySubBar, activityMeasure } from "@/features/task/ActivityBar";
 import { LogCopyButton } from "@/components/shared/LogCopyButton";
-import { Bar, Btn, Divider, InfoRow, PageHeader, Panel, PanelHead, Tip, TIP_TRIGGER, ToneChip } from "@/components/ui";
+import { PlanReviewView } from "@/features/convert/PlanReviewView";
+import { buildPlanSummary, ReportView } from "@/features/report/ReportView";
+import {
+    Bar,
+    Btn,
+    Divider,
+    InfoRow,
+    PageHeader,
+    Panel,
+    PanelHead,
+    SegTabs,
+    Tip,
+    TIP_TRIGGER,
+    ToneChip,
+} from "@/components/ui";
 import { useLogFollow } from "@/lib/log-view";
 import { cn } from "@/lib/utils";
 
@@ -54,17 +73,45 @@ const hm = (t: number) => formatClock(t).slice(0, 5);
  */
 const LOG_RENDER_CAP = 400;
 
+/**
+ * 页签 key：概况人人有份；结果只给已完成的；方案给还没跑完的——
+ * 跑完之后方案已经落地成产物，再摆一层「当时的打算」只会和结果抢注意力。
+ */
+type TaskTab = "overview" | "result" | "plan";
+
+const TAB_LABEL: Record<TaskTab, string> = {
+    overview: "概况",
+    result: "结果",
+    plan: "方案",
+};
+
+/** 状态 → 可见页签集合；集合外的 key 一律回落概况，列表带进来的落点不会和状态打架 */
+function tabsOf(status: ConversionTask["status"]): TaskTab[] {
+    return status === "success" ? ["overview", "result"] : ["overview", "plan"];
+}
+
 export function TaskDetailPage() {
-    const { entry, navigate, switchPrimary } = useNavigation();
+    const { entry, switchPrimary } = useNavigation();
     const taskId = entry.params?.taskId as string | undefined;
+    /** 列表主按钮带着落点来（已完成→结果，其余→概况） */
+    const wanted = entry.params?.tab as TaskTab | undefined;
 
     const [task, setTask] = useState<ConversionTask | null>(null);
     const [missing, setMissing] = useState(false);
     const [copied, setCopied] = useState(false);
+    const [planCopied, setPlanCopied] = useState(false);
+    const [tab, setTab] = useState<TaskTab>(wanted ?? "overview");
+    /** 重试起表轮询用：同一 id 原地重跑，不该把同一个页面再压一层栈 */
+    const [nonce, setNonce] = useState(0);
+    /** 报告与产物路径：右栏动作（打开输出位置/复制方案）与结果签共用，只在这一处装载 */
+    const [report, setReport] = useState<ConversionReport | null>(null);
+    const [outPath, setOutPath] = useState<string | null>(null);
     /** 实时条数据源：进度事件比 800ms 轮询密一个量级，轮询到的快照作为兜底覆写 */
     const [activity, setActivity] = useState<ActivityInfo | undefined>(undefined);
     const logRef = useRef<HTMLDivElement>(null);
     useLogFollow(logRef, task?.logs.length ?? 0);
+
+    const succeeded = task?.status === "success";
 
     // 事件流只喂实时条：日志/阶段等仍以轮询快照为准，避免两套状态互相覆写
     const eventsLive = useRef(false);
@@ -85,13 +132,19 @@ export function TaskDetailPage() {
         };
     }, [taskId]);
 
-    // 自调度轮询：运行/排队中每 800ms 拉一次快照，进入终态即停；taskId 变化（重试跳转）重新起表
+    // 换任务先清屏，免得新 id 的骨架期还画着上一条的内容；重试（nonce）不清，避免整页闪一下
+    useEffect(() => {
+        setTask(null);
+        setMissing(false);
+        setReport(null);
+        setOutPath(null);
+    }, [taskId]);
+
+    // 自调度轮询：运行/排队中每 800ms 拉一次快照，进入终态即停；taskId 变化或重试重新起表
     useEffect(() => {
         if (!taskId) return;
         let alive = true;
         let timer = 0;
-        setTask(null);
-        setMissing(false);
 
         const tick = async () => {
             const t = await api.getTask(taskId);
@@ -113,7 +166,31 @@ export function TaskDetailPage() {
             alive = false;
             window.clearTimeout(timer);
         };
-    }, [taskId]);
+    }, [taskId, nonce]);
+
+    // 报告只在成功后才有；产物路径优先用后端回传的真实 outputPath，旧记录缺字段才按输出目录重建
+    useEffect(() => {
+        if (!taskId || !succeeded || !task) return;
+        let alive = true;
+        void (async () => {
+            const r = await api.getReport(taskId);
+            if (!alive) return;
+            setReport(r ?? null);
+            const name = r?.outputFileName ?? task.outputFileName;
+            const full =
+                task.outputPath ??
+                (name
+                    ? await api.resolveOutputPath(
+                          name,
+                          task.options.outputOverride?.trim() || undefined
+                      )
+                    : undefined);
+            if (alive) setOutPath(full ?? null);
+        })();
+        return () => {
+            alive = false;
+        };
+    }, [taskId, succeeded, task]);
 
     if (!taskId || missing) {
         return (
@@ -156,11 +233,48 @@ export function TaskDetailPage() {
         32
     );
 
+    // 跑完那一刻页签集合会换（方案签让位给结果签）：不在集合里的当前签回落概况
+    const items = tabsOf(task.status);
+    const active: TaskTab = items.includes(tab) ? tab : "overview";
+
+    /** 打开产物所在目录：静默失败会被当成「按钮坏了」，一律把错误外显到全局提示区 */
+    const openOutput = async () => {
+        if (!outPath) {
+            notify("这条记录没有产物路径信息，无法定位输出目录", "warn");
+            return;
+        }
+        try {
+            await api.openDir(api.dirOf(outPath));
+        } catch (e) {
+            notify(`打开输出目录失败：${e instanceof Error ? e.message : String(e)}`, "error");
+        }
+    };
+
+    const copyPlan = async () => {
+        if (!report) return;
+        try {
+            await navigator.clipboard.writeText(buildPlanSummary(task, report, outPath));
+            setPlanCopied(true);
+            window.setTimeout(() => setPlanCopied(false), 2000);
+        } catch (e) {
+            notify(`复制方案失败：${e instanceof Error ? e.message : String(e)}`, "error");
+        }
+    };
+
     const retry = async () => {
         const res = await api.retryTask(task.id);
         if (!res) return;
         if (res.queued) notify("已有转换正在进行，重试任务已加入队列", "info");
-        navigate("task", { taskId: res.taskId });
+        // 同一 id 原地重跑：回到概况、清掉上一轮的报告，重新起轮询而不是再压一层导航栈
+        setTab("overview");
+        setReport(null);
+        setOutPath(null);
+        setNonce((n) => n + 1);
+    };
+
+    const cancel = async () => {
+        await api.cancelTask(task.id);
+        notify("任务已取消，已下载的文件保留在缓存", "info");
     };
 
     const copyDiagnostics = async () => {
@@ -181,173 +295,228 @@ export function TaskDetailPage() {
 
     return (
         <div className="flex flex-col gap-5">
-            <PageHeader title={packName} sub={subLine(task, elapsed)} />
+            <PageHeader
+                title={packName}
+                sub={subLine(task, elapsed)}
+                right={
+                    <SegTabs
+                        items={items.map((k) => ({ key: k, label: TAB_LABEL[k] }))}
+                        value={active}
+                        onChange={setTab}
+                    />
+                }
+            />
 
             <div className="flex items-start gap-5">
-                {/* 左列：错误卡（失败时）+ 转换进度 + 日志 */}
+                {/* 左列按页签换内容：这里不摆跨页按钮，换看别的内容只顶上那排页签 */}
                 <div className="flex min-w-0 flex-1 flex-col gap-4">
-                    {task.error && (
-                        <TaskErrorCard
-                            error={task.error}
-                            fileName={task.error.stage === "parser" ? task.pack.fileName : undefined}
-                            onRetry={() => void retry()}
-                            onFix={
-                                task.error.stage === "parser"
-                                    ? () => switchPrimary("home")
-                                    : task.error.stage === "detector"
-                                      ? () =>
-                                            navigate("convert", {
-                                                taskId: task.id,
-                                                manifest: task.pack,
-                                            })
-                                      : undefined
-                            }
-                            onShowLog={
-                                task.error.stage === "parser"
-                                    ? () => logRef.current?.scrollIntoView({ behavior: "smooth", block: "end" })
-                                    : undefined
-                            }
-                            onCopyDiagnostics={
-                                task.error.stage === "builder" ? () => void copyDiagnostics() : undefined
-                            }
-                            copied={copied}
-                        />
-                    )}
-
-                    {/* ---- 转换进度 ---- */}
-                    <Panel gap={12}>
-                        <PanelHead
-                            inline
-                            title="转换进度"
-                            right={
-                                <ToneChip
-                                    tone={chip.tone}
-                                    size="sm"
-                                    className={cn("px-2.5", chip.plain && "bg-surface-2")}
-                                >
-                                    {chip.label}
-                                </ToneChip>
-                            }
-                        />
-                        {/* 父子两条一组：粗=整包总进度（阶段加权，分钟级），细=当前动作（秒级字节量） */}
-                        <div className="flex w-full flex-col gap-1.5">
-                            <Bar percent={task.progress} fillClass={BAR_COLOR[task.status]} />
-                            <ActivitySubBar activity={act} />
-                        </div>
-
-                        <div className="flex w-full justify-between gap-3">
-                            <span className="text-[12px] leading-[18px] font-medium text-text-1">
-                                {progressHeadline(task)}
-                            </span>
-                            <span className="shrink-0 font-mono text-[11px] leading-[16px] font-normal text-text-2">
-                                {task.progress}%
-                            </span>
-                        </div>
-                        {/* 第二行：有当前动作时是「正在弄哪个文件」，否则回落最后一条日志。
-                            完整文件名走 Tip（外层只管截断，气泡要在裁刀之外才不会被切掉） */}
-                        <div className="flex w-full justify-between gap-3">
-                            <span className={cn(TIP_TRIGGER, "flex min-w-0 flex-1 items-center")}>
-                                <span
-                                    className={cn(
-                                        "min-w-0 truncate font-mono text-[11px] leading-[16px] font-normal",
-                                        act ? "text-text-2" : "text-text-3"
-                                    )}
-                                >
-                                    {act
-                                        ? `${act.kind === "net" ? "下载" : "打包"} · ${act.subject}`
-                                        : (lastLog?.message ?? "等待日志…")}
-                                </span>
-                                <Tip label={act?.subject ?? lastLog?.message} align="start" wide />
-                            </span>
-                            <span
-                                className={cn(
-                                    "shrink-0 font-mono text-[11px] leading-[16px] font-normal tabular-nums",
-                                    act?.attempt && act.attempt > 1
-                                        ? "text-gold"
-                                        : task.status === "failed"
-                                          ? "text-redstone"
-                                          : "text-text-3"
-                                )}
-                            >
-                                {act ? activityMeasure(act) : progressAside(task, elapsed)}
-                            </span>
-                        </div>
-
-                        <Divider />
-
-                        {/* 微型轨道：当前站 → 下一站 */}
-                        <div className="flex w-full items-center gap-2.5">
-                            <span className={cn("size-2 shrink-0 rounded-full", toneDot(track.current.tone))} />
-                            <span
-                                className={cn(
-                                    "text-[11px] leading-[16px] font-semibold",
-                                    toneText(track.current.tone)
-                                )}
-                            >
-                                {track.current.label}
-                            </span>
-                            {track.next && (
-                                <>
-                                    <span className="h-0.5 w-9 shrink-0 rounded-full bg-stroke" />
-                                    <span className="size-2 shrink-0 rounded-full bg-stroke" />
-                                    <span className="text-[11px] leading-[16px] font-normal text-text-3">
-                                        {track.next}
-                                    </span>
-                                </>
-                            )}
-                        </div>
-                    </Panel>
-
-                    {/* ---- 日志：定高 260 + 框内滚动，卡高不随日志条数变化 ---- */}
-                    <Panel gap={12}>
-                        <PanelHead
-                            title="日志"
-                            right={
-                                <LogCopyButton
-                                    logs={task.logs}
-                                    header={`SideShift 日志 · ${task.pack.fileName} · ${task.id}`}
+                    {active === "overview" && (
+                        <>
+                            {task.error && (
+                                <TaskErrorCard
+                                    error={task.error}
+                                    fileName={
+                                        task.error.stage === "parser"
+                                            ? task.pack.fileName
+                                            : undefined
+                                    }
+                                    onRetry={() => void retry()}
+                                    onFix={
+                                        task.error.stage === "parser"
+                                            ? () => switchPrimary("home")
+                                            : task.error.stage === "detector"
+                                              ? () => setTab("plan")
+                                              : undefined
+                                    }
+                                    onShowLog={
+                                        task.error.stage === "parser"
+                                            ? () =>
+                                                  logRef.current?.scrollIntoView({
+                                                      behavior: "smooth",
+                                                      block: "end",
+                                                  })
+                                            : undefined
+                                    }
+                                    onCopyDiagnostics={
+                                        task.error.stage === "builder"
+                                            ? () => void copyDiagnostics()
+                                            : undefined
+                                    }
+                                    copied={copied}
                                 />
-                            }
-                        />
-                        <div
-                            ref={logRef}
-                            className="log-scroll flex h-[260px] w-full flex-col gap-1 overflow-y-auto rounded-lg bg-surface-2 p-3"
-                        >
-                            {task.logs.length === 0 && (
-                                <span className="font-mono text-[10px] leading-[14px] text-text-3">
-                                    等待开始转换…
-                                </span>
                             )}
-                            {hiddenLogs > 0 && (
-                                <span className="font-mono text-[10px] leading-[14px] text-text-3">
-                                    （仅显示最近 {LOG_RENDER_CAP} 条 · 已省略 {hiddenLogs} 条，复制可取全部{" "}
-                                    {task.logs.length} 条）
-                                </span>
-                            )}
-                            {visibleLogs.map((l, i) => (
-                                <div key={i} className="flex w-full gap-2">
-                                    <span className="shrink-0 font-mono text-[10px] leading-[14px] font-normal text-amethyst">
-                                        [{l.stage}]
+
+                            {/* ---- 转换进度 ---- */}
+                            <Panel gap={12}>
+                                <PanelHead
+                                    inline
+                                    title="转换进度"
+                                    right={
+                                        <ToneChip
+                                            tone={chip.tone}
+                                            size="sm"
+                                            className={cn("px-2.5", chip.plain && "bg-surface-2")}
+                                        >
+                                            {chip.label}
+                                        </ToneChip>
+                                    }
+                                />
+                                {/* 父子两条一组：粗=整包总进度（阶段加权，分钟级），细=当前动作（秒级字节量） */}
+                                <div className="flex w-full flex-col gap-1.5">
+                                    <Bar
+                                        percent={task.progress}
+                                        fillClass={BAR_COLOR[task.status]}
+                                    />
+                                    <ActivitySubBar activity={act} />
+                                </div>
+
+                                <div className="flex w-full justify-between gap-3">
+                                    <span className="text-[12px] leading-[18px] font-medium text-text-1">
+                                        {progressHeadline(task)}
+                                    </span>
+                                    <span className="shrink-0 font-mono text-[11px] leading-[16px] font-normal text-text-2">
+                                        {task.progress}%
+                                    </span>
+                                </div>
+                                {/* 第二行：有当前动作时是「正在弄哪个文件」，否则回落最后一条日志。
+                                    完整文件名走 Tip（外层只管截断，气泡要在裁刀之外才不会被切掉） */}
+                                <div className="flex w-full justify-between gap-3">
+                                    <span
+                                        className={cn(
+                                            TIP_TRIGGER,
+                                            "flex min-w-0 flex-1 items-center"
+                                        )}
+                                    >
+                                        <span
+                                            className={cn(
+                                                "min-w-0 truncate font-mono text-[11px] leading-[16px] font-normal",
+                                                act ? "text-text-2" : "text-text-3"
+                                            )}
+                                        >
+                                            {act
+                                                ? `${act.kind === "net" ? "下载" : "打包"} · ${act.subject}`
+                                                : (lastLog?.message ?? "等待日志…")}
+                                        </span>
+                                        <Tip
+                                            label={act?.subject ?? lastLog?.message}
+                                            align="start"
+                                            wide
+                                        />
                                     </span>
                                     <span
                                         className={cn(
-                                            "min-w-0 flex-1 break-words font-mono text-[10px] leading-[14px] font-normal",
-                                            l.level === "error"
-                                                ? "text-redstone"
-                                                : l.level === "warn"
-                                                  ? "text-text-3"
-                                                  : "text-text-2"
+                                            "shrink-0 font-mono text-[11px] leading-[16px] font-normal tabular-nums",
+                                            act?.attempt && act.attempt > 1
+                                                ? "text-gold"
+                                                : task.status === "failed"
+                                                  ? "text-redstone"
+                                                  : "text-text-3"
                                         )}
                                     >
-                                        {l.message}
+                                        {act
+                                            ? activityMeasure(act)
+                                            : progressAside(task, elapsed)}
                                     </span>
                                 </div>
-                            ))}
-                        </div>
-                    </Panel>
+
+                                <Divider />
+
+                                {/* 微型轨道：当前站 → 下一站 */}
+                                <div className="flex w-full items-center gap-2.5">
+                                    <span
+                                        className={cn(
+                                            "size-2 shrink-0 rounded-full",
+                                            toneDot(track.current.tone)
+                                        )}
+                                    />
+                                    <span
+                                        className={cn(
+                                            "text-[11px] leading-[16px] font-semibold",
+                                            toneText(track.current.tone)
+                                        )}
+                                    >
+                                        {track.current.label}
+                                    </span>
+                                    {track.next && (
+                                        <>
+                                            <span className="h-0.5 w-9 shrink-0 rounded-full bg-stroke" />
+                                            <span className="size-2 shrink-0 rounded-full bg-stroke" />
+                                            <span className="text-[11px] leading-[16px] font-normal text-text-3">
+                                                {track.next}
+                                            </span>
+                                        </>
+                                    )}
+                                </div>
+                            </Panel>
+
+                            {/* ---- 日志：定高 260 + 框内滚动，卡高不随日志条数变化 ---- */}
+                            <Panel gap={12}>
+                                <PanelHead
+                                    title="日志"
+                                    right={
+                                        <LogCopyButton
+                                            logs={task.logs}
+                                            header={`SideShift 日志 · ${task.pack.fileName} · ${task.id}`}
+                                        />
+                                    }
+                                />
+                                <div
+                                    ref={logRef}
+                                    className="log-scroll flex h-[260px] w-full flex-col gap-1 overflow-y-auto rounded-lg bg-surface-2 p-3"
+                                >
+                                    {task.logs.length === 0 && (
+                                        <span className="font-mono text-[10px] leading-[14px] text-text-3">
+                                            等待开始转换…
+                                        </span>
+                                    )}
+                                    {hiddenLogs > 0 && (
+                                        <span className="font-mono text-[10px] leading-[14px] text-text-3">
+                                            （仅显示最近 {LOG_RENDER_CAP} 条 · 已省略 {hiddenLogs}{" "}
+                                            条，复制可取全部 {task.logs.length} 条）
+                                        </span>
+                                    )}
+                                    {visibleLogs.map((l, i) => (
+                                        <div key={i} className="flex w-full gap-2">
+                                            <span className="shrink-0 font-mono text-[10px] leading-[14px] font-normal text-amethyst">
+                                                [{l.stage}]
+                                            </span>
+                                            <span
+                                                className={cn(
+                                                    "min-w-0 flex-1 break-words font-mono text-[10px] leading-[14px] font-normal",
+                                                    l.level === "error"
+                                                        ? "text-redstone"
+                                                        : l.level === "warn"
+                                                          ? "text-text-3"
+                                                          : "text-text-2"
+                                                )}
+                                            >
+                                                {l.message}
+                                            </span>
+                                        </div>
+                                    ))}
+                                </div>
+                            </Panel>
+                        </>
+                    )}
+
+                    {active === "result" &&
+                        (report ? (
+                            <ReportView
+                                taskId={task.id}
+                                report={report}
+                                task={task}
+                                outPath={outPath}
+                            />
+                        ) : (
+                            <Panel className="items-center py-16">
+                                <span className="h-4 w-40 animate-pulse rounded bg-stroke" />
+                            </Panel>
+                        ))}
+
+                    {active === "plan" && <PlanReviewView taskId={task.id} manifest={task.pack} />}
                 </div>
 
-                {/* 右栏：任务信息 */}
+                {/* 右栏：任务信息 + 本页唯一的动作区 */}
                 <aside className="w-[280px] shrink-0">
                     <Panel gap={10}>
                         <PanelHead title="任务信息" />
@@ -363,49 +532,62 @@ export function TaskDetailPage() {
                         />
                         <Divider />
 
-                        <Btn
-                            size="sm"
-                            full
-                            className="text-text-1"
-                            onClick={() =>
-                                navigate("convert", { taskId: task.id, manifest: task.pack })
-                            }
-                        >
-                            查看转换方案
-                        </Btn>
                         {running && (
                             <Btn
                                 size="sm"
                                 variant="danger"
                                 full
-                                onClick={() => void api.cancelTask(task.id)}
+                                className="font-medium"
+                                onClick={() => void cancel()}
                             >
                                 取消转换
                             </Btn>
                         )}
                         {task.status === "failed" && (
-                            <Btn size="sm" variant="primary" full className="font-semibold" onClick={() => void retry()}>
-                                重试转换
-                            </Btn>
-                        )}
-                        {task.status === "cancelled" && (
-                            <Btn size="sm" variant="primary" full className="font-semibold" onClick={() => void retry()}>
-                                重新转换
-                            </Btn>
-                        )}
-                        {task.status === "success" && (
                             <Btn
                                 size="sm"
                                 variant="primary"
                                 full
                                 className="font-semibold"
-                                onClick={() => navigate("report", { taskId: task.id })}
+                                onClick={() => void retry()}
                             >
-                                查看转换报告
+                                重试转换
                             </Btn>
                         )}
-                        <Btn size="sm" full onClick={() => switchPrimary("home")}>
-                            返回首页
+                        {task.status === "cancelled" && (
+                            <Btn
+                                size="sm"
+                                variant="primary"
+                                full
+                                className="font-semibold"
+                                onClick={() => void retry()}
+                            >
+                                重新转换
+                            </Btn>
+                        )}
+                        {task.status === "success" && (
+                            <>
+                                <Btn
+                                    variant="primary"
+                                    full
+                                    className="font-semibold"
+                                    onClick={() => void openOutput()}
+                                >
+                                    打开输出位置
+                                </Btn>
+                                <Btn
+                                    size="sm"
+                                    full
+                                    className="bg-surface text-text-1"
+                                    onClick={() => void copyPlan()}
+                                >
+                                    {planCopied ? "已复制方案" : "复制转换方案"}
+                                </Btn>
+                            </>
+                        )}
+                        {/* 回退固定占动作组最后一条 */}
+                        <Btn size="sm" full onClick={() => switchPrimary("tasks")}>
+                            返回任务列表
                         </Btn>
 
                         <p className="w-full text-center text-[10px] leading-[14px] font-normal text-text-3">

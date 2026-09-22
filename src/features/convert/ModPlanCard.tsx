@@ -25,15 +25,15 @@ export function ModPlanCard({
     onTab,
     counts,
     rows,
-    classifying,
+    classifying = false,
     totalRows,
-    readingLabel,
+    readingLabel = "",
     emptyLabel,
     depWarnings,
     localIds,
     removableIds,
-    manualEdits,
-    confirmClear,
+    manualEdits = 0,
+    confirmClear = false,
     readOnly,
     onToggleRow,
     onRemoveRow,
@@ -51,33 +51,34 @@ export function ModPlanCard({
     counts: { remove: number; keep: number; add: number; addTotal: number };
     /** 当前页签的可见预览行（口径由页面算好，节拍也按它算） */
     rows: PlanMod[];
-    classifying: boolean;
+    classifying?: boolean;
     /** 方案是否已有行（分类首屏的空卡要说「正在读取整合包…」而不是「暂无模组」） */
     totalRows: number;
-    readingLabel: string;
-    /** 方案一行都没有时的说法（回看/草稿态由页面给出：那时「暂无模组」是在说存档，不是在说分类） */
+    readingLabel?: string;
+    /** 方案一行都没有时的说法（回看态由页面给出：那时「暂无模组」是在说存档，不是在说分类） */
     emptyLabel?: string;
     depWarnings: DepWarning[];
     /** 本地 .jar 添加的模组 id（徽章显示「本地」而非「推荐」） */
-    localIds: Set<string>;
+    localIds?: Set<string>;
     /** 本页新增行 id（决定 × 是否出现；系统补行只能停用不能抹掉） */
-    removableIds: Set<string>;
+    removableIds?: Set<string>;
     /** 手动改动数（处置覆写 + 停用行）：>0 才露出「清空我的修改」出口 */
-    manualEdits: number;
-    confirmClear: boolean;
+    manualEdits?: number;
+    confirmClear?: boolean;
     /** 回看态：只给查看清单的出口，不给改判/重跑/添加的出口（行勾选与 × 一并静态化） */
     readOnly?: boolean;
+    /** 以下写入口在只读视图（任务详情「方案」签）里一概不传：静态渲染下它们没有触发路径 */
     /** 行的勾选：add 行 = 生效/停用切换，其余 = remove↔keep 改判 */
-    onToggleRow: (m: PlanMod) => void;
-    onRemoveRow: (m: PlanMod) => void;
+    onToggleRow?: (m: PlanMod) => void;
+    onRemoveRow?: (m: PlanMod) => void;
     /** 依赖警告的「恢复」：停用行 = 重新生效，剔除行 = 改判保留（两种行语义不同，由页面决定） */
-    onRestoreDep: (m: PlanMod) => void;
+    onRestoreDep?: (m: PlanMod) => void;
     onOpenList: (f: ListFocus) => void;
-    onReclassify: () => void;
-    onConfirmClear: (on: boolean) => void;
-    onClearEdits: () => void;
-    onAddLocal: () => void;
-    onAddOnline: () => void;
+    onReclassify?: () => void;
+    onConfirmClear?: (on: boolean) => void;
+    onClearEdits?: () => void;
+    onAddLocal?: () => void;
+    onAddOnline?: () => void;
 }) {
     /* 入场节拍：谁「进入可见列表」谁拿一档（0、1、2…按可见顺序自上而下），换页签即重置。
        ——必须在渲染期算，不能放 effect：motion 在挂载那一趟 layout effect 里就启动 initial→animate，
@@ -201,14 +202,14 @@ export function ModPlanCard({
                                         >
                                             <PlanModRow
                                                 mod={m}
-                                                badge={badgeFor(m, localIds.has(m.id))}
+                                                badge={badgeFor(m, localIds?.has(m.id) ?? false)}
                                                 readOnly={readOnly}
-                                                onToggle={() => onToggleRow(m)}
+                                                onToggle={() => onToggleRow?.(m)}
                                                 onRemove={
                                                     !readOnly &&
                                                     m.disposition === "add" &&
-                                                    removableIds.has(m.id)
-                                                        ? () => onRemoveRow(m)
+                                                    removableIds?.has(m.id)
+                                                        ? () => onRemoveRow?.(m)
                                                         : undefined
                                                 }
                                             />
@@ -243,7 +244,7 @@ export function ModPlanCard({
                                         {missing.disabled ? "停用" : "剔除"}的 {missing.name}
                                     </span>
                                     {!readOnly && (
-                                        <LinkBtn size="sm" onClick={() => onRestoreDep(missing)}>
+                                        <LinkBtn size="sm" onClick={() => onRestoreDep?.(missing)}>
                                             恢复
                                         </LinkBtn>
                                     )}
@@ -299,7 +300,7 @@ export function ModPlanCard({
                                         <div className="flex min-w-0 items-center gap-2.5">
                                             {/* 两枚计数提示已收进弹窗：待确认数 = 剔除清单的「需人工确认」tab，
                                                 同装数 = 保留清单每行说明尾部，卡底只留操作 */}
-                                            <LinkBtn size="sm" onClick={onReclassify}>
+                                            <LinkBtn size="sm" onClick={() => onReclassify?.()}>
                                                 重新自动分类
                                             </LinkBtn>
                                             {manualEdits > 0 &&
@@ -308,14 +309,14 @@ export function ModPlanCard({
                                                         <LinkBtn
                                                             size="sm"
                                                             className="text-redstone"
-                                                            onClick={onClearEdits}
+                                                            onClick={() => onClearEdits?.()}
                                                         >
                                                             确认清空 {manualEdits} 项
                                                         </LinkBtn>
                                                         <LinkBtn
                                                             size="sm"
                                                             className="text-text-3"
-                                                            onClick={() => onConfirmClear(false)}
+                                                            onClick={() => onConfirmClear?.(false)}
                                                         >
                                                             取消
                                                         </LinkBtn>
@@ -324,7 +325,7 @@ export function ModPlanCard({
                                                     <LinkBtn
                                                         size="sm"
                                                         className="text-text-2"
-                                                        onClick={() => onConfirmClear(true)}
+                                                        onClick={() => onConfirmClear?.(true)}
                                                     >
                                                         清空我的修改
                                                     </LinkBtn>
@@ -355,7 +356,7 @@ export function ModPlanCard({
                                                 size="sm"
                                                 icon={File}
                                                 className="px-[18px] font-semibold text-text-1"
-                                                onClick={onAddLocal}
+                                                onClick={() => onAddLocal?.()}
                                             >
                                                 从本地添加
                                             </Btn>
@@ -364,7 +365,7 @@ export function ModPlanCard({
                                                 size="sm"
                                                 icon={Globe}
                                                 className="px-[18px] font-semibold"
-                                                onClick={onAddOnline}
+                                                onClick={() => onAddOnline?.()}
                                             >
                                                 从网络添加
                                             </Btn>

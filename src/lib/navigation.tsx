@@ -2,7 +2,7 @@
  * SideShift 导航模型（对应 SS.pen v17 页面流转设计）
  *
  * - 一级页面（PrimaryPage）：侧栏常驻目的地（首页/任务列表/设置），标题栏【无】返回按钮
- * - 二级页面（SecondaryPage）：从一级页面下钻进入（转换配置/任务详情/转换报告…），
+ * - 二级页面（SecondaryPage）：从一级页面下钻进入（转换配置/任务详情），
  *   标题栏最小化左侧出现 undo-2 返回按钮 + 短竖线分隔，点击回退一层
  * - 实现方式：内存导航栈。navigate() 压栈，back() 弹栈，switchPrimary() 清栈重建
  */
@@ -18,8 +18,11 @@ import {
 /** 一级页面 key */
 export type PrimaryPage = "home" | "tasks" | "settings";
 
-/** 二级页面 key（随 Phase 1-4 实现逐步启用） */
-export type SecondaryPage = "convert" | "task" | "report";
+/**
+ * 二级页面 key：报告与方案不再是独立页面，它们收在任务详情的页签里
+ * （转换配置是唯一剩下的深页，且只有「新建转换」这一个写入口）
+ */
+export type SecondaryPage = "convert" | "task";
 
 export type PageKey = PrimaryPage | SecondaryPage;
 
@@ -27,7 +30,6 @@ export type PageKey = PrimaryPage | SecondaryPage;
 export const SECONDARY_OWNER: Record<SecondaryPage, PrimaryPage> = {
     convert: "home",
     task: "tasks",
-    report: "tasks",
 };
 
 /** 导航栈条目：页面 key + 可选参数（如 task 页的 { taskId }） */

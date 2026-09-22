@@ -5,7 +5,8 @@
  * 单卡（gap12 padding20）三行：
  *  row1 = 36×36 状态图标盒 + 包名/输出名两行 + 状态芯片 + 右侧耗时
  *  row2 = 进度条 + 百分比（仅运行中）
- *  row3 = 左等宽明细行 + 右操作按钮组（失败态改为错误盒 + 右对齐按钮）
+ *  row3 = 左等宽明细行 + 右操作按钮组（槽位固定：删除最左 → 状态动作 → 主按钮进详情，
+ *         失败态改为错误盒 + 右对齐按钮；详情页是任务唯一的下钻目的地，列表不再各发各的跳转）
  * 空态为 560 高无边框块：56×56 图标盒 + 两行等宽文案 + accent 主按钮。
  */
 import { Check, Download, Inbox, RefreshCw, X } from "lucide-react";
@@ -36,6 +37,15 @@ const FILTERS = [
     { key: "success" as const, label: "已完成" },
     { key: "failed" as const, label: "失败" },
 ];
+
+/** 状态 → 主按钮文案：同一档位同一个动作（进详情），只有落点读的内容随状态换 */
+const PRIMARY_LABEL: Record<TaskStatus, string> = {
+    queued: "查看进度",
+    running: "查看进度",
+    success: "查看报告",
+    failed: "查看详情",
+    cancelled: "查看详情",
+};
 
 export function TasksPage() {
     const [tasks, setTasks] = useState<ConversionTask[]>([]);
@@ -147,11 +157,11 @@ function TaskCard({ task }: { task: ConversionTask }) {
     const elapsed = (task.finishedAt ?? Date.now()) - started;
     const outName = task.outputFileName ?? outputNameOf(task.pack.fileName);
 
+    /** 重试是原地动作（同一 id 重新排队）：列表 1s 轮询会把这行读成运行中，不该顺手压一层详情页 */
     const retry = async () => {
         const res = await api.retryTask(task.id);
         if (!res) return;
         if (res.queued) notify("已有转换正在进行，重试任务已加入队列", "info");
-        navigate("task", { taskId: res.taskId });
     };
 
     const cancel = async () => {
@@ -242,58 +252,43 @@ function TaskCard({ task }: { task: ConversionTask }) {
                     </span>
                 )}
                 <div className="flex shrink-0 items-center gap-2">
-                    {/* 五态统一有详情出口：运行/排队/失败/已取消看日志，成功看报告 */}
-                    {running ? (
-                        <>
-                            <Btn size="sm" onClick={() => void cancel()}>
-                                取消
-                            </Btn>
-                            <Btn size="sm" onClick={() => navigate("task", { taskId: task.id })}>
-                                查看日志
-                            </Btn>
-                        </>
-                    ) : task.status === "success" ? (
-                        <>
-                            <Btn variant="danger" size="sm" onClick={() => void del()}>
-                                删除
-                            </Btn>
-                            <Btn size="sm" onClick={() => void openOutput()}>
-                                打开输出目录
-                            </Btn>
-                            <Btn
-                                variant="primary"
-                                size="sm"
-                                className="font-semibold"
-                                onClick={() => navigate("report", { taskId: task.id })}
-                            >
-                                查看报告
-                            </Btn>
-                        </>
-                    ) : task.status === "failed" ? (
-                        <>
-                            <Btn variant="danger" size="sm" onClick={() => void del()}>
-                                删除
-                            </Btn>
-                            <Btn size="sm" onClick={() => navigate("task", { taskId: task.id })}>
-                                查看日志
-                            </Btn>
-                            <Btn variant="primary" size="sm" icon={RefreshCw} onClick={() => void retry()}>
-                                重试
-                            </Btn>
-                        </>
-                    ) : (
-                        <>
-                            <Btn variant="danger" size="sm" onClick={() => void del()}>
-                                删除
-                            </Btn>
-                            <Btn size="sm" onClick={() => navigate("task", { taskId: task.id })}>
-                                查看日志
-                            </Btn>
-                            <Btn variant="primary" size="sm" className="font-semibold" onClick={() => void retry()}>
-                                重新转换
-                            </Btn>
-                        </>
+                    {/* 槽位固定：删除（最左）→ 状态动作 → 主按钮。
+                        主按钮永远占最右一档、只管进详情，文案随状态换；
+                        运行/排队的行后端拒绝删除，这一档整枚不出现。 */}
+                    {!running && (
+                        <Btn variant="danger" size="sm" onClick={() => void del()}>
+                            删除
+                        </Btn>
                     )}
+                    {running && (
+                        <Btn size="sm" onClick={() => void cancel()}>
+                            取消
+                        </Btn>
+                    )}
+                    {task.status === "success" && (
+                        <Btn size="sm" onClick={() => void openOutput()}>
+                            打开输出位置
+                        </Btn>
+                    )}
+                    {(task.status === "failed" || task.status === "cancelled") && (
+                        <Btn size="sm" icon={RefreshCw} onClick={() => void retry()}>
+                            {task.status === "failed" ? "重试" : "重新转换"}
+                        </Btn>
+                    )}
+                    <Btn
+                        variant="primary"
+                        size="sm"
+                        className="font-semibold"
+                        onClick={() =>
+                            navigate("task", {
+                                taskId: task.id,
+                                // 已完成直达结果，其余落概况：进详情页不必多点一次签
+                                tab: task.status === "success" ? "result" : "overview",
+                            })
+                        }
+                    >
+                        {PRIMARY_LABEL[task.status]}
+                    </Btn>
                 </div>
             </div>
         </Panel>

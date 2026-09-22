@@ -200,8 +200,8 @@ export function PlanListModal({
     mods: PlanMod[];
     /** 回看态：只读浏览——搜索与标签筛选照常（那是看，不是改），批量/勾选/应用一并摘掉 */
     readOnly?: boolean;
-    /** 「应用」时回写：只对最终处置与原值不同的行调用 */
-    onDisposition: (id: string, d: ModDisposition) => void;
+    /** 「应用」时回写：只对最终处置与原值不同的行调用；只读视图不传（没有「应用」这枚按钮） */
+    onDisposition?: (id: string, d: ModDisposition) => void;
 }) {
     const copy = LIST_COPY[focus];
     const [query, setQuery] = useState("");
@@ -288,9 +288,9 @@ export function PlanListModal({
             if (focus === "add") {
                 // add 视角只对「生效↔停用」真实翻转的行回写（停用不是处置变更）
                 const nowOn = fin === "add";
-                if (nowOn === !!m.disabled) onDisposition(m.id, nowOn ? "add" : "remove");
+                if (nowOn === !!m.disabled) onDisposition?.(m.id, nowOn ? "add" : "remove");
             } else if (fin !== m.disposition) {
-                onDisposition(m.id, fin);
+                onDisposition?.(m.id, fin);
             }
         });
         onClose();
