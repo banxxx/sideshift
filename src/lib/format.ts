@@ -85,13 +85,14 @@ export function reviewFirst<T extends { needsReview: boolean }>(rows: T[]): T[] 
     return rows.slice().sort((a, b) => Number(b.needsReview) - Number(a.needsReview));
 }
 
-/** 端标签五态（文案一律 5 字）：保留组说服务端，剔除组说客户端，服务端轴没答上才是待确认 */
+/** 端标签六态（文案一律 5 字）：保留组说服务端，剔除组说客户端，服务端轴没答上才是待确认 */
 export type SideTag =
     | "serverRequired"
     | "serverOptional"
     | "clientRequired"
     | "clientOptional"
-    | "review";
+    | "review"
+    | "unknown";
 
 const SIDE_TAG_LABEL: Record<SideTag, string> = {
     serverRequired: "服务端必装",
@@ -99,6 +100,7 @@ const SIDE_TAG_LABEL: Record<SideTag, string> = {
     clientRequired: "客户端必装",
     clientOptional: "客户端可选",
     review: "需人工确认",
+    unknown: "未判定",
 };
 
 /**
@@ -106,6 +108,9 @@ const SIDE_TAG_LABEL: Record<SideTag, string> = {
  * (必,可) 被判剔 → 说「客户端必装」而不是「服务端可选」；服务端轴没答上的行不替它编结论。
  */
 export function sideTagOf(m: Pick<PlanMod, "clientSide" | "serverSide">): SideTag {
+    // 两端都没答上（关掉自动剔除时的正常形态、联网反查整批没跑完，以及端证据字段上线前的旧存档）：
+    // 那是「没有结论」，不是「有结论但等人过一眼」，不能和 review 共用一枚标签
+    if (m.serverSide === undefined && m.clientSide === undefined) return "unknown";
     // 服务端轴没答上（含 (必,无)：会被剔但没有服务端依据）→ 与 detector 的 server_undecided 同判据
     if (m.serverSide === undefined) return "review";
     if (m.serverSide === "required") return "serverRequired";

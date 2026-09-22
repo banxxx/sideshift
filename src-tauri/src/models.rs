@@ -688,6 +688,47 @@ mod tests {
         );
     }
 
+    /// 方案快照三段往返（下发前端 → 回传 start_conversion → 落盘回灌）必须留住端证据字段：
+    /// 端标签不落盘、由 `client_side`/`server_side` 在渲染期反推，这里掉一个字段，
+    /// 任务详情的「方案」签就会把整批模组错标成「未判定」。
+    #[test]
+    fn plan_roundtrip_keeps_env_evidence() {
+        use std::collections::HashMap;
+        let row = PlanMod {
+            id: "sodium-fabric".into(),
+            name: "Sodium".into(),
+            version: "0.5.8".into(),
+            loader: Some("Fabric".into()),
+            disposition: ModDisposition::Keep,
+            client_only: false,
+            needs_review: false,
+            auto_supplement: false,
+            size_bytes: 1234,
+            needs_download: false,
+            local_path: None,
+            pinned: None,
+            depends: vec!["api".into()],
+            src_path: Some("deps/mods/sodium.jar".into()),
+            env_source: EnvSource::JarMetadata,
+            env_conflict: true,
+            client_side: Some(SideFlag::Required),
+            server_side: Some(SideFlag::Optional),
+            bytecode_hint: Some(BytecodeHint::ServerCode),
+        };
+        let to_frontend: Vec<PlanMod> =
+            serde_json::from_value(serde_json::to_value([&row]).unwrap()).unwrap();
+        let disk = serde_json::to_value(HashMap::from([("t1".to_string(), to_frontend)])).unwrap();
+        let revived: HashMap<String, Vec<PlanMod>> = serde_json::from_value(disk).unwrap();
+        let r = &revived["t1"][0];
+        assert_eq!(r.client_side, Some(SideFlag::Required));
+        assert_eq!(r.server_side, Some(SideFlag::Optional));
+        assert_eq!(r.env_source, EnvSource::JarMetadata);
+        assert!(r.env_conflict);
+        assert_eq!(r.bytecode_hint, Some(BytecodeHint::ServerCode));
+        assert_eq!(r.src_path.as_deref(), Some("deps/mods/sodium.jar"));
+        assert_eq!(r.depends, vec!["api".to_string()]);
+    }
+
     /// 报告新增字段必须能吃下旧存档：tasks.json 里的历史报告没有这些键，
     /// 一旦反序列化失败整个存档都会被当作损坏丢掉（用户看到的是「任务全没了」）
     #[test]

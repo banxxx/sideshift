@@ -5,8 +5,9 @@
  * 不能改回去跑 `defaultOptions`/`classifyPack`——那两个命令只认「最近一次解析的包」，而解析缓存
  * 刻意不落盘，重启后必然全空、中途选过别的包则张冠李戴。
  *
- * 整页只读用的是「静态渲染」而不是「灰化 disabled」：控件该显示成什么样还显示成什么样，
- * 只把写入口摘掉。这里不提供「照着存档再转一次」：存档只记决策不记字节锚（`PlanMod` 无 sha1），
+ * 整页只读：控件一律灰化到「一眼看出点不动」（原语里的 `READONLY_BOX` / `READONLY_MARK`），
+ * 但值保持可读——回看就是来核对数值的，所以压容器不压数字，说明文案全页只在模组方案卡底出现一次。
+ * 这里不提供「照着存档再转一次」：存档只记决策不记字节锚（`PlanMod` 无 sha1），
  * 源包被改过就会静默产出对不上的包。
  *
  * 计数汇总不在这里重复出现——任务信息卡那行「剔除 · 保留 · 新增」就是同一批数，一个出口。
@@ -77,6 +78,12 @@ export function PlanReviewView({
         [plan, tab]
     );
 
+    /** 「本地」徽章的依据在存档里就是 `localPath` 有没有值；不传则把本地 jar 行认成下载来的 */
+    const localIds = useMemo(
+        () => new Set(plan.filter((m) => m.localPath).map((m) => m.id)),
+        [plan]
+    );
+
     /** 反向依赖警告：保留/新增行依赖了被剔除的行（存档里不会有停用行，停用行从未参与构建） */
     const depWarnings = useMemo<DepWarning[]>(() => {
         const byId = new Map(plan.map((m) => [m.id, m]));
@@ -130,7 +137,7 @@ export function PlanReviewView({
                 readingLabel=""
                 emptyLabel="该任务暂无可用的方案记录"
                 depWarnings={depWarnings}
-                localIds={new Set<string>()}
+                localIds={localIds}
                 removableIds={new Set<string>()}
                 manualEdits={0}
                 confirmClear={false}

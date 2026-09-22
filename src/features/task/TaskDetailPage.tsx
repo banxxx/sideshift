@@ -5,7 +5,8 @@
  * 页签集合按状态给（不适用的签不出现），签与签之间不设跳转按钮——换看别的内容只顶上的页签。
  *  - 概况：错误卡（失败时）+ 转换进度 + 日志
  *  - 结果：报告全文（仅已完成）
- *  - 方案：创建时确认过的方案快照，纯只读（排队/运行/失败/已取消）
+ *  - 方案：创建时确认过的方案快照，纯只读（全状态都给——它就是构建实际吃进去的那批决策，
+ *    跑完不会作废，产物出问题时第一个要查的正是「当时剔了哪个模组」）
  *
  * 布局与 Convert 同构：BodyRow gap20 = 左列（gap16）+ 右栏 280 任务信息卡。
  * 左列概况页两张卡：
@@ -74,8 +75,9 @@ const hm = (t: number) => formatClock(t).slice(0, 5);
 const LOG_RENDER_CAP = 400;
 
 /**
- * 页签 key：概况人人有份；结果只给已完成的；方案给还没跑完的——
- * 跑完之后方案已经落地成产物，再摆一层「当时的打算」只会和结果抢注意力。
+ * 页签 key：概况与方案人人有份——方案是创建时确认、构建时真吃进去的那批决策（`get_task_plan`
+ * 读存档快照），跑完不会作废，所以「跑完了就不用看打算」这个直觉是错的：产物出问题，
+ * 第一个要查的就是当时剔了哪个模组。只有「结果」（报告）是完成后才存在的东西。
  */
 type TaskTab = "overview" | "result" | "plan";
 
@@ -87,7 +89,9 @@ const TAB_LABEL: Record<TaskTab, string> = {
 
 /** 状态 → 可见页签集合；集合外的 key 一律回落概况，列表带进来的落点不会和状态打架 */
 function tabsOf(status: ConversionTask["status"]): TaskTab[] {
-    return status === "success" ? ["overview", "result"] : ["overview", "plan"];
+    return status === "success"
+        ? ["overview", "result", "plan"]
+        : ["overview", "plan"];
 }
 
 export function TaskDetailPage() {
@@ -233,7 +237,8 @@ export function TaskDetailPage() {
         32
     );
 
-    // 跑完那一刻页签集合会换（方案签让位给结果签）：不在集合里的当前签回落概况
+    // 只有「结果」是完成后才有的签：原地重试让状态退回运行中时，当前签就不在集合里了，
+    // 渲染期直接回落概况（不用 effect 同步，也就不会有一帧挂着已消失的签）
     const items = tabsOf(task.status);
     const active: TaskTab = items.includes(tab) ? tab : "overview";
 

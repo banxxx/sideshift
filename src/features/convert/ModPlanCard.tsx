@@ -295,8 +295,14 @@ export function ModPlanCard({
                                         {tab === "remove" ? "剔除" : "保留"}清单
                                     </LinkBtn>
                                     {/* 自动分类出口：进页已默认跑过，这里只给重跑与回退手动改动的入口；
-                                        判不出两端的行已归进剔除清单，这里给一句汇总。回看态整组摘掉 */}
-                                    {!readOnly && (
+                                        判不出两端的行已归进剔除清单，这里给一句汇总。
+                                        回看态整组摘掉，右槽换成全页唯一一句只读说明——
+                                        灰化已经说了「点不动」，这句只回答「为什么」，不再给每枚控件挂气泡 */}
+                                    {readOnly ? (
+                                        <span className="shrink-0 text-[11px] leading-[16px] text-text-3">
+                                            只读快照 · 不可修改
+                                        </span>
+                                    ) : (
                                         <div className="flex min-w-0 items-center gap-2.5">
                                             {/* 两枚计数提示已收进弹窗：待确认数 = 剔除清单的「需人工确认」tab，
                                                 同装数 = 保留清单每行说明尾部，卡底只留操作 */}

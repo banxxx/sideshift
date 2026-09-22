@@ -20,6 +20,7 @@ import { Check, ChevronDown, Search } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { AnimatePresence, motion } from "motion/react";
 import { cn } from "@/lib/utils";
+import { READONLY_BOX } from "./Field";
 
 export interface SelectOption {
     value: string;
@@ -103,7 +104,14 @@ export function SearchSelect({
     return (
         <div
             ref={boxRef}
-            className={cn("relative flex flex-col gap-1.5", isChip ? "shrink-0" : "min-w-0", className)}
+            className={cn(
+                "relative flex flex-col gap-1.5",
+                isChip ? "shrink-0" : "min-w-0",
+                // 禁光标挂外层：disabled 的 button 上浏览器不一定绘出自定义光标，
+                // 而外层 div 一直在命中区里，指针一改就全程是「不可点」
+                readOnly && "cursor-not-allowed",
+                className
+            )}
         >
             {label && (
                 <span className="text-[11px] leading-[16px] font-normal text-text-3">{label}</span>
@@ -121,7 +129,9 @@ export function SearchSelect({
                         ? plain || isChip
                             ? "border-accent"
                             : "border-[1.5px] border-accent"
-                        : "border-stroke"
+                        : "border-stroke",
+                    // 回看态：与输入框同一套「凹下去 + 描边降一档」；chip 是设置页的可用件，不参与
+                    !isChip && readOnly && READONLY_BOX
                 )}
             >
                 <span
@@ -131,7 +141,8 @@ export function SearchSelect({
                             ? "text-[11px] leading-[16px] font-medium"
                             : plain
                               ? "font-mono text-[11px] leading-[16px] font-normal text-text-2"
-                              : "font-mono text-[12px] leading-[18px] font-medium text-text-1"
+                              : "font-mono text-[12px] leading-[18px] font-medium text-text-1",
+                        !isChip && readOnly && "text-text-2"
                     )}
                 >
                     {prefix ? `${prefix} ` : ""}

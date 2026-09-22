@@ -86,6 +86,7 @@ const ROW_TAG_ORDER: RowTag[] = [
     "clientRequired",
     "clientOptional",
     "review",
+    "unknown",
 ];
 
 function rowTagOf(m: PlanMod, focus: ListFocus): RowTag {

@@ -7,6 +7,16 @@ import { Check, Minus, Plus, Search, X, type LucideIcon } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Tip, TIP_TRIGGER } from "./Tip";
 
+/**
+ * 只读回看的统一「不可修改」外观（带框控件：步进器 / 输入框 / 下拉）：
+ * 底色退到 app 底（在卡片上就是一个凹下去的洞）+ 描边降一档 + 光标禁止。
+ * 值本身一律保持可读（回看就是来核对数值的），所以压的是容器不是整块 opacity；
+ * 说明文案只在模组方案卡底出现一次，不给每枚控件挂气泡。
+ */
+export const READONLY_BOX = "cursor-not-allowed border-stroke/60 bg-bg-app text-text-2";
+/** 读数型控件（开关 / 勾选框）：开与关、勾与不勾都是信息，整件只压一档 */
+export const READONLY_MARK = "cursor-not-allowed opacity-70";
+
 /* ---------------- Stepper：−|值|+ 高 32 ----------------
  * 卡内态（Convert）：$surface + $stroke 1px，分隔 1×20，值区 padding[0,14]
  * 行内态（Settings）：无底色，分隔 1×30，值区固定 40 宽
@@ -31,15 +41,16 @@ export function Stepper({
 }) {
     const step = (d: number) => onChange(Math.min(max, Math.max(min, value + d)));
     const valueCls = cn(
-        "inline-flex h-8 items-center justify-center font-mono text-[12px] leading-[18px] font-semibold text-text-1",
+        "inline-flex h-8 items-center justify-center font-mono text-[12px] leading-[18px] font-semibold",
+        readOnly ? "text-text-2" : "text-text-1",
         plain ? "w-10" : "px-3.5"
     );
     if (readOnly)
         return (
             <div
                 className={cn(
-                    "flex h-8 shrink-0 items-center rounded-lg border border-stroke",
-                    !plain && "bg-surface"
+                    "flex h-8 shrink-0 select-none items-center rounded-lg border",
+                    READONLY_BOX
                 )}
             >
                 <span className={valueCls}>
@@ -92,7 +103,7 @@ export function Toggle({
     onChange: (v: boolean) => void;
     size?: "sm" | "md";
     disabled?: boolean;
-    /** 回看态：不跟 `disabled` 共用那条灰化规则——开与关都是要核对的信息，压暗就看不出来了 */
+    /** 回看态：整件压一档 + 禁光标（一眼看出点不动），但只压一档——开与关都是要核对的读数 */
     readOnly?: boolean;
 }) {
     return (
@@ -105,7 +116,7 @@ export function Toggle({
             className={cn(
                 "flex shrink-0 items-center rounded-full p-0.5 transition-colors",
                 "disabled:pointer-events-none disabled:opacity-60",
-                readOnly && "pointer-events-none",
+                readOnly && cn(READONLY_MARK, "select-none"),
                 size === "sm" ? "h-5 w-9" : "h-[22px] w-[38px] p-[3px]",
                 checked ? "justify-end bg-accent" : "justify-start border border-stroke bg-surface-2"
             )}
@@ -127,8 +138,8 @@ export function TextInput({
     return (
         <div
             className={cn(
-                "flex h-8 shrink-0 items-center gap-[7px] rounded-lg px-2.5",
-                plain ? "border border-stroke bg-bg-app" : "bg-surface-2",
+                "flex h-8 shrink-0 items-center gap-[7px] rounded-lg border px-2.5",
+                readOnly ? READONLY_BOX : plain ? "border-stroke bg-bg-app" : "border-transparent bg-surface-2",
                 // 回看态不配焦点环：亮起来是在说「这里能打字」，而它只是段可选中的值
                 !readOnly && "focus-within:ring-1 focus-within:ring-accent",
                 className
@@ -141,7 +152,9 @@ export function TextInput({
                     "min-w-0 flex-1 bg-transparent outline-none placeholder:text-text-3",
                     plain
                         ? "font-mono text-[11px] leading-[16px] text-text-2"
-                        : "text-[13px] leading-[20px] text-text-1"
+                        : "text-[13px] leading-[20px]",
+                    !plain && (readOnly ? "text-text-2" : "text-text-1"),
+                    readOnly && "cursor-not-allowed"
                 )}
                 {...rest}
             />
@@ -161,7 +174,7 @@ export function CheckBox({
     checked: boolean;
     review?: boolean;
     onChange: (v: boolean) => void;
-    /** 回看态：勾选态照原样显示（它是「这一项进没进包」的读数），但不接点击、不留悬停 */
+    /** 回看态：整件压一档 + 禁光标（勾与不勾就是「进没进包」的读数，颜色还得留着） */
     readOnly?: boolean;
 }) {
     return (
@@ -172,6 +185,7 @@ export function CheckBox({
             onClick={readOnly ? undefined : () => onChange(!checked)}
             className={cn(
                 "flex size-4 shrink-0 items-center justify-center rounded transition-colors",
+                readOnly && cn(READONLY_MARK, "select-none"),
                 checked
                     ? "bg-accent"
                     : review
