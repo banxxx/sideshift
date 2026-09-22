@@ -8,11 +8,14 @@ import { SideChip } from "./modals";
 export function PlanModRow({
     mod,
     badge,
+    readOnly,
     onToggle,
     onRemove,
 }: {
     mod: PlanMod;
     badge?: React.ReactNode;
+    /** 回看态：勾选位当读数显示，不接点击 */
+    readOnly?: boolean;
     onToggle: () => void;
     /** 仅用户自行添加的新增行提供显式删除；缺省 = 不渲染 × */
     onRemove?: () => void;
@@ -22,7 +25,12 @@ export function PlanModRow({
 
     return (
         <div className={cn("group flex w-full items-center gap-2.5", mod.disabled && "opacity-55")}>
-            <CheckBox checked={included} review={!included && mod.needsReview} onChange={onToggle} />
+            <CheckBox
+                checked={included}
+                review={!included && mod.needsReview}
+                readOnly={readOnly}
+                onChange={onToggle}
+            />
             <div className="flex min-w-0 flex-1 items-center gap-2">
                 <span
                     className={cn(

@@ -4,7 +4,12 @@
     "skipLibCheck": true,
     "module": "ESNext",
     "moduleResolution": "bundler",
-    "allowSyntheticDefaultImports": true
+    "allowSyntheticDefaultImports": true,
+    /* composite 项目必须 emit（`noEmit` 会撞 TS6310），所以把产物整体收进 node_modules：
+     * 否则 `npm run build` 会在项目根留下 vite.config.js / .d.ts —— Vite 找配置的先例顺序里
+     * .js 排在 .ts 前面，那份陈旧的编译产物会**盖掉**真正的 vite.config.ts。tsbuildinfo 同理。 */
+    "outDir": "./node_modules/.tmp/tsconfig.node",
+    "tsBuildInfoFile": "./node_modules/.tmp/tsconfig.node.tsbuildinfo"
   },
   "include": ["vite.config.ts"]
 }

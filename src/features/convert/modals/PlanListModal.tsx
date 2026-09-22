@@ -33,7 +33,10 @@ const LIST_COPY: Record<
     ListFocus,
     {
         title: string;
+        /** 事实描述：清单里装的是哪些行，回看态也只说这一句 */
         sub: string;
+        /** 可编辑态追加的操作指引（回看态不拼，否则是在承诺一个不存在的能力） */
+        editNote: string;
         /** (维持原处置, 已改判) */
         note: (on: number, off: number) => string;
         /** 改判态行尾的徽章 */
@@ -44,21 +47,24 @@ const LIST_COPY: Record<
 > = {
     remove: {
         title: "剔除清单",
-        sub: "不进服务端包的模组（含判不出两端的待确认项）· 可逐项改回保留",
+        sub: "不进服务端包的模组（含判不出两端的待确认项）",
+        editNote: "可逐项改回保留",
         note: (on, off) => `${on} 项将剔除 · ${off} 项改为保留`,
         offBadge: "待恢复",
         rowOff: "勾选后改为保留 · 服务端将不剔除",
     },
     keep: {
         title: "保留清单",
-        sub: "将随服务端包构建的模组 · 可逐项改回剔除",
+        sub: "将随服务端包构建的模组",
+        editNote: "可逐项改回剔除",
         note: (on, off) => `${on} 项将保留 · ${off} 项改为剔除`,
         offBadge: "待剔除",
         rowOff: "取消勾选改为剔除 · 不再进入服务端包",
     },
     add: {
         title: "新增清单",
-        sub: "本次转换新增的模组 · 右侧标注端归属，取消勾选即停用，行保留可随时勾回",
+        sub: "本次转换新增的模组 · 右侧标注端归属",
+        editNote: "取消勾选即停用，行保留可随时勾回",
         note: (on, off) => `${on} 项将新增 · ${off} 项停用`,
         offBadge: "已停用",
         rowOff: "停用中 · 不进入服务端包，勾选即恢复",
@@ -183,6 +189,7 @@ export function PlanListModal({
     onClose,
     focus,
     mods,
+    readOnly,
     onDisposition,
 }: {
     open: boolean;
@@ -191,6 +198,8 @@ export function PlanListModal({
     focus: ListFocus;
     /** 该清单的全部候选（视角过滤由调用方做好后传入） */
     mods: PlanMod[];
+    /** 回看态：只读浏览——搜索与标签筛选照常（那是看，不是改），批量/勾选/应用一并摘掉 */
+    readOnly?: boolean;
     /** 「应用」时回写：只对最终处置与原值不同的行调用 */
     onDisposition: (id: string, d: ModDisposition) => void;
 }) {
@@ -295,16 +304,23 @@ export function PlanListModal({
             width={640}
             height={480}
             title={`${copy.title} · ${mods.length} 个模组`}
-            sub={copy.sub}
-            footerNote={copy.note(onN, mods.length - onN)}
+            sub={readOnly ? copy.sub : `${copy.sub} · ${copy.editNote}`}
+            footerNote={readOnly ? undefined : copy.note(onN, mods.length - onN)}
             footerActions={
                 <>
                     <Btn size="sm" className="px-3.5" onClick={onClose}>
-                        取消
+                        {readOnly ? "关闭" : "取消"}
                     </Btn>
-                    <Btn variant="primary" size="sm" className="px-3.5 font-semibold" onClick={apply}>
-                        应用
-                    </Btn>
+                    {!readOnly && (
+                        <Btn
+                            variant="primary"
+                            size="sm"
+                            className="px-3.5 font-semibold"
+                            onClick={apply}
+                        >
+                            应用
+                        </Btn>
+                    )}
                 </>
             }
         >
@@ -315,21 +331,29 @@ export function PlanListModal({
                 className="border border-stroke"
             />
 
-            {/* toolbar：左批量动作（作用域=当前可见行） + 右标签筛选（计数为 0 的档位不出 Tab） */}
-            <div className="flex w-full shrink-0 items-center justify-between gap-2">
-                <button
-                    className="flex shrink-0 items-center gap-2 text-[11px] leading-[16px] font-medium text-text-2 transition-colors hover:text-text-1"
-                    onClick={runBatch}
-                >
-                    {batchDone ? (
-                        <SquareCheck className="size-3.5 text-accent" />
-                    ) : (
-                        <MinusSquare className="size-3.5 text-accent" />
-                    )}
-                    {/* 名称不随视角定制（「全部勾回保留」这类自造词有歧义）：
-                        勾/不勾的语义由行勾选位本身表达，这里只做可见行的全选 */}
-                    {batchDone ? "取消全部" : "全部"}
-                </button>
+            {/* toolbar：左批量动作（作用域=当前可见行） + 右标签筛选（计数为 0 的档位不出 Tab）。
+                回看态没有批量动作，筛选档位从「靠右」改成整行右对齐，避免左半边空出一截 */}
+            <div
+                className={cn(
+                    "flex w-full shrink-0 items-center gap-2",
+                    readOnly ? "justify-end" : "justify-between"
+                )}
+            >
+                {!readOnly && (
+                    <button
+                        className="flex shrink-0 items-center gap-2 text-[11px] leading-[16px] font-medium text-text-2 transition-colors hover:text-text-1"
+                        onClick={runBatch}
+                    >
+                        {batchDone ? (
+                            <SquareCheck className="size-3.5 text-accent" />
+                        ) : (
+                            <MinusSquare className="size-3.5 text-accent" />
+                        )}
+                        {/* 名称不随视角定制（「全部勾回保留」这类自造词有歧义）：
+                            勾/不勾的语义由行勾选位本身表达，这里只做可见行的全选 */}
+                        {batchDone ? "取消全部" : "全部"}
+                    </button>
+                )}
                 {/* 极端组合（六档全有 + 长计数）兜一层横向滚动，不把 Tab 挤成换行 */}
                 <div className="min-w-0 overflow-x-auto">
                     <SegTabs
@@ -349,12 +373,15 @@ export function PlanListModal({
                     return (
                         <ListRow
                             key={m.id}
-                            className={cn("cursor-pointer", pending && "bg-gold-dim")}
-                            onClick={() => setRow(m)}
+                            className={cn(
+                                !readOnly && "cursor-pointer",
+                                pending && "bg-gold-dim"
+                            )}
+                            onClick={readOnly ? undefined : () => setRow(m)}
                         >
                             {/* 勾选框不接 onChange：点击冒泡到整行，避免一行两处状态源；
                                 颜色不跟勾选走（剔除清单的默认未勾选是常态，不该报金） */}
-                            <CheckBox checked={checked} onChange={() => {}} />
+                            <CheckBox checked={checked} readOnly={readOnly} onChange={() => {}} />
                             <span className="flex min-w-0 flex-1 flex-col gap-0.5">
                                 <span className="truncate font-mono text-[12px] leading-[18px] font-medium text-text-1">
                                     {m.name} {m.version}

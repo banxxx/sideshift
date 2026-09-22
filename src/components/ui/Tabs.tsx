@@ -20,7 +20,11 @@ export function SegTabs<T extends string>({
 }: {
     items: Array<{ key: T; label: string; count?: number; icon?: LucideIcon }>;
     value: T;
-    onChange: (k: T) => void;
+    /**
+     * 第二参是**被点的那颗按钮**：主题切换拿它的矩形当圆形展开的圆心，
+     * 只接 key 的调用方照旧写一参函数就行（TS 允许实现少收参数）。
+     */
+    onChange: (k: T, el: HTMLButtonElement) => void;
     /** md = 页面级页签（轨道 h36）；sm = 弹窗行内筛选（轨道 h28），别处别拿它当小号页签用 */
     size?: "md" | "sm";
     className?: string;
@@ -41,7 +45,7 @@ export function SegTabs<T extends string>({
                 return (
                     <button
                         key={it.key}
-                        onClick={() => onChange(it.key)}
+                        onClick={(e) => onChange(it.key, e.currentTarget)}
                         className={cn(
                             "relative inline-flex shrink-0 items-center justify-center rounded-md transition-colors",
                             size === "sm"

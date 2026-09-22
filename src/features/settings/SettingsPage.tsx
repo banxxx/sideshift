@@ -14,7 +14,7 @@ import { ExternalLink, Folder, Monitor, Moon, RefreshCw, Sun } from "lucide-reac
 import { useEffect, useState, type ReactNode } from "react";
 import * as api from "@/lib/api";
 import { notify } from "@/lib/notify";
-import { useTheme, type Theme } from "@/lib/theme";
+import { switchTheme, useTheme, type Theme } from "@/lib/theme";
 import type { AppSettings } from "@/lib/types";
 import {
     Btn,
@@ -51,7 +51,7 @@ const errOf = (e: unknown) => (e instanceof Error ? e.message : String(e));
 export function SettingsPage() {
     const [settings, setSettings] = useState<AppSettings | null>(null);
     const [sources, setSources] = useState<SelectOption[]>([]);
-    const [theme, setTheme] = useTheme();
+    const [theme] = useTheme();
     const [update, setUpdate] = useState<UpdateState>("idle");
 
     useEffect(() => {
@@ -194,7 +194,8 @@ export function SettingsPage() {
                 {/* ---- 外观与关于 ---- */}
                 <Section title="外观与关于">
                     <SettingRow label="主题" desc="默认跟随系统，也可锁定浅色 / 深色">
-                        <SegTabs items={THEME_TABS} value={theme} onChange={setTheme} />
+                        {/* 圆心取被点的那一格：胶囊滑到位之后颜色才从它铺开，两处入口时序一致 */}
+                        <SegTabs items={THEME_TABS} value={theme} onChange={(t, el) => switchTheme(t, el)} />
                     </SettingRow>
                     <SettingRow
                         label="版本"

@@ -48,6 +48,42 @@ pub fn parse_pack(state: S<'_>, path: String) -> PackManifest {
     manifest
 }
 
+/// 把「最近一次解析的包」指向指定包，供任务回看/改方案时用。
+///
+/// `get_plan` / `classify_pack` / `list_pack_dirs` 全都只认内存里的 `last_file`，而解析缓存
+/// **不落盘**（tasks.json 只存任务/方案/报告）。从任务列表进转换方案页时，那条任务可能早已
+/// 不是本轮解析的包：重启后缓存是空的（页面全空），中途选过别的包则是错的包（张冠李戴）。
+/// 命中缓存只挪指针；未命中按 `sourcePath` 重解析，口径与流水线阶段 1 一致。
+///
+/// 返回 false = 缓存没有且源文件已不在（被移动/删除，或旧版本存档没记路径）。
+/// 调用方据此降级：方案本身有任务快照可读，只有「包内目录树」这类要重解析的明细拿不到。
+#[tauri::command]
+pub fn ensure_parsed(state: S<'_>, manifest: PackManifest) -> bool {
+    {
+        let mut inner = lock(&state);
+        if inner.parsed_by_name.contains_key(&manifest.file_name) {
+            inner.last_file = Some(manifest.file_name.clone());
+            return true;
+        }
+    }
+
+    let Some(src) = manifest.source_path.as_deref() else {
+        return false;
+    };
+    let path = PathBuf::from(src);
+    if !path.exists() {
+        return false;
+    }
+    // 解析在锁外：几百个 jar 的包读到这里要是还握着全局锁，别的命令全跟着排队
+    let parsed = Arc::new(parser::parse(&path));
+    let mut inner = lock(&state);
+    inner
+        .parsed_by_name
+        .insert(manifest.file_name.clone(), parsed);
+    inner.last_file = Some(manifest.file_name);
+    true
+}
+
 #[tauri::command]
 pub async fn list_mc_versions(state: S<'_>) -> Result<Vec<VersionOption>, String> {
     downloader_of(&state)

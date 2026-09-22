@@ -20,6 +20,7 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             commands::parse_pack,
+            commands::ensure_parsed,
             commands::list_mc_versions,
             commands::list_loader_versions,
             commands::list_java_versions,

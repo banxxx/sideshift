@@ -28,11 +28,13 @@ export function ModPlanCard({
     classifying,
     totalRows,
     readingLabel,
+    emptyLabel,
     depWarnings,
     localIds,
     removableIds,
     manualEdits,
     confirmClear,
+    readOnly,
     onToggleRow,
     onRemoveRow,
     onRestoreDep,
@@ -53,6 +55,8 @@ export function ModPlanCard({
     /** 方案是否已有行（分类首屏的空卡要说「正在读取整合包…」而不是「暂无模组」） */
     totalRows: number;
     readingLabel: string;
+    /** 方案一行都没有时的说法（回看/草稿态由页面给出：那时「暂无模组」是在说存档，不是在说分类） */
+    emptyLabel?: string;
     depWarnings: DepWarning[];
     /** 本地 .jar 添加的模组 id（徽章显示「本地」而非「推荐」） */
     localIds: Set<string>;
@@ -61,6 +65,8 @@ export function ModPlanCard({
     /** 手动改动数（处置覆写 + 停用行）：>0 才露出「清空我的修改」出口 */
     manualEdits: number;
     confirmClear: boolean;
+    /** 回看态：只给查看清单的出口，不给改判/重跑/添加的出口（行勾选与 × 一并静态化） */
+    readOnly?: boolean;
     /** 行的勾选：add 行 = 生效/停用切换，其余 = remove↔keep 改判 */
     onToggleRow: (m: PlanMod) => void;
     onRemoveRow: (m: PlanMod) => void;
@@ -144,7 +150,9 @@ export function ModPlanCard({
                                     ? totalRows === 0
                                         ? readingLabel
                                         : "判定结果会逐条出现在这里"
-                                    : "该分类下暂无模组"}
+                                    : totalRows === 0 && emptyLabel
+                                      ? emptyLabel
+                                      : "该分类下暂无模组"}
                             </p>
                         ) : (
                             /* 逐行进出：新进入可见列表的行从右侧一档一档插进来，
@@ -194,8 +202,10 @@ export function ModPlanCard({
                                             <PlanModRow
                                                 mod={m}
                                                 badge={badgeFor(m, localIds.has(m.id))}
+                                                readOnly={readOnly}
                                                 onToggle={() => onToggleRow(m)}
                                                 onRemove={
+                                                    !readOnly &&
                                                     m.disposition === "add" &&
                                                     removableIds.has(m.id)
                                                         ? () => onRemoveRow(m)
@@ -232,17 +242,17 @@ export function ModPlanCard({
                                         {hosts.length > 2 ? ` 等 ${hosts.length} 项` : ""} 依赖被
                                         {missing.disabled ? "停用" : "剔除"}的 {missing.name}
                                     </span>
-                                    <LinkBtn
-                                        size="sm"
-                                        onClick={() => onRestoreDep(missing)}
-                                    >
-                                        恢复
-                                    </LinkBtn>
+                                    {!readOnly && (
+                                        <LinkBtn size="sm" onClick={() => onRestoreDep(missing)}>
+                                            恢复
+                                        </LinkBtn>
+                                    )}
                                 </div>
                             ))}
                             {depWarnings.length > 2 && (
                                 <span className="pl-[22px] text-[10px] leading-[14px] text-gold">
-                                    … 另有 {depWarnings.length - 2} 组依赖冲突，可逐项恢复处理
+                                    … 另有 {depWarnings.length - 2} 组依赖冲突
+                                    {readOnly ? "（回看只记当时结论，不在此处理）" : "，可逐项恢复处理"}
                                 </span>
                             )}
                         </motion.div>
@@ -284,41 +294,43 @@ export function ModPlanCard({
                                         {tab === "remove" ? "剔除" : "保留"}清单
                                     </LinkBtn>
                                     {/* 自动分类出口：进页已默认跑过，这里只给重跑与回退手动改动的入口；
-                                        判不出两端的行已归进剔除清单，这里给一句汇总 */}
-                                    <div className="flex min-w-0 items-center gap-2.5">
-                                        {/* 两枚计数提示已收进弹窗：待确认数 = 剔除清单的「需人工确认」tab，
-                                            同装数 = 保留清单每行说明尾部，卡底只留操作 */}
-                                        <LinkBtn size="sm" onClick={onReclassify}>
-                                            重新自动分类
-                                        </LinkBtn>
-                                        {manualEdits > 0 &&
-                                            (confirmClear ? (
-                                                <>
+                                        判不出两端的行已归进剔除清单，这里给一句汇总。回看态整组摘掉 */}
+                                    {!readOnly && (
+                                        <div className="flex min-w-0 items-center gap-2.5">
+                                            {/* 两枚计数提示已收进弹窗：待确认数 = 剔除清单的「需人工确认」tab，
+                                                同装数 = 保留清单每行说明尾部，卡底只留操作 */}
+                                            <LinkBtn size="sm" onClick={onReclassify}>
+                                                重新自动分类
+                                            </LinkBtn>
+                                            {manualEdits > 0 &&
+                                                (confirmClear ? (
+                                                    <>
+                                                        <LinkBtn
+                                                            size="sm"
+                                                            className="text-redstone"
+                                                            onClick={onClearEdits}
+                                                        >
+                                                            确认清空 {manualEdits} 项
+                                                        </LinkBtn>
+                                                        <LinkBtn
+                                                            size="sm"
+                                                            className="text-text-3"
+                                                            onClick={() => onConfirmClear(false)}
+                                                        >
+                                                            取消
+                                                        </LinkBtn>
+                                                    </>
+                                                ) : (
                                                     <LinkBtn
                                                         size="sm"
-                                                        className="text-redstone"
-                                                        onClick={onClearEdits}
+                                                        className="text-text-2"
+                                                        onClick={() => onConfirmClear(true)}
                                                     >
-                                                        确认清空 {manualEdits} 项
+                                                        清空我的修改
                                                     </LinkBtn>
-                                                    <LinkBtn
-                                                        size="sm"
-                                                        className="text-text-3"
-                                                        onClick={() => onConfirmClear(false)}
-                                                    >
-                                                        取消
-                                                    </LinkBtn>
-                                                </>
-                                            ) : (
-                                                <LinkBtn
-                                                    size="sm"
-                                                    className="text-text-2"
-                                                    onClick={() => onConfirmClear(true)}
-                                                >
-                                                    清空我的修改
-                                                </LinkBtn>
-                                            ))}
-                                    </div>
+                                                ))}
+                                        </div>
+                                    )}
                                 </>
                             )}
                             {tab === "add" && (
@@ -330,32 +342,34 @@ export function ModPlanCard({
                                             </LinkBtn>
                                         )}
                                     </div>
-                                    {/* 两枚 h32 添加按钮：有清单时居右，空方案时整行居中 */}
-                                    <div
-                                        className={cn(
-                                            "flex items-center gap-2.5",
-                                            counts.addTotal === 0 &&
-                                                "w-full justify-center"
-                                        )}
-                                    >
-                                        <Btn
-                                            size="sm"
-                                            icon={File}
-                                            className="px-[18px] font-semibold text-text-1"
-                                            onClick={onAddLocal}
+                                    {/* 两枚 h32 添加按钮：有清单时居右，空方案时整行居中；回看态摘掉 */}
+                                    {!readOnly && (
+                                        <div
+                                            className={cn(
+                                                "flex items-center gap-2.5",
+                                                counts.addTotal === 0 &&
+                                                    "w-full justify-center"
+                                            )}
                                         >
-                                            从本地添加
-                                        </Btn>
-                                        <Btn
-                                            variant="primary"
-                                            size="sm"
-                                            icon={Globe}
-                                            className="px-[18px] font-semibold"
-                                            onClick={onAddOnline}
-                                        >
-                                            从网络添加
-                                        </Btn>
-                                    </div>
+                                            <Btn
+                                                size="sm"
+                                                icon={File}
+                                                className="px-[18px] font-semibold text-text-1"
+                                                onClick={onAddLocal}
+                                            >
+                                                从本地添加
+                                            </Btn>
+                                            <Btn
+                                                variant="primary"
+                                                size="sm"
+                                                icon={Globe}
+                                                className="px-[18px] font-semibold"
+                                                onClick={onAddOnline}
+                                            >
+                                                从网络添加
+                                            </Btn>
+                                        </div>
+                                    )}
                                 </>
                             )}
                         </motion.div>

@@ -50,6 +50,7 @@ export function SearchSelect({
     searchable,
     searchPlaceholder = "搜索…",
     className,
+    readOnly,
 }: {
     label?: string;
     /** chip 皮肤的前缀（"版本"/"加载器"/"类别"），field 皮肤用 label 走上方 */
@@ -62,6 +63,8 @@ export function SearchSelect({
     searchable?: boolean;
     searchPlaceholder?: string;
     className?: string;
+    /** 回看态：值照显示，chevron 与浮层一起收掉——留着箭头就是「能点却不能点」的假出口 */
+    readOnly?: boolean;
 }) {
     const [open, setOpen] = useState(false);
     const [query, setQuery] = useState("");
@@ -106,6 +109,7 @@ export function SearchSelect({
                 <span className="text-[11px] leading-[16px] font-normal text-text-3">{label}</span>
             )}
             <button
+                disabled={readOnly}
                 onClick={() => (open ? close() : setOpen(true))}
                 className={cn(
                     "flex items-center justify-between gap-2 border transition-colors",
@@ -133,12 +137,14 @@ export function SearchSelect({
                     {prefix ? `${prefix} ` : ""}
                     {current?.chip ?? current?.label ?? value}
                 </span>
-                <ChevronDown
-                    className={cn(
-                        "size-3 shrink-0 transition-transform duration-200",
-                        open ? "rotate-180 text-accent" : "text-text-3"
-                    )}
-                />
+                {!readOnly && (
+                    <ChevronDown
+                        className={cn(
+                            "size-3 shrink-0 transition-transform duration-200",
+                            open ? "rotate-180 text-accent" : "text-text-3"
+                        )}
+                    />
+                )}
             </button>
             <AnimatePresence>
                 {open && (

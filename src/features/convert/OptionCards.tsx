@@ -34,6 +34,9 @@ type Patch = (p: Partial<ConversionOptions>) => void;
 
 /* ---------------- 运行环境：三个版本下拉 + 启动脚本开关 ---------------- */
 
+/* 各卡的 `readOnly` = 回看态：控件一律静态化（下拉收掉 chevron、开关 disabled、输入框 readOnly），
+   但卡片不换排版——回看要核对的就是「当时那套配置长什么样」。 */
+
 export function RuntimeEnvCard({
     options,
     patch,
@@ -42,6 +45,7 @@ export function RuntimeEnvCard({
     mcOptions,
     loaderOptions,
     javaOptions,
+    readOnly,
 }: {
     options: ConversionOptions | null;
     patch: Patch;
@@ -51,6 +55,7 @@ export function RuntimeEnvCard({
     mcOptions: SelectOption[];
     loaderOptions: SelectOption[];
     javaOptions: SelectOption[];
+    readOnly?: boolean;
 }) {
     return (
         <Panel gap={14}>
@@ -63,6 +68,7 @@ export function RuntimeEnvCard({
                     options={mcOptions}
                     searchable
                     searchPlaceholder="搜索版本…"
+                    readOnly={readOnly}
                     onChange={(v) => patch({ mcVersion: v })}
                 />
                 <SearchSelect
@@ -72,6 +78,7 @@ export function RuntimeEnvCard({
                     options={loaderOptions}
                     searchable
                     searchPlaceholder="搜索版本…"
+                    readOnly={readOnly}
                     onChange={(v) => patch({ loaderVersion: v })}
                 />
                 <SearchSelect
@@ -79,6 +86,7 @@ export function RuntimeEnvCard({
                     label="Java 版本"
                     value={options?.javaVersion ?? ""}
                     options={javaOptions}
+                    readOnly={readOnly}
                     onChange={(v) => patch({ javaVersion: v })}
                 />
             </div>
@@ -86,6 +94,7 @@ export function RuntimeEnvCard({
             <InlineRow label="生成启动脚本（start.sh / start.bat）">
                 <Toggle
                     checked={options?.generateScripts ?? true}
+                    readOnly={readOnly}
                     onChange={(v) => patch({ generateScripts: v })}
                 />
             </InlineRow>
@@ -98,15 +107,20 @@ export function RuntimeEnvCard({
 export function KeepDirsCard({
     options,
     packDirs,
+    parsed,
     onPick,
     onRemove,
+    readOnly,
 }: {
     options: ConversionOptions | null;
     /** 目录勾选弹窗数据源（含递归文件数） */
     packDirs: PackDirNode[];
+    /** 源包是否还能解析出目录树：回看旧任务时源文件可能已被移走，那时不能谎称「包内没有资源」 */
+    parsed: boolean;
     onPick: () => void;
     /** 卡片行内移除单个保留目录（批量增删走 DirPickerModal 应用回写） */
     onRemove: (path: string) => void;
+    readOnly?: boolean;
 }) {
     const keepDirs = options?.keepDirs ?? [];
     return (
@@ -114,16 +128,22 @@ export function KeepDirsCard({
             <PanelHead
                 title="客户端保留目录"
                 right={
-                    <Btn size="sm" icon={Plus} disabled={packDirs.length === 0} onClick={onPick}>
-                        添加目录
-                    </Btn>
+                    readOnly ? undefined : (
+                        <Btn size="sm" icon={Plus} disabled={packDirs.length === 0} onClick={onPick}>
+                            添加目录
+                        </Btn>
+                    )
                 }
             />
             {keepDirs.length === 0 ? (
                 <p className="w-full py-3 text-center text-[11px] text-text-3">
-                    {packDirs.length === 0
-                        ? "包内未检测到可保留的目录（mods 之外没有资源文件）"
-                        : "尚未选择目录 · 点击上方「添加目录」从包内勾选"}
+                    {readOnly
+                        ? "该任务未保留任何包内目录"
+                        : packDirs.length === 0
+                          ? parsed
+                                ? "包内未检测到可保留的目录（mods 之外没有资源文件）"
+                                : "源包已不在原位置 · 该任务未保留任何包内目录"
+                          : "尚未选择目录 · 点击上方「添加目录」从包内勾选"}
                 </p>
             ) : (
                 <div className="flex w-full flex-col gap-1">
@@ -153,19 +173,21 @@ export function KeepDirsCard({
                                             {dir.fileCount} 文件
                                         </span>
                                     )}
-                                    <button
-                                        onClick={() => onRemove(p)}
-                                        aria-label="移除"
-                                        className={cn(
-                                            TIP_TRIGGER,
-                                            "size-6 rounded-md text-text-3",
-                                            "flex shrink-0 items-center justify-center transition-colors",
-                                            "hover:bg-redstone-dim hover:text-redstone"
-                                        )}
-                                    >
-                                        <X className="size-3" />
-                                        <Tip label="移除" />
-                                    </button>
+                                    {!readOnly && (
+                                        <button
+                                            onClick={() => onRemove(p)}
+                                            aria-label="移除"
+                                            className={cn(
+                                                TIP_TRIGGER,
+                                                "size-6 rounded-md text-text-3",
+                                                "flex shrink-0 items-center justify-center transition-colors",
+                                                "hover:bg-redstone-dim hover:text-redstone"
+                                            )}
+                                        >
+                                            <X className="size-3" />
+                                            <Tip label="移除" />
+                                        </button>
+                                    )}
                                 </motion.div>
                             );
                         })}
@@ -173,7 +195,11 @@ export function KeepDirsCard({
                 </div>
             )}
             <NoteRow icon={Info}>
-                勾选的目录按原层级从源包复制到服务端（支持子目录）
+                {readOnly
+                    ? "这些目录当时按原层级从源包复制进了服务端包（支持子目录）"
+                    : parsed
+                      ? "勾选的目录按原层级从源包复制到服务端（支持子目录）"
+                      : "源包已不在原位置 · 无法浏览包内目录，已有条目仍可移除"}
             </NoteRow>
         </Panel>
     );
@@ -184,9 +210,11 @@ export function KeepDirsCard({
 export function LaunchArgsCard({
     options,
     patch,
+    readOnly,
 }: {
     options: ConversionOptions | null;
     patch: Patch;
+    readOnly?: boolean;
 }) {
     return (
         <Panel gap={14}>
@@ -197,21 +225,28 @@ export function LaunchArgsCard({
                     min={1}
                     max={32}
                     suffix="GB"
+                    readOnly={readOnly}
                     onChange={(v) => patch({ memoryMb: v * 1024 })}
                 />
             </InlineRow>
             <InlineRow label="无界面模式启动（--nogui）">
-                <Toggle checked={options?.nogui ?? false} onChange={(v) => patch({ nogui: v })} />
+                <Toggle
+                    checked={options?.nogui ?? false}
+                    readOnly={readOnly}
+                    onChange={(v) => patch({ nogui: v })}
+                />
             </InlineRow>
             <InlineRow label="自动写入 eula=true（同意 Mojang EULA）">
                 <Toggle
                     checked={options?.agreeEula ?? true}
+                    readOnly={readOnly}
                     onChange={(v) => patch({ agreeEula: v })}
                 />
             </InlineRow>
             <InlineRow label="Aikar's flags 优化参数组（G1GC 推荐）">
                 <Toggle
                     checked={options?.useAikarFlags ?? false}
+                    readOnly={readOnly}
                     onChange={(v) => patch({ useAikarFlags: v })}
                 />
             </InlineRow>
@@ -219,6 +254,7 @@ export function LaunchArgsCard({
                 <TextInput
                     className="w-[240px]"
                     value={options?.extraJvmArgs ?? ""}
+                    readOnly={readOnly}
                     onChange={(e) => patch({ extraJvmArgs: e.target.value })}
                     placeholder="原样拼入 start 脚本"
                     spellCheck={false}
@@ -233,9 +269,11 @@ export function LaunchArgsCard({
 export function ServerSettingsCard({
     options,
     patch,
+    readOnly,
 }: {
     options: ConversionOptions | null;
     patch: Patch;
+    readOnly?: boolean;
 }) {
     return (
         <Panel gap={14}>
@@ -246,6 +284,7 @@ export function ServerSettingsCard({
                     label="游戏模式"
                     value={options?.gamemode ?? "survival"}
                     options={GAMEMODE_OPTIONS}
+                    readOnly={readOnly}
                     onChange={(v) => patch({ gamemode: v as ConversionOptions["gamemode"] })}
                 />
                 <SearchSelect
@@ -253,6 +292,7 @@ export function ServerSettingsCard({
                     label="难度"
                     value={options?.difficulty ?? "easy"}
                     options={DIFFICULTY_OPTIONS}
+                    readOnly={readOnly}
                     onChange={(v) => patch({ difficulty: v as ConversionOptions["difficulty"] })}
                 />
             </div>
@@ -262,6 +302,7 @@ export function ServerSettingsCard({
                         value={options?.serverPort ?? 25565}
                         min={1}
                         max={65535}
+                        readOnly={readOnly}
                         onCommit={(v) => patch({ serverPort: v })}
                     />
                 </Field>
@@ -270,6 +311,7 @@ export function ServerSettingsCard({
                         value={options?.maxPlayers ?? 20}
                         min={1}
                         max={1000}
+                        readOnly={readOnly}
                         onCommit={(v) => patch({ maxPlayers: v })}
                     />
                 </Field>
@@ -278,6 +320,7 @@ export function ServerSettingsCard({
                 <TextInput
                     className="w-full"
                     value={options?.motd ?? ""}
+                    readOnly={readOnly}
                     onChange={(e) => patch({ motd: e.target.value })}
                     placeholder="显示在服务器列表中的一行描述"
                     spellCheck={false}
@@ -287,6 +330,7 @@ export function ServerSettingsCard({
                 <TextInput
                     className="w-full"
                     value={options?.levelSeed ?? ""}
+                    readOnly={readOnly}
                     onChange={(e) => patch({ levelSeed: e.target.value })}
                     placeholder="如 4045151867437057206"
                     spellCheck={false}
@@ -296,6 +340,7 @@ export function ServerSettingsCard({
             <InlineRow label="正版验证（online-mode）">
                 <Toggle
                     checked={options?.onlineMode ?? true}
+                    readOnly={readOnly}
                     onChange={(v) => patch({ onlineMode: v })}
                 />
             </InlineRow>
@@ -322,11 +367,13 @@ function NumField({
     value,
     min,
     max,
+    readOnly,
     onCommit,
 }: {
     value: number;
     min: number;
     max: number;
+    readOnly?: boolean;
     onCommit: (v: number) => void;
 }) {
     const [draft, setDraft] = useState(String(value));
@@ -336,6 +383,7 @@ function NumField({
             className="w-full"
             inputMode="numeric"
             value={draft}
+            readOnly={readOnly}
             onChange={(e) => setDraft(e.target.value.replace(/\D/g, "").slice(0, 6))}
             onBlur={() => {
                 const n = parseInt(draft, 10);

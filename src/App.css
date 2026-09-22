@@ -17,12 +17,52 @@
 
 @custom-variant dark (&:is(.dark *));
 
+/* 主题切换的圆形展开（驱动方：src/lib/theme.ts 的 switchTheme）
+ * VT 期间真 DOM 被快照定格，所以旧画面静止在下层、新配色做成从圆心扩开的 clip-path；
+ * 圆心/半径是切换前写在 <html> 上的 --vt-x/y/r，半径已取到视口最远角。
+ * 没拿到变量时兜成屏幕中心，宁可居中铺开也不要露一块旧色。
+ *
+ * 曲线口径「等速主体 + 长尾刹车」。两处要点（数值都在下面的 keyframe 里，改这两处就够）：
+ * ① 刹车点要**早**：半径过了 ~80% 之后屏幕上只剩墙角，那段路再慢也看不见，所以减速必须发生在
+ *    还有大片边缘被扫过时。断点从「40% 时间 / 55% 半径」提到「22% / 36%」——等速段只占前 1/5。
+ *    实测（按半径推进算）：50% 半径仍在 192ms，主体速度 2.48 R/s 没变 ⇒ 「匀速」的观感保留；
+ *    但 80%→100% 的尾程从 231ms 拉到 345ms，最后 100ms 只推进 1.2% 半径（原 3.1%）⇒ 落地慢了一倍多。
+ * ② 两段要**速度连续**：CSS 的分段 easing 按"本段自己的时长/行程"归一化，下一段起始斜率必须等于
+ *    上一段速度，否则接缝处先窜一下再刹。公式 s0 = F(1-P)/(P(1-F)) = 1.99，贝塞尔原点斜率 y1/x1
+ *    = 0.32/0.16 = 2.00 ⇒ 无级差。（上一版用 (0.12,0.68) 得 5.67，正是"看着还是急停"的来源。）
+ * y2=0.99 让最后那点半径是爬进去的：太接近 1 会读成"卡住没演完"，这是唯一的边界，别乱抬。
+ * 一条 cubic-bezier 做不到这个形状：(.4,0,.2,1) 两头都平，会把中段甩出去、起手还先软一下。 */
+@keyframes theme-reveal {
+  from {
+    clip-path: circle(0 at var(--vt-x, 50%) var(--vt-y, 50%));
+    animation-timing-function: linear;
+  }
+  22% {
+    clip-path: circle(calc(var(--vt-r, 150%) * 0.36) at var(--vt-x, 50%) var(--vt-y, 50%));
+    animation-timing-function: cubic-bezier(0.16, 0.32, 0.25, 0.99);
+  }
+  to {
+    clip-path: circle(var(--vt-r, 150%) at var(--vt-x, 50%) var(--vt-y, 50%));
+  }
+}
+
+::view-transition-old(root) {
+  animation: none;
+}
+
+::view-transition-new(root) {
+  animation: theme-reveal 660ms both;
+}
+
 :root {
   font-synthesis: none;
   text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
   -webkit-text-size-adjust: 100%;
+  /* 原生层（WebView2 的悬浮滚动条、表单控件、overscroll 底色）跟着 .dark 同步翻面，
+   * 否则会露出「内容已暗、原生条还亮」的一帧；自定义的 ::-webkit-scrollbar 规则优先于此 */
+  color-scheme: light;
 
   /* ---- 底色与表面 ---- */
   --bg-app: #f5f6f8;          /* 应用底色（窗口背景） */
@@ -94,6 +134,8 @@
 
 /* ================= 深色主题 ================= */
 .dark {
+  color-scheme: dark;
+
   --bg-app: #121317;
   --bg-panel: #17181d;
   --surface: #1d1f26;

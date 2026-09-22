@@ -4,6 +4,9 @@
  * checkout 式骨架：BodyRow gap20 = 左列（gap16，三张卡各 gap14）+ 右栏 280px 摘要卡。
  * 全局默认值来自设置页（api.defaultOptions），本页做的是“单包覆写”——离开即丢弃。
  *
+ * 两种数据源（见下方装载 effect）：从首页进来是「现算一份待确认的方案」，
+ * 从任务详情带 taskId 进来是「回看这个任务真正用过的方案与参数」。
+ *
  * 模组方案的处置编辑模型：
  *  - plan（后端/mock 给的原始方案）+ extras（本页新增的模组）为数据源
  *  - overrides 记录用户对 remove/keep 的改动；disabledIds 记录被停用的新增行（行保留、不构建）
@@ -48,8 +51,15 @@ import { ModPlanCard } from "./ModPlanCard";
 import { CARD_RISE, KEEP_DIR_PRESETS, PAGE_RISE, PREVIEW_ROWS, toOption } from "./constants";
 
 export function ConvertPage() {
-    const { entry, navigate, switchPrimary } = useNavigation();
+    const { entry, navigate, back, switchPrimary } = useNavigation();
     const manifest = entry.params?.manifest as PackManifest | undefined;
+    /** 回看来源：任务详情「查看转换方案」/ 检测失败「去修正」会带 taskId 进来。
+     *  带了它，页面的数据源就从「现算」切到「任务存档」（见下面的装载分支），且整页只读。 */
+    const reviewTaskId = entry.params?.taskId as string | undefined;
+    /** 只读不是「禁用样式」而是「静态渲染」：控件该显示成什么样还显示成什么样，只是不给假出口。
+     *  这里不提供「照着存档再转一次」：存档只记决策不记字节锚（PlanMod 无 sha1），源包被改过就会
+     *  静默产出对不上的包，且清缓存/删包后更是未知数 —— 这个页的语义只有「展示方案」。 */
+    const readOnly = !!reviewTaskId;
 
     const [options, setOptions] = useState<ConversionOptions | null>(null);
     const [plan, setPlan] = useState<PlanMod[]>([]);
@@ -77,6 +87,10 @@ export function ConvertPage() {
     const [settings, setSettings] = useState<AppSettings | null>(null);
     /** 包内可保留目录树（目录勾选弹窗数据源） */
     const [packDirs, setPackDirs] = useState<PackDirNode[]>([]);
+    /** 源包是否还能解析：回看旧任务时文件可能已被移走，那时不能对「包内有什么」下结论 */
+    const [packParsed, setPackParsed] = useState(true);
+    /** 该任务真正写出的产物路径（回看态用它，而不是「按当前设置再猜一遍输出到哪」） */
+    const [taskOutput, setTaskOutput] = useState("");
     const [dirModalOpen, setDirModalOpen] = useState(false);
     /** 自动分类进行中：离线层是同步返回，在线层补全后走 classified 事件再刷一次 */
     const [classifying, setClassifying] = useState(false);
@@ -119,26 +133,53 @@ export function ConvertPage() {
         }
     }
 
-    // 进入页面：默认选项（以包的 MC 版本为准）+ 模组方案 + 版本下拉数据
-    // keepDirs 预勾选：与目录树一并加载后探测包内存在的推荐目录；用户已有选择则不覆盖
+    // 数据装载有两种来源，混用就会看到假数据：
+    //  - **新配置**（首页选完包进来）：包正躺在后端解析缓存里，按全局默认值 + 自动分类现算一份待确认的方案。
+    //  - **回看任务**（带 taskId）：读任务存档 —— `options` 用当时那份（含保留目录、服务端设置、输出覆写），
+    //    方案用创建时确认过的快照 `getTaskPlan`（含用户手改的处置）。回看分支不能改回去跑
+    //    `defaultOptions`/`classifyPack`：那两个命令只认「最近一次解析的包」，而解析缓存刻意不落盘
+    //    （tasks.json 只有任务/方案/报告）。于是重启后从任务列表进来必然全空，中途选过别的包
+    //    则拿另一个包的方案张冠李戴；即便缓存恰好还对得上，那也只是「此刻重新猜一遍」，
+    //    不是这个任务真正构建时用过的方案。
+    // 包内目录树要重解析源包才有：`ensureParsed` 先把后端指针对准这个包，源文件已不在时返回 false，
+    // 那时树是空的（当时保留的目录仍然逐条列出来，只是不带文件数、开不了勾选弹窗）。
     useEffect(() => {
         if (!manifest) return;
-        void Promise.all([api.defaultOptions(manifest), api.listPackDirs()]).then(([o, nodes]) => {
-            setPackDirs(nodes);
-            const present = KEEP_DIR_PRESETS.filter((name) =>
-                nodes.some((n) => n.name.toLowerCase() === name)
-            );
-            setOptions({
-                ...o,
-                mcVersion: manifest.mcVersion,
-                keepDirs: o.keepDirs.length ? o.keepDirs : present,
+        if (reviewTaskId) {
+            void api.getTask(reviewTaskId).then((t) => {
+                if (!t) return;
+                setOptions(t.options);
+                setTaskOutput(t.outputPath ?? "");
             });
-        });
-        void runClassify(false);
+            void api.getTaskPlan(reviewTaskId).then(setPlan);
+            void api
+                .ensureParsed(manifest)
+                .then((ok) => {
+                    setPackParsed(ok);
+                    return ok ? api.listPackDirs() : [];
+                })
+                .then(setPackDirs);
+        } else {
+            setPackParsed(true);
+            void Promise.all([api.defaultOptions(manifest), api.listPackDirs()]).then(
+                ([o, nodes]) => {
+                    setPackDirs(nodes);
+                    const present = KEEP_DIR_PRESETS.filter((name) =>
+                        nodes.some((n) => n.name.toLowerCase() === name)
+                    );
+                    setOptions({
+                        ...o,
+                        mcVersion: manifest.mcVersion,
+                        keepDirs: o.keepDirs.length ? o.keepDirs : present,
+                    });
+                }
+            );
+            void runClassify(false);
+        }
         void api.listMcVersions().then((l) => setMcOptions(l.map(toOption)));
         void api.listJavaVersions().then((l) => setJavaOptions(l.map(toOption)));
         void api.getSettings().then(setSettings);
-    }, [manifest]);
+    }, [manifest, reviewTaskId]);
 
     // 在线反查的补全结论：后端换包后会停推，这里再按 fileName 拦一道，防迟到事件串台
     const packName = manifest?.fileName;
@@ -268,7 +309,7 @@ export function ConvertPage() {
 
     // 350ms 防抖向后端要真实预估；加载器版本未定时不发请求（构建期必失败，数字无意义）
     useEffect(() => {
-        if (!options || !options.loaderVersion.trim()) {
+        if (!options || readOnly || !options.loaderVersion.trim()) {
             setRemoteEstimate(null);
             return;
         }
@@ -284,7 +325,7 @@ export function ConvertPage() {
             clearTimeout(timer);
         };
         // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [estimateKey]);
+    }, [estimateKey, readOnly]);
 
     const estimate = remoteEstimate ?? localEstimate;
 
@@ -505,12 +546,20 @@ export function ConvertPage() {
     const totalRows = mods.length;
     /** 手动重跑会先清空方案，那一瞬不能说「正在读取整合包」（包早就读过了） */
     const readingLabel = reclassifying ? "正在重新自动分类…" : "正在读取整合包…";
+    /** 存档里一行方案都没有（排队中/当时就失败在检测阶段）：这时「该分类下暂无模组」会被读成「这个包没模组」 */
+    const emptyLabel = reviewTaskId ? "该任务暂无可用的方案记录" : undefined;
     const loader = loaderLabel(manifest.loader);
     const patch = (p: Partial<ConversionOptions>) => setOptions((o) => (o ? { ...o, ...p } : o));
 
     /** 本次输出目录 = 单包覆写 ?? 全局设置 */
     const outputOverride = options?.outputOverride?.trim() ?? "";
     const effectiveOutputDir = outputOverride || settings?.outputDir || "";
+    /** 回看态说「产物」而不是「本次输出」：路径由任务记录给出，同名包加序号后与默认名并不相同 */
+    const outputBaseName = taskOutput.split(/[\\/]/).pop() ?? taskOutput;
+    const outputParentDir = taskOutput.slice(
+        0,
+        Math.max(taskOutput.lastIndexOf("/"), taskOutput.lastIndexOf("\\"))
+    );
 
     const chooseOutputDir = async () => {
         const dir = await api.pickDirectory();
@@ -526,8 +575,12 @@ export function ConvertPage() {
         >
             <motion.div variants={CARD_RISE}>
                 <PageHeader
-                    title="转换配置"
-                    sub={`${truncateMiddle(manifest.fileName, 34)} · ${loader} · Minecraft ${manifest.mcVersion} · 检测完成，确认转换方案后开始构建`}
+                    title={reviewTaskId ? "转换方案" : "转换配置"}
+                    sub={`${truncateMiddle(manifest.fileName, 34)} · ${loader} · Minecraft ${manifest.mcVersion} · ${
+                        readOnly
+                            ? "该任务当时确认并用于构建的方案"
+                            : "检测完成，确认转换方案后开始构建"
+                    }`}
                 />
             </motion.div>
 
@@ -543,6 +596,7 @@ export function ConvertPage() {
                             mcOptions={mcOptions}
                             loaderOptions={loaderOptions}
                             javaOptions={javaOptions}
+                            readOnly={readOnly}
                         />
                     </motion.div>
 
@@ -555,11 +609,13 @@ export function ConvertPage() {
                             classifying={classifying}
                             totalRows={totalRows}
                             readingLabel={readingLabel}
+                            emptyLabel={emptyLabel}
                             depWarnings={depWarnings}
                             localIds={localIds}
                             removableIds={extrasIds}
                             manualEdits={manualEdits}
                             confirmClear={confirmClear}
+                            readOnly={readOnly}
                             onToggleRow={(m) =>
                                 m.disposition === "add"
                                     ? toggleAddActive(m)
@@ -585,17 +641,19 @@ export function ConvertPage() {
                         <KeepDirsCard
                             options={options}
                             packDirs={packDirs}
+                            parsed={packParsed}
                             onPick={() => setDirModalOpen(true)}
                             onRemove={removeDir}
+                            readOnly={readOnly}
                         />
                     </motion.div>
 
                     <motion.div variants={CARD_RISE} className="min-w-0">
-                        <LaunchArgsCard options={options} patch={patch} />
+                        <LaunchArgsCard options={options} patch={patch} readOnly={readOnly} />
                     </motion.div>
 
                     <motion.div variants={CARD_RISE} className="min-w-0">
-                        <ServerSettingsCard options={options} patch={patch} />
+                        <ServerSettingsCard options={options} patch={patch} readOnly={readOnly} />
                     </motion.div>
                 </div>
 
@@ -607,44 +665,88 @@ export function ConvertPage() {
                         <CountRow label="保留服务端模组" count={counts.keep} tone="emerald" />
                         <CountRow label="新增服务端模组" count={counts.add} tone="accent" />
                         <Divider />
-                        <NoteRow icon={Download}>
-                            {estimate.downloadBytes > 0
-                                ? `预计下载 ${formatSize(estimate.downloadBytes)}`
-                                : "无需联网下载 · 全部来自整合包与本地"}
-                            {!estimate.complete && estimate.downloadBytes > 0 && "（估算）"}
-                        </NoteRow>
-                        <NoteRow icon={Archive}>输出 {outputNameOf(manifest.fileName)}</NoteRow>
-                        <NoteRow icon={Folder}>
-                            {effectiveOutputDir ? truncateMiddle(effectiveOutputDir, 26) : "默认输出目录"}
-                        </NoteRow>
-                        <div className="flex w-full items-center justify-between gap-2">
-                            <LinkBtn size="sm" onClick={() => void chooseOutputDir()}>
-                                {outputOverride ? "更换本次目录…" : "本次改用其他目录…"}
-                            </LinkBtn>
-                            {!!outputOverride && (
-                                <LinkBtn size="sm" onClick={() => patch({ outputOverride: "" })}>
-                                    恢复全局
-                                </LinkBtn>
-                            )}
-                        </div>
-                        <Btn
-                            variant="primary"
-                            full
-                            disabled={!options || starting || classifying || !options.loaderVersion.trim()}
-                            onClick={() => void start()}
-                        >
-                            {starting ? "创建任务中…" : "开始转换"}
-                            {!starting && <ChevronRight className="size-[13px]" />}
-                        </Btn>
-                        <Btn size="sm" full className="font-medium" onClick={() => switchPrimary("home")}>
-                            返回首页
-                        </Btn>
+                        {/* 回看态不给「预计下载」：那条任务已经跑完，真实的取件构成在任务详情与报告里，
+                            这里再算一遍是对未来说话的假数据 */}
+                        {!readOnly && (
+                            <NoteRow icon={Download}>
+                                {estimate.downloadBytes > 0
+                                    ? `预计下载 ${formatSize(estimate.downloadBytes)}`
+                                    : "无需联网下载 · 全部来自整合包与本地"}
+                                {!estimate.complete && estimate.downloadBytes > 0 && "（估算）"}
+                            </NoteRow>
+                        )}
+                        {readOnly ? (
+                            taskOutput ? (
+                                <>
+                                    <NoteRow icon={Archive}>输出 {outputBaseName}</NoteRow>
+                                    <NoteRow icon={Folder}>
+                                        {truncateMiddle(outputParentDir, 26)}
+                                    </NoteRow>
+                                </>
+                            ) : (
+                                <NoteRow icon={Archive}>该任务尚未产出服务端包</NoteRow>
+                            )
+                        ) : (
+                            <>
+                                <NoteRow icon={Archive}>
+                                    输出 {outputNameOf(manifest.fileName)}
+                                </NoteRow>
+                                <NoteRow icon={Folder}>
+                                    {effectiveOutputDir
+                                        ? truncateMiddle(effectiveOutputDir, 26)
+                                        : "默认输出目录"}
+                                </NoteRow>
+                                <div className="flex w-full items-center justify-between gap-2">
+                                    <LinkBtn size="sm" onClick={() => void chooseOutputDir()}>
+                                        {outputOverride ? "更换本次目录…" : "本次改用其他目录…"}
+                                    </LinkBtn>
+                                    {!!outputOverride && (
+                                        <LinkBtn size="sm" onClick={() => patch({ outputOverride: "" })}>
+                                            恢复全局
+                                        </LinkBtn>
+                                    )}
+                                </div>
+                            </>
+                        )}
+                        {readOnly ? (
+                            /* 回看态没有任何写动作，底部只留一条退路 */
+                            <Btn size="sm" full className="font-medium" onClick={back}>
+                                返回任务详情
+                            </Btn>
+                        ) : (
+                            <>
+                                <Btn
+                                    variant="primary"
+                                    full
+                                    disabled={
+                                        !options ||
+                                        starting ||
+                                        classifying ||
+                                        !options.loaderVersion.trim()
+                                    }
+                                    onClick={() => void start()}
+                                >
+                                    {starting ? "创建任务中…" : "开始转换"}
+                                    {!starting && <ChevronRight className="size-[13px]" />}
+                                </Btn>
+                                <Btn
+                                    size="sm"
+                                    full
+                                    className="font-medium"
+                                    onClick={() => switchPrimary("home")}
+                                >
+                                    返回首页
+                                </Btn>
+                            </>
+                        )}
                         <p className="w-full text-center text-[10px] leading-[14px] font-normal text-text-3">
-                            {classifying
-                                ? "自动分类进行中，方案落定后方可开始构建"
-                                : options && !options.loaderVersion.trim()
-                                  ? "正在获取 Loader 版本列表，选定后方可开始转换"
-                                  : "转换过程可随时取消，已下载依赖自动缓存复用"}
+                            {readOnly
+                                ? "此处只回看当时的方案 · 需要再转换请返回首页重新配置"
+                                : classifying
+                                  ? "自动分类进行中，方案落定后方可开始构建"
+                                  : options && !options.loaderVersion.trim()
+                                    ? "正在获取 Loader 版本列表，选定后方可开始转换"
+                                    : "转换过程可随时取消，已下载依赖自动缓存复用"}
                         </p>
                     </Panel>
                 </motion.aside>
@@ -654,6 +756,7 @@ export function ConvertPage() {
                 open={listOpen}
                 onClose={() => setListOpen(false)}
                 focus={listFocus}
+                readOnly={readOnly}
                 // 三窗各列本处置的行（窗内全部展示，滚动）
                 mods={mods.filter((m) => m.disposition === listFocus)}
                 onDisposition={(id, d) => {

@@ -38,6 +38,14 @@ export async function parsePack(path: string): Promise<PackManifest> {
     return invokeOrMock("parse_pack", { path }, () => mock.mockParsePack(path));
 }
 
+/** 让后端「最近一次解析的包」指向这个包（Rust: ensure_parsed(manifest) -> bool）。
+ *  方案与目录树三个命令都只认那一个包，从任务里回看时必须先对准它。
+ *  false = 内存没缓存且源文件已不在，只有需要重解析的明细（包内目录树）拿不到 */
+export async function ensureParsed(manifest: PackManifest): Promise<boolean> {
+    if (!isTauri) return true;
+    return invokeOrMock("ensure_parsed", { manifest }, () => true);
+}
+
 /** MC 版本列表（Rust: list_mc_versions） */
 export async function listMcVersions(): Promise<VersionOption[]> {
     if (!isTauri) return mock.mockMcVersions;

@@ -195,7 +195,11 @@ export function TaskDetailPage() {
                                 task.error.stage === "parser"
                                     ? () => switchPrimary("home")
                                     : task.error.stage === "detector"
-                                      ? () => navigate("convert", { manifest: task.pack })
+                                      ? () =>
+                                            navigate("convert", {
+                                                taskId: task.id,
+                                                manifest: task.pack,
+                                            })
                                       : undefined
                             }
                             onShowLog={
@@ -359,7 +363,14 @@ export function TaskDetailPage() {
                         />
                         <Divider />
 
-                        <Btn size="sm" full className="text-text-1" onClick={() => navigate("convert", { manifest: task.pack })}>
+                        <Btn
+                            size="sm"
+                            full
+                            className="text-text-1"
+                            onClick={() =>
+                                navigate("convert", { taskId: task.id, manifest: task.pack })
+                            }
+                        >
                             查看转换方案
                         </Btn>
                         {running && (

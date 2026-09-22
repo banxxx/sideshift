@@ -18,6 +18,7 @@ export function Stepper({
     max = 64,
     suffix,
     plain,
+    readOnly,
 }: {
     value: number;
     onChange: (v: number) => void;
@@ -25,8 +26,28 @@ export function Stepper({
     max?: number;
     suffix?: string;
     plain?: boolean;
+    /** 回看态：只留值区，± 与分隔线一起去掉（留着就是「能点却不能点」的假出口） */
+    readOnly?: boolean;
 }) {
     const step = (d: number) => onChange(Math.min(max, Math.max(min, value + d)));
+    const valueCls = cn(
+        "inline-flex h-8 items-center justify-center font-mono text-[12px] leading-[18px] font-semibold text-text-1",
+        plain ? "w-10" : "px-3.5"
+    );
+    if (readOnly)
+        return (
+            <div
+                className={cn(
+                    "flex h-8 shrink-0 items-center rounded-lg border border-stroke",
+                    !plain && "bg-surface"
+                )}
+            >
+                <span className={valueCls}>
+                    {value}
+                    {suffix && <span className="ml-1">{suffix}</span>}
+                </span>
+            </div>
+        );
     return (
         <div
             className={cn(
@@ -42,12 +63,7 @@ export function Stepper({
                 <Minus className="size-3" />
             </button>
             <span className={cn("w-px bg-stroke", plain ? "h-[30px]" : "h-5")} />
-            <span
-                className={cn(
-                    "inline-flex h-8 items-center justify-center font-mono text-[12px] leading-[18px] font-semibold text-text-1",
-                    plain ? "w-10" : "px-3.5"
-                )}
-            >
+            <span className={valueCls}>
                 {value}
                 {suffix && <span className="ml-1">{suffix}</span>}
             </span>
@@ -70,21 +86,26 @@ export function Toggle({
     onChange,
     size = "sm",
     disabled,
+    readOnly,
 }: {
     checked: boolean;
     onChange: (v: boolean) => void;
     size?: "sm" | "md";
     disabled?: boolean;
+    /** 回看态：不跟 `disabled` 共用那条灰化规则——开与关都是要核对的信息，压暗就看不出来了 */
+    readOnly?: boolean;
 }) {
     return (
         <button
             role="switch"
             aria-checked={checked}
+            aria-disabled={readOnly}
             disabled={disabled}
-            onClick={() => onChange(!checked)}
+            onClick={readOnly ? undefined : () => onChange(!checked)}
             className={cn(
                 "flex shrink-0 items-center rounded-full p-0.5 transition-colors",
                 "disabled:pointer-events-none disabled:opacity-60",
+                readOnly && "pointer-events-none",
                 size === "sm" ? "h-5 w-9" : "h-[22px] w-[38px] p-[3px]",
                 checked ? "justify-end bg-accent" : "justify-start border border-stroke bg-surface-2"
             )}
@@ -100,6 +121,7 @@ export function TextInput({
     icon: Icon,
     plain,
     className,
+    readOnly,
     ...rest
 }: React.ComponentProps<"input"> & { icon?: LucideIcon; plain?: boolean }) {
     return (
@@ -107,12 +129,14 @@ export function TextInput({
             className={cn(
                 "flex h-8 shrink-0 items-center gap-[7px] rounded-lg px-2.5",
                 plain ? "border border-stroke bg-bg-app" : "bg-surface-2",
-                "focus-within:ring-1 focus-within:ring-accent",
+                // 回看态不配焦点环：亮起来是在说「这里能打字」，而它只是段可选中的值
+                !readOnly && "focus-within:ring-1 focus-within:ring-accent",
                 className
             )}
         >
             {Icon && <Icon className="size-3 shrink-0 text-text-3" />}
             <input
+                readOnly={readOnly}
                 className={cn(
                     "min-w-0 flex-1 bg-transparent outline-none placeholder:text-text-3",
                     plain
@@ -132,23 +156,27 @@ export function CheckBox({
     checked,
     review,
     onChange,
+    readOnly,
 }: {
     checked: boolean;
     review?: boolean;
     onChange: (v: boolean) => void;
+    /** 回看态：勾选态照原样显示（它是「这一项进没进包」的读数），但不接点击、不留悬停 */
+    readOnly?: boolean;
 }) {
     return (
         <button
             role="checkbox"
             aria-checked={checked}
-            onClick={() => onChange(!checked)}
+            aria-disabled={readOnly}
+            onClick={readOnly ? undefined : () => onChange(!checked)}
             className={cn(
                 "flex size-4 shrink-0 items-center justify-center rounded transition-colors",
                 checked
                     ? "bg-accent"
                     : review
                       ? "border border-gold bg-surface"
-                      : "border border-stroke bg-surface hover:border-text-3"
+                      : cn("border border-stroke bg-surface", !readOnly && "hover:border-text-3")
             )}
         >
             {checked && <Check className="size-2.5 text-accent-ink" strokeWidth={3} />}

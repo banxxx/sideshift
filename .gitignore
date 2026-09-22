@@ -12,6 +12,9 @@ dist
 dist-ssr
 *.local
 
+# TypeScript 增量编译缓存（`tsc` 每次 build 都会写）
+*.tsbuildinfo
+
 # 设计稿对照用 scratch（PNG 导出 + 读 .pen 的一次性脚本）
 .design-ref
 
