@@ -12,6 +12,7 @@ import { TasksPage } from "@/features/tasks/TasksPage";
 import { SettingsPage } from "@/features/settings/SettingsPage";
 import { ConvertPage } from "@/features/convert/ConvertPage";
 import { TaskDetailPage } from "@/features/task/TaskDetailPage";
+import { TrashBin } from "@/features/tasks/TrashBin";
 import { PackStoreProvider } from "@/lib/pack-store";
 import {
     NavigationProvider,
@@ -62,6 +63,8 @@ function Shell() {
                 <main className="page-scroll flex-1 overflow-auto px-8 py-6">
                     <Page />
                 </main>
+                {/* 回收站入口：整窗右下角常驻（飞行卡片的落点），空回收站时透明不接收点击 */}
+                <TrashBin />
             </div>
         </div>
     );

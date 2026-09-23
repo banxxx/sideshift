@@ -8,19 +8,46 @@
  *  row3 = 左等宽明细行 + 右操作按钮组（槽位固定：删除最左 → 状态动作 → 主按钮进详情，
  *         失败态改为错误盒 + 右对齐按钮；详情页是任务唯一的下钻目的地，列表不再各发各的跳转）
  * 空态为 560 高无边框块：56×56 图标盒 + 两行等宽文案 + accent 主按钮。
+ *
+ * 删除不是「点一下就没」，而是一段可反悔的动作（曲线与节奏见 ./delete-flight.ts）：
+ * 两个入口（删除按钮 / 卡片聚焦后按 Delete）走同一条流程 ——
+ * 卡片克隆出去沿弧线飞进右下角垃圾桶，`lead` 时刻才从列表摘掉并通知后端（下方卡片用 motion 的
+ * layout 弹簧补位），落地前点它或按 Esc 都算追回，数据没动过。
  */
 import { Check, Download, Inbox, RefreshCw, X } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import { motion, type Transition } from "motion/react";
 import * as api from "@/lib/api";
 import { notify } from "@/lib/notify";
 import { useNavigation } from "@/lib/navigation";
 import { BAR_COLOR, needsNetwork, progressChip, runCounts, stageLabel } from "@/lib/rail-view";
 import { formatDuration, formatElapsed, formatSize, loaderLabel, outputNameOf, truncateMiddle } from "@/lib/format";
+import {
+    commitDelete,
+    restoreDeleted,
+    stageDeleted,
+    syncTrash,
+    unstageDeleted,
+    useTasksReloadTick,
+    useTrash,
+} from "@/lib/trash-store";
 import type { ConversionTask, TaskStatus } from "@/lib/types";
 import { Bar, Btn, PageHeader, Panel, SegTabs, ToneChip } from "@/components/ui";
 import { cn } from "@/lib/utils";
+import {
+    abortAllFlights,
+    prefersReducedMotion,
+    startFlight,
+    type Flight,
+} from "./delete-flight";
 
 type Filter = "all" | "running" | "success" | "failed";
+
+/** 补位弹簧（样片实测 k=340 / c=26）：位移大的自己跑得快，到位时间近似恒定
+ *  （实测 40px≈367ms、466px≈467ms）；错峰靠 delay 排出一道波，而不是靠快慢差。 */
+const REFLOW: Transition = { type: "spring", stiffness: 340, damping: 26, mass: 1 };
+/** 只给最靠前几张排错峰，第 6 张之后再等就成「卡片在原地迟到了」 */
+const STAGGER_STEP = 0.026;
 
 /** 状态 → 图标盒配色与图标（36×36 r10，$*-dim 底 + 17px 图标） */
 const CARD_ICON: Record<TaskStatus, { icon: typeof Check; box: string; fg: string }> = {
@@ -50,8 +77,15 @@ const PRIMARY_LABEL: Record<TaskStatus, string> = {
 export function TasksPage() {
     const [tasks, setTasks] = useState<ConversionTask[]>([]);
     const [filter, setFilter] = useState<Filter>("all");
+    /** 飞行中：卡片本体隐身但**保住槽位**（视觉交给 overlay 里的克隆） */
+    const [flying, setFlying] = useState<Set<string>>(new Set());
+    /** 已摘除：lead 时刻起不占位、不计数（与回收站取交集后才真正生效，见下面 gone 的说明） */
+    const [omitted, setOmitted] = useState<Set<string>>(new Set());
+    const trash = useTrash();
+    const flights = useRef(new Map<string, Flight>());
+    const tick = useTasksReloadTick();
 
-    // 1s 轮询：mock 引擎推进与后端任务态切换都靠它刷新
+    // 1s 轮询：mock 引擎推进与后端任务态切换都靠它刷新；回收站的撤回也走它（tick 变化立即重建一次）
     useEffect(() => {
         const load = () =>
             api
@@ -61,16 +95,96 @@ export function TasksPage() {
         void load();
         const timer = window.setInterval(load, 1000);
         return () => window.clearInterval(timer);
+    }, [tick]);
+
+    // 回收站只活在 Rust 进程内存里：webview 刷新（进程没退）后靠这一次对账把它读回来
+    useEffect(() => {
+        void syncTrash();
+        return abortAllFlights;
     }, []);
 
-    const visible = tasks.filter((t) => matchesFilter(filter, t));
+    /**
+     * 摘除名单要再过一道「回收站里还在吗」：只按黑名单压，撤回那条路会漏——轮询把任务读
+     * 回来了，黑名单还压着它，卡片就再也见不着。现在黑名单只在「仍在回收站里」或「还在飞」
+     * 时生效，撤回/清空一落地就自动放行，两端不可能对不上账。
+     */
+    const trashed = new Set(trash.map((e) => e.taskId));
+    const gone = new Set(
+        [...omitted].filter((id) => trashed.has(id) || flights.current.has(id))
+    );
+    const left = tasks.filter((t) => !gone.has(t.id));
+    /** 页头统计跟着收：正在飞的卡片也不该再挂在计数里等下一拍轮询 */
+    const shown = left.filter((t) => !flying.has(t.id));
+    const visible = shown.filter((t) => matchesFilter(filter, t));
+
+    const toggle = (
+        setter: (fn: (prev: Set<string>) => Set<string>) => void,
+        id: string,
+        on: boolean
+    ) =>
+        setter((prev) => {
+            if (prev.has(id) === on) return prev;
+            const next = new Set(prev);
+            if (on) next.add(id);
+            else next.delete(id);
+            return next;
+        });
+    const setFlight = (id: string, on: boolean) => toggle(setFlying, id, on);
+    const setGone = (id: string, on: boolean) => toggle(setOmitted, id, on);
+
+    /**
+     * 一条删除的完整流程。两个入口都收在这里，所以「按钮删的」和「键盘删的」行为与可反悔窗口完全一致。
+     */
+    const beginDelete = (task: ConversionTask) => {
+        if (flights.current.has(task.id)) return;
+        const el = cardEl(task.id);
+        if (!el) return;
+        /** 追回时要知道「后端是否已经收到删除」：收了就得走撤回，而不是假装什么都没发生 */
+        let committed = false;
+        let settled: Promise<void> = Promise.resolve();
+        let failure: unknown = null;
+
+        // 先让垃圾桶出现：飞行落点是量出来的，不是猜的
+        stageDeleted(task);
+        setFlight(task.id, true);
+
+        const flight = startFlight(el, () => {
+            committed = true;
+            setGone(task.id, true);
+            settled = commitDelete(task.id).catch((e) => {
+                failure = e;
+            });
+        });
+        flights.current.set(task.id, flight);
+
+        void flight.done.then((outcome) => {
+            flights.current.delete(task.id);
+            setFlight(task.id, false);
+            if (outcome === "drop") {
+                // 后端若拒绝了这次删除，把卡片放回去并说清楚——静默回退最查不出来
+                void settled.then(() => {
+                    if (!failure) return;
+                    setGone(task.id, false);
+                    unstageDeleted(task.id);
+                    notify(
+                        `删除任务失败：${failure instanceof Error ? failure.message : String(failure)}`,
+                        "error"
+                    );
+                });
+                return;
+            }
+            // lead 之后才追回 = 删除已提交，只能原样撤回；lead 之前追回 = 什么都没发生
+            if (committed) void restoreAfterCommit(task.id);
+            else unstageDeleted(task.id);
+        });
+    };
 
     return (
         <div className="flex flex-col gap-5">
             <PageHeader
                 compact
                 title="转换任务"
-                sub={tasks.length === 0 ? "从首页选择整合包，开始第一次转换" : summary(tasks)}
+                sub={tasks.length === 0 ? "从首页选择整合包，开始第一次转换" : summary(shown)}
                 subTone="mono"
                 right={<SegTabs items={FILTERS} value={filter} onChange={setFilter} />}
             />
@@ -79,8 +193,14 @@ export function TasksPage() {
                 <EmptyTasks />
             ) : (
                 <div className="flex flex-col gap-4">
-                    {visible.map((t) => (
-                        <TaskCard key={t.id} task={t} />
+                    {visible.map((t, i) => (
+                        <TaskRow
+                            key={t.id}
+                            task={t}
+                            index={i}
+                            ghosted={flying.has(t.id)}
+                            onDelete={beginDelete}
+                        />
                     ))}
                     {visible.length === 0 && (
                         <p className="py-10 text-center font-mono text-[11px] text-text-3">
@@ -91,6 +211,20 @@ export function TasksPage() {
             )}
         </div>
     );
+}
+
+/** 卡片根节点登记表：飞行要拿真实矩形，克隆和落点都基于它，不用 querySelector 猜 DOM */
+const cardEls = new Map<string, HTMLElement>();
+const cardEl = (id: string) => cardEls.get(id);
+
+/** lead 之后才追回：删除已经提交到后端，只能原样撤回（暂存没动过，放回即可） */
+async function restoreAfterCommit(id: string) {
+    try {
+        await restoreDeleted(id);
+        notify("已追回，任务回到列表", "info");
+    } catch (e) {
+        notify(`追回失败：${e instanceof Error ? e.message : String(e)}`, "error");
+    }
 }
 
 /** 页头统计副标：运行中 N · 已完成 N · 失败 N */
@@ -145,9 +279,62 @@ function EmptyTasks() {
     );
 }
 
+/* ---------------- 卡片行：键盘删除与补位弹簧挂在这一层 ---------------- */
+
+/**
+ * motion.div 只做「这张卡在列表里的位置」，卡面仍是 TaskCard。
+ * `layout="position"`：补位只平移不缩形（等高弹簧的等价物，正是样片里 FLIP 在做的事）。
+ */
+function TaskRow({
+    task,
+    index,
+    ghosted,
+    onDelete,
+}: {
+    task: ConversionTask;
+    index: number;
+    /** 正在飞：本体隐身保位，画面交给 overlay 里的克隆 */
+    ghosted: boolean;
+    onDelete: (task: ConversionTask) => void;
+}) {
+    const deletable = task.status !== "running" && task.status !== "queued";
+    const fly = () => {
+        if (deletable) onDelete(task);
+    };
+
+    return (
+        <motion.div
+            ref={(el) => {
+                if (el) cardEls.set(task.id, el);
+                else cardEls.delete(task.id);
+            }}
+            layout="position"
+            transition={{
+                ...REFLOW,
+                // 错峰按可见序号给；reduced-motion 下弹簧本来就被收掉，不必再排队
+                delay: prefersReducedMotion() ? 0 : Math.min(index, 5) * STAGGER_STEP,
+            }}
+            tabIndex={deletable ? 0 : -1}
+            onKeyDown={(e) => {
+                if (e.key === "Delete" || e.key === "Backspace") {
+                    e.preventDefault();
+                    fly();
+                }
+            }}
+            className={cn(
+                // 焦点环留得住：卡片可聚焦才有「键盘也能删」这条路
+                "rounded-[12px] outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent",
+                ghosted && "invisible"
+            )}
+        >
+            <TaskCard task={task} onDelete={fly} />
+        </motion.div>
+    );
+}
+
 /* ---------------- 任务卡 ---------------- */
 
-function TaskCard({ task }: { task: ConversionTask }) {
+function TaskCard({ task, onDelete }: { task: ConversionTask; onDelete: () => void }) {
     const { navigate } = useNavigation();
     const running = task.status === "running" || task.status === "queued";
     const icon = CARD_ICON[task.status];
@@ -167,15 +354,6 @@ function TaskCard({ task }: { task: ConversionTask }) {
     const cancel = async () => {
         await api.cancelTask(task.id);
         notify("任务已取消，已下载的文件保留在缓存", "info");
-    };
-
-    /** 删除同样不许静默失败（列表 1s 轮询会收掉这行，所以成功时无需提示） */
-    const del = async () => {
-        try {
-            await api.deleteTask(task.id);
-        } catch (e) {
-            notify(`删除任务失败：${e instanceof Error ? e.message : String(e)}`, "error");
-        }
     };
 
     /** 打开产物所在目录。此前两处 `void` 把 openPath 的 reject 吞掉了，表现为「点了没反应」；
@@ -256,7 +434,7 @@ function TaskCard({ task }: { task: ConversionTask }) {
                         主按钮永远占最右一档、只管进详情，文案随状态换；
                         运行/排队的行后端拒绝删除，这一档整枚不出现。 */}
                     {!running && (
-                        <Btn variant="danger" size="sm" onClick={() => void del()}>
+                        <Btn variant="danger" size="sm" onClick={() => onDelete()}>
                             删除
                         </Btn>
                     )}

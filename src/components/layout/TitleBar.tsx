@@ -8,7 +8,7 @@
  * 并用 1×14 短竖线（$stroke）与最小化隔开。窗口控制逻辑见 @/lib/window-controls。
  */
 import { Minus, Square, X, Copy, Undo2 } from "lucide-react";
-import { Tip } from "@/components/ui";
+import { Tip, HOVER_FILL } from "@/components/ui";
 import { cn } from "@/lib/utils";
 import { useNavigation } from "@/lib/navigation";
 import { useWindowControls } from "@/lib/window-controls";
@@ -101,8 +101,9 @@ function WindowButton({
             onClick={onClick}
             aria-label={title}
             className={cn(
-                "group/tip relative h-[26px] w-[34px] rounded-md flex items-center justify-center transition-colors",
+                "group/tip relative h-[26px] w-[34px] rounded-md flex items-center justify-center",
                 "text-text-2 hover:bg-surface-2 hover:text-text-1",
+                HOVER_FILL,
                 variant === "close" &&
                 "hover:bg-redstone-dim hover:text-redstone"
             )}

@@ -24,6 +24,7 @@ import {
     Tip,
     TIP_TRIGGER,
     Toggle,
+    HOVER_FILL,
     type SelectOption,
 } from "@/components/ui";
 import { cn } from "@/lib/utils";
@@ -164,7 +165,7 @@ export function KeepDirsCard({
                                         stiffness: 320,
                                         damping: 28,
                                     }}
-                                    className="flex min-w-0 items-center gap-2.5 rounded-lg px-1.5 py-1 transition-colors hover:bg-surface-2"
+                                    className={`flex min-w-0 items-center gap-2.5 rounded-lg px-1.5 py-1 hover:bg-surface-2 ${HOVER_FILL}`}
                                 >
                                     <Folder className="size-3.5 shrink-0 text-accent" />
                                     <span className="min-w-0 flex-1 truncate font-mono text-[12px] leading-[18px] font-medium text-text-1">
@@ -182,8 +183,9 @@ export function KeepDirsCard({
                                             className={cn(
                                                 TIP_TRIGGER,
                                                 "size-6 rounded-md text-text-3",
-                                                "flex shrink-0 items-center justify-center transition-colors",
-                                                "hover:bg-redstone-dim hover:text-redstone"
+                                                "flex shrink-0 items-center justify-center",
+                                                "hover:bg-redstone-dim hover:text-redstone",
+                                                HOVER_FILL
                                             )}
                                         >
                                             <X className="size-3" />

@@ -467,7 +467,7 @@ export function TaskDetailPage() {
                                 />
                                 <div
                                     ref={logRef}
-                                    className="log-scroll flex h-[260px] w-full flex-col gap-1 overflow-y-auto rounded-lg bg-surface-2 p-3"
+                                    className="log-scroll flex h-[260px] w-full flex-col gap-1 overflow-y-auto rounded-md bg-surface-2 p-3"
                                 >
                                     {task.logs.length === 0 && (
                                         <span className="font-mono text-[10px] leading-[14px] text-text-3">

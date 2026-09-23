@@ -255,7 +255,11 @@
 /* 系统默认滚动条是直角的，顶在 8px 圆角容器里很难看：这里全应用统一改成
  * 「透明轨道 + 内缩胶囊滑块」——2px 透明外边配 background-clip: content-box
  * 让颜色只画滑块本体，两端圆角悬浮在框内，随 --text-3 自动适配深浅主题。
- * 注意：不能同时设 scrollbar-width / scrollbar-color，Chromium 会因此忽略 -webkit- 伪元素。 */
+ * 注意：不能同时设 scrollbar-width / scrollbar-color，Chromium 会因此忽略 -webkit- 伪元素。
+ * 容器圆角与胶囊是配套的：胶囊右缘距容器 2px，半径 r 的容器在距顶 y 处向内吃进 r−√(2ry−y²)，
+ * 完全不吃到滑块需 r ≤ 6.83px。日志框因此从 12px（rounded-lg）收到 8px（rounded-md）：
+ * 残留切割 ≤0.7px 且只落在滑块自身的圆头顶端，亚像素级；再往下降到 6px 才彻底为零，
+ * 但会丢掉「卡壳 12px > 内嵌面板 8px」的嵌套层级。 */
 ::-webkit-scrollbar {
   width: 10px;
   height: 10px;
@@ -276,7 +280,9 @@
   background-clip: content-box;
 }
 
-/* 日志框专用：滚动条常驻空位，日志出现/消失换行时内容宽度不跳动 */
+/* 日志框专用：滚动条常驻空位，日志出现/消失换行时内容宽度不跳动。
+ * 圆角不写在这里：这行是无 layer 的规则，会盖掉同列表元素自己写的 rounded-* 工具类，
+ * 两处日志框（8px）与变更清单面板（12px）的取舍得留在各自的 className 上。 */
 .log-scroll {
   scrollbar-gutter: stable;
 }
@@ -347,6 +353,14 @@
   [contenteditable] {
     user-select: text;
     -webkit-user-select: text;
+  }
+  /* UA 给 button 写了 text-align:center，preflight 不重置它；而 text-align 会往下继承，
+   * 于是按钮里任何被拉伸出宽度的文字子元素（flex-1 / w-full）都莫名其妙居中——
+   * 下拉浮层的选项行就是这么变成居中的（分组标题在 div 里，仍是左对齐，同层两种对齐即破绽）。
+   * 改成跟随容器：真正要居中的件（Btn / IconBtn / SegTabs）本来就靠 justify-center 定位，不受影响；
+   * 需要居中的文字仍可用 text-center 工具类覆盖（base 层排在工具类之前）。 */
+  button {
+    text-align: inherit;
   }
   .selectable {
     user-select: text;

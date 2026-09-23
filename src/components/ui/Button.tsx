@@ -11,6 +11,7 @@
 import { ChevronRight, type LucideIcon } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Tip, TIP_TRIGGER } from "./Tip";
+import { HOVER_FILL } from "./HoverFill";
 
 type BtnVariant = "primary" | "outline" | "ghost" | "danger";
 type BtnSize = "md" | "sm" | "xs";
@@ -56,7 +57,8 @@ export function Btn({
         <button
             aria-label={ariaLabel ?? title}
             className={cn(
-                "inline-flex shrink-0 select-none items-center justify-center rounded-lg transition-colors",
+                "inline-flex shrink-0 select-none items-center justify-center rounded-lg",
+                HOVER_FILL,
                 "disabled:pointer-events-none disabled:opacity-60",
                 BTN_VARIANT[variant],
                 BTN_SIZE[size],
@@ -86,7 +88,8 @@ export function IconBtn({
             aria-label={ariaLabel ?? title}
             className={cn(
                 "inline-flex h-8 w-9 shrink-0 items-center justify-center rounded-lg",
-                "text-text-2 transition-colors hover:bg-surface-2 hover:text-text-1",
+                "text-text-2 hover:bg-surface-2 hover:text-text-1",
+                HOVER_FILL,
                 "disabled:pointer-events-none disabled:opacity-40",
                 title && TIP_TRIGGER,
                 className

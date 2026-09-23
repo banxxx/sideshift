@@ -7,6 +7,7 @@ import { useId } from "react";
 import { motion } from "motion/react";
 import { type LucideIcon } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { HOVER_FILL } from "./HoverFill";
 
 /** 分段控件选中胶囊的滑动弹簧：短促、不回弹 */
 export const SEG_PILL_SPRING = { type: "spring", stiffness: 420, damping: 36 } as const;
@@ -47,7 +48,8 @@ export function SegTabs<T extends string>({
                         key={it.key}
                         onClick={(e) => onChange(it.key, e.currentTarget)}
                         className={cn(
-                            "relative inline-flex shrink-0 items-center justify-center rounded-md transition-colors",
+                            "relative inline-flex shrink-0 items-center justify-center rounded-md",
+                            HOVER_FILL,
                             size === "sm"
                                 ? "h-[22px] px-2 text-[11px] leading-[16px]"
                                 : "h-[30px] px-3 text-[12px] leading-[18px]",
@@ -58,7 +60,10 @@ export function SegTabs<T extends string>({
                             <motion.span
                                 layoutId={`${pillId}-seg-pill`}
                                 transition={SEG_PILL_SPRING}
-                                className="absolute inset-0 rounded-md border border-stroke bg-surface"
+                                className={cn(
+                                    "absolute inset-0 rounded-md border border-stroke bg-surface",
+                                    HOVER_FILL
+                                )}
                             />
                         )}
                         {/* tabular-nums：数字位宽一致，计数变化时同一 Tab 不再横向抽动 */}

@@ -601,25 +601,50 @@ pub fn retry_task(
     task_engine::retry_task(&app, &state, &id)
 }
 
+/// 删除 = 搬进回收站（撤回要用），所以**不**在这里递归删暂存目录——那笔账挪到了 clear_trash。
+/// 记录本身已从 tasks.json 消失，所以进程退出后回收站自然空了（暂存残留由启动清扫兜底）。
 #[tauri::command]
 pub async fn delete_task(app: AppHandle, state: S<'_>, id: String) -> Result<(), String> {
-    {
-        let mut inner = lock(&state);
-        // 运行中的行不允许直接删（先取消）
-        if inner.current.as_deref() == Some(id.as_str()) {
-            return Ok(());
-        }
-        inner.tasks.remove(&id);
-        inner.reports.remove(&id);
-        inner.plans.remove(&id);
-        inner.cancel.remove(&id);
-        task_engine::save_tasks(&app, &inner);
+    let mut inner = lock(&state);
+    // 运行中的行不允许直接删（先取消）
+    if inner.current.as_deref() == Some(id.as_str()) {
+        return Ok(());
     }
-    // 行都删了，暂存目录没有留下的理由。guard 必须先在上面的块里结束：
-    // remove_task_staging 会再锁同一把非重入 Mutex，嵌套即自死锁；命令 async 化后
-    // 落盘与递归删除也不再占主线程（同步命令跑在主线程，慢 IO 会让窗口卡住）。
-    task_engine::remove_task_staging(&state, &id);
-    Ok(())
+    if task_engine::trash_task(&app, &mut inner, &id) {
+        Ok(())
+    } else {
+        // 报出来而不是静默成就：走到这里说明前端把一条已经不在列表里的行又删了一次，
+        // 那是状态机对不上（撤回/轮询竞态），不该被「反正结果一样」掩盖
+        Err("这条任务已经不在列表里（可能刚被撤回或重复删除）".to_string())
+    }
+}
+
+/// 回收站列表：只回弹窗要用的要点，不搬整份任务（日志能到几百行）
+#[tauri::command]
+pub fn list_trash(state: S<'_>) -> Vec<task_engine::TrashEntry> {
+    task_engine::trash_entries(&lock(&state))
+}
+
+/// 撤回一条删除：任务连同方案与报告原样回到列表（暂存目录与产物一直没动）
+#[tauri::command]
+pub fn restore_task(app: AppHandle, state: S<'_>, id: String) -> Result<(), String> {
+    let mut inner = lock(&state);
+    task_engine::restore_task(&app, &mut inner, &id)
+}
+
+/// 清空回收站：这时才真正丢弃暂存目录。递归删除必须在解锁之后做——
+/// remove_task_staging 会再锁同一把非重入 Mutex，嵌套即自死锁。
+#[tauri::command]
+pub async fn clear_trash(state: S<'_>) -> Result<usize, String> {
+    let ids = {
+        let mut inner = lock(&state);
+        task_engine::drain_trash(&mut inner)
+    };
+    let n = ids.len();
+    for id in ids {
+        task_engine::remove_task_staging(&state, &id);
+    }
+    Ok(n)
 }
 
 #[tauri::command]

@@ -4,8 +4,11 @@
  * 字号阶梯 10/11/12/13/14/16/22；小元素 r6，控件 r8。
  */
 import { Check, Minus, Plus, Search, X, type LucideIcon } from "lucide-react";
+import { useState } from "react";
+import { motion } from "motion/react";
 import { cn } from "@/lib/utils";
 import { Tip, TIP_TRIGGER } from "./Tip";
+import { HOVER_FILL } from "./HoverFill";
 
 /**
  * 只读回看的统一「不可修改」外观（带框控件：步进器 / 输入框 / 下拉）：
@@ -67,7 +70,10 @@ export function Stepper({
             )}
         >
             <button
-                className="inline-flex h-8 w-8 items-center justify-center text-text-2 transition-colors hover:bg-surface-2 disabled:opacity-40"
+                className={cn(
+                    "inline-flex h-8 w-8 items-center justify-center text-text-2 hover:bg-surface-2 disabled:opacity-40",
+                    HOVER_FILL
+                )}
                 disabled={value <= min}
                 onClick={() => step(-1)}
             >
@@ -80,7 +86,10 @@ export function Stepper({
             </span>
             <span className={cn("w-px bg-stroke", plain ? "h-[30px]" : "h-5")} />
             <button
-                className="inline-flex h-8 w-8 items-center justify-center text-text-2 transition-colors hover:bg-surface-2 disabled:opacity-40"
+                className={cn(
+                    "inline-flex h-8 w-8 items-center justify-center text-text-2 hover:bg-surface-2 disabled:opacity-40",
+                    HOVER_FILL
+                )}
                 disabled={value >= max}
                 onClick={() => step(1)}
             >
@@ -90,7 +99,23 @@ export function Stepper({
     );
 }
 
-/* ---------------- 开关：36×20（卡内）/ 38×22（设置行），滑块 16 白色 ---------------- */
+/* ---------------- 开关：36×20（卡内）/ 38×22（设置行），滑块 16 白色 ----------------
+ * 动效三层，参数与 .scratch/toggle-motion-proto.html 对齐（60Hz 积分实测）：
+ *  - 行程：滑块走 translateX，spring 500/28/0.9 → 117ms 到 95%、过冲 0.34px（刚磕一下壁）。
+ *    比分段胶囊的 420/36 更硬，因为 14px 的行程拖不起 200ms。
+ *  - 按压：按住时滑块沿行程方向拉伸 1.16，松手由 scaleX 自己的 spring 收回——不改变位移，
+ *    纯手感，且和行程是两个独立属性，中途连点各走各的。
+ *  - 染色：轨道底色 surface-2 ↔ accent，走 HOVER_FILL 的节奏（180ms），比滑块到位稍晚一点，
+ *    读作「颜色跟上」而不是「两件事各动各的」。
+ * initial={false}：进页面时开关是既有读数，不该集体演一遍「被打开」。
+ */
+
+/** 两种尺寸行程同为 14px：内宽 30（sm 36−2−2×2 / md 38−2−3×2）− 滑块 16 */
+const TOGGLE_TRAVEL = 14;
+const TOGGLE_SPRING = { type: "spring", stiffness: 500, damping: 28, mass: 0.9 } as const;
+/** 按压横向拉伸量：16×1.16 单侧只长 1.3px，仍在轨道内缩里，不会顶出圆头 */
+const TOGGLE_STRETCH = 1.16;
+const TOGGLE_PRESS_SPRING = { type: "spring", stiffness: 700, damping: 30 } as const;
 
 export function Toggle({
     checked,
@@ -106,6 +131,9 @@ export function Toggle({
     /** 回看态：整件压一档 + 禁光标（一眼看出点不动），但只压一档——开与关都是要核对的读数 */
     readOnly?: boolean;
 }) {
+    const [pressed, setPressed] = useState(false);
+    const live = !readOnly && !disabled;
+    const release = () => setPressed(false);
     return (
         <button
             role="switch"
@@ -113,15 +141,35 @@ export function Toggle({
             aria-disabled={readOnly}
             disabled={disabled}
             onClick={readOnly ? undefined : () => onChange(!checked)}
+            onPointerDown={live ? () => setPressed(true) : undefined}
+            onPointerUp={release}
+            onPointerLeave={release}
+            onPointerCancel={release}
             className={cn(
-                "flex shrink-0 items-center rounded-full p-0.5 transition-colors",
+                "relative shrink-0 rounded-full border",
+                HOVER_FILL,
                 "disabled:pointer-events-none disabled:opacity-60",
                 readOnly && cn(READONLY_MARK, "select-none"),
-                size === "sm" ? "h-5 w-9" : "h-[22px] w-[38px] p-[3px]",
-                checked ? "justify-end bg-accent" : "justify-start border border-stroke bg-surface-2"
+                size === "sm" ? "h-5 w-9" : "h-[22px] w-[38px]",
+                // 描边两种状态都在，只是开着时透明：一并 swap 边框宽度会让内宽差 1px，
+                // 滑块每次切换都横向抖一下
+                checked ? "border-transparent bg-accent" : "border-stroke bg-surface-2"
             )}
         >
-            <span className="size-4 shrink-0 rounded-full bg-white" />
+            <motion.span
+                initial={false}
+                animate={{
+                    x: checked ? TOGGLE_TRAVEL : 0,
+                    scaleX: live && pressed ? TOGGLE_STRETCH : 1,
+                }}
+                transition={{ x: TOGGLE_SPRING, scaleX: TOGGLE_PRESS_SPRING }}
+                className={cn(
+                    // 绝对定位 + inset-y-0/my-auto 居中：不给 motion 的 transform 让路，
+                    // 位移和拉伸都写在同一条 transform 上
+                    "pointer-events-none absolute inset-y-0 my-auto size-4 rounded-full bg-white",
+                    size === "sm" ? "left-[2px]" : "left-[3px]"
+                )}
+            />
         </button>
     );
 }
@@ -184,7 +232,8 @@ export function CheckBox({
             aria-disabled={readOnly}
             onClick={readOnly ? undefined : () => onChange(!checked)}
             className={cn(
-                "flex size-4 shrink-0 items-center justify-center rounded transition-colors",
+                "flex size-4 shrink-0 items-center justify-center rounded",
+                HOVER_FILL,
                 readOnly && cn(READONLY_MARK, "select-none"),
                 checked
                     ? "bg-accent"
@@ -230,8 +279,9 @@ export function SearchBox({
                     onClick={() => onChange("")}
                     className={cn(
                         TIP_TRIGGER,
-                        "size-4 rounded text-text-3 transition-colors hover:bg-surface-2 hover:text-text-1",
-                        "flex shrink-0 items-center justify-center"
+                        "size-4 rounded text-text-3 hover:bg-surface-2 hover:text-text-1",
+                        "flex shrink-0 items-center justify-center",
+                        HOVER_FILL
                     )}
                 >
                     <X className="size-3" />

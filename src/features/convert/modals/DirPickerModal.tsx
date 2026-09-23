@@ -2,7 +2,7 @@
 import { ChevronRight, Folder, MinusSquare, SquareCheck } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { PackDirNode } from "@/lib/types";
-import { Btn, CheckBox, ListRow, ModalShell, SearchBox } from "@/components/ui";
+import { Btn, CheckBox, ListRow, ModalShell, SearchBox, HOVER_FILL } from "@/components/ui";
 import { cn } from "@/lib/utils";
 
 /** 树内目录节点总数（标题「共 N 个目录」口径） */
@@ -144,7 +144,7 @@ export function DirPickerModal({
             <div className="flex w-full shrink-0 flex-wrap items-center gap-1 font-mono text-[11px] leading-[16px] text-text-3">
                 <button
                     className={cn(
-                        "transition-colors",
+                        HOVER_FILL,
                         path.length === 0
                             ? "font-medium text-text-1"
                             : "hover:text-text-1"
@@ -158,7 +158,7 @@ export function DirPickerModal({
                         <ChevronRight className="size-3" />
                         <button
                             className={cn(
-                                "transition-colors",
+                                HOVER_FILL,
                                 i === path.length - 1
                                     ? "font-medium text-text-1"
                                     : "hover:text-text-1"
@@ -181,7 +181,7 @@ export function DirPickerModal({
             {/* toolbar：左全选（切换式，含清空语义） + 右计数 */}
             <div className="flex w-full shrink-0 items-center justify-between gap-2">
                 <button
-                    className="flex items-center gap-2 text-[11px] leading-[16px] font-medium text-text-2 transition-colors hover:text-text-1"
+                    className={`flex items-center gap-2 text-[11px] leading-[16px] font-medium text-text-2 hover:text-text-1 ${HOVER_FILL}`}
                     onClick={toggleAll}
                 >
                     {allOn ? (

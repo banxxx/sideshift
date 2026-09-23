@@ -21,6 +21,7 @@ import { useEffect, useRef, useState } from "react";
 import { AnimatePresence, motion } from "motion/react";
 import { cn } from "@/lib/utils";
 import { READONLY_BOX } from "./Field";
+import { HOVER_FILL } from "./HoverFill";
 
 export interface SelectOption {
     value: string;
@@ -120,7 +121,8 @@ export function SearchSelect({
                 disabled={readOnly}
                 onClick={() => (open ? close() : setOpen(true))}
                 className={cn(
-                    "flex items-center justify-between gap-2 border transition-colors",
+                    "flex items-center justify-between gap-2 border",
+                    HOVER_FILL,
                     isChip
                         ? "h-7 shrink-0 self-start rounded-md bg-surface px-2 text-[11px] leading-[16px] font-medium text-text-1 hover:bg-surface-2"
                         : "h-8 w-full rounded-lg px-2.5",
@@ -206,7 +208,8 @@ export function SearchSelect({
                                                 close();
                                             }}
                                             className={cn(
-                                                "flex h-[26px] w-full items-center justify-between gap-2 rounded-md px-2 transition-colors",
+                                                "flex h-[26px] w-full items-center justify-between gap-2 rounded-md px-2",
+                                                HOVER_FILL,
                                                 active ? "bg-surface-2" : "hover:bg-surface-2"
                                             )}
                                         >

@@ -5,6 +5,7 @@ import { type ReactNode } from "react";
 import { type LucideIcon } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Tip, TIP_TRIGGER } from "./Tip";
+import { HOVER_FILL } from "./HoverFill";
 
 /** 卡内单行：左 12/500 $text-1 标签 + 右控件（Convert 运行环境/启动参数各行） */
 export function InlineRow({
@@ -96,7 +97,8 @@ export function ListRow({ className, title, children, ...rest }: React.Component
     return (
         <div
             className={cn(
-                "flex w-full items-center gap-2.5 rounded-lg px-1 py-2 transition-colors",
+                "flex w-full items-center gap-2.5 rounded-lg px-1 py-2",
+                HOVER_FILL,
                 title && TIP_TRIGGER,
                 className
             )}

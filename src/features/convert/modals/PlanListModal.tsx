@@ -18,6 +18,7 @@ import {
     SearchBox,
     SegTabs,
     TagChip,
+    HOVER_FILL,
 } from "@/components/ui";
 import { cn } from "@/lib/utils";
 import { SideChip } from "./SideChip";
@@ -342,7 +343,7 @@ export function PlanListModal({
             >
                 {!readOnly && (
                     <button
-                        className="flex shrink-0 items-center gap-2 text-[11px] leading-[16px] font-medium text-text-2 transition-colors hover:text-text-1"
+                        className={`flex shrink-0 items-center gap-2 text-[11px] leading-[16px] font-medium text-text-2 hover:text-text-1 ${HOVER_FILL}`}
                         onClick={runBatch}
                     >
                         {batchDone ? (

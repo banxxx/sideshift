@@ -5,6 +5,7 @@ import { ChevronDown, type LucideIcon } from "lucide-react";
 import { AnimatePresence, motion } from "motion/react";
 import { cn } from "@/lib/utils";
 import { TONE_TEXT, type Tone } from "./Chip";
+import { HOVER_FILL } from "./HoverFill";
 
 /* ---------------- 进度条：h6 轨道 $surface-2 r99 + 色条 ---------------- */
 
@@ -116,7 +117,7 @@ export function ChangeRow({
         <button
             onClick={onClick}
             aria-expanded={open}
-            className={cn(shell, "text-left transition-colors hover:bg-surface-2")}
+            className={cn(shell, "hover:bg-surface-2", HOVER_FILL)}
         >
             {row}
         </button>

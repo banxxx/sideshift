@@ -1,5 +1,5 @@
 /** 转换任务：状态机载荷与结构化错误 */
-import type { PackManifest } from "./pack";
+import type { LoaderKind, PackManifest } from "./pack";
 import type { ConversionOptions } from "./options";
 import type { ActivityInfo, FetchTally } from "./activity";
 
@@ -53,6 +53,20 @@ export interface ConversionTask {
     outputPath?: string;
     outputSizeBytes?: number;
     logs: TaskLogLine[];
+}
+
+/** 回收站行（对应 Rust task_engine::trash::TrashEntry）：只活在本次会话的内存里，关应用即清空 */
+export interface TrashEntry {
+    taskId: string;
+    packFileName: string;
+    loader: LoaderKind;
+    mcVersion: string;
+    /** 被删时的状态（终态才进得来；撤回后按原样回到列表） */
+    status: TaskStatus;
+    outputFileName?: string;
+    outputSizeBytes?: number;
+    /** 删除时刻（epoch ms）：弹窗按它倒序 */
+    deletedAt: number;
 }
 
 /** 创建/重试任务的返回（Rust: start_conversion / retry_task）；同一时间只跑一条，其余排队 */

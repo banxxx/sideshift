@@ -1,4 +1,4 @@
-/** 任务生命周期（创建 / 查询 / 取消 / 重试 / 删除 / 报告 / 进度事件） */
+/** 任务生命周期（创建 / 查询 / 取消 / 重试 / 删除 / 回收站 / 报告 / 进度事件） */
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import type {
     ConversionOptions,
@@ -8,6 +8,7 @@ import type {
     PlanMod,
     ProgressEvent,
     StartResult,
+    TrashEntry,
 } from "@/lib/types";
 import { EVENTS } from "@/lib/types";
 import * as mock from "@/lib/mock";
@@ -58,10 +59,28 @@ export async function retryTask(id: string): Promise<StartResult | undefined> {
     );
 }
 
-/** 删除任务记录（Rust: delete_task(id)） */
+/** 删除任务记录（Rust: delete_task(id)）：搬进回收站，本次会话内可撤回 */
 export async function deleteTask(id: string): Promise<void> {
     if (!isTauri) return mock.mockDeleteTask(id);
     return invokeOrMock("delete_task", { id }, () => mock.mockDeleteTask(id));
+}
+
+/** 回收站列表（Rust: list_trash）：按删除时刻倒序，关应用即空 */
+export async function listTrash(): Promise<TrashEntry[]> {
+    if (!isTauri) return mock.mockListTrash();
+    return invokeOrMock("list_trash", undefined, () => mock.mockListTrash());
+}
+
+/** 撤回删除（Rust: restore_task(id)）：任务原样回到列表，暂存没动过 */
+export async function restoreTask(id: string): Promise<void> {
+    if (!isTauri) return mock.mockRestoreTask(id);
+    return invokeOrMock("restore_task", { id }, () => mock.mockRestoreTask(id));
+}
+
+/** 清空回收站（Rust: clear_trash -> 条数）：这一步才真正丢弃暂存目录 */
+export async function clearTrash(): Promise<number> {
+    if (!isTauri) return mock.mockClearTrash();
+    return invokeOrMock("clear_trash", undefined, () => mock.mockClearTrash());
 }
 
 /** 转换报告（Rust: get_report(taskId)） */

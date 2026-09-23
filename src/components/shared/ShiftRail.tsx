@@ -322,7 +322,7 @@ export function ShiftRail({
             <div className="relative">
                 <div
                     ref={logBoxRef}
-                    className="log-scroll h-[clamp(56px,12.5vh,100px)] overflow-y-auto rounded-lg border border-stroke-soft bg-bg-app px-4 py-2.5 flex flex-col gap-1.5"
+                    className="log-scroll h-[clamp(56px,12.5vh,100px)] overflow-y-auto rounded-md border border-stroke-soft bg-bg-app px-4 py-2.5 flex flex-col gap-1.5"
                 >
                     {logs.length === 0 && waiting ? (
                         <p className="flex items-center gap-2 font-mono text-[11px] leading-[16px]">

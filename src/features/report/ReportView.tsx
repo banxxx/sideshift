@@ -325,7 +325,7 @@ function ChangeList({ rows, open }: { rows: PlanMod[]; open: boolean }) {
         <motion.div
             initial={{ opacity: 0, height: 0 }}
             animate={{ opacity: 1, height: "auto" }}
-            className="log-scroll -mx-1 max-h-[220px] min-w-0 overflow-auto rounded-lg bg-surface-2/40 px-1 py-1"
+            className="log-scroll -mx-1 max-h-[220px] min-w-0 overflow-auto rounded-md bg-surface-2/40 px-1 py-1"
         >
             {shown.map((m) => (
                 <ListRow key={m.id} className="py-1.5">

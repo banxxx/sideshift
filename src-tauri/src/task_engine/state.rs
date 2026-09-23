@@ -1,4 +1,4 @@
-//! 全局状态：内存任务注册表 + 已解析包缓存 + 设置 + 独占运行槽位。
+//! 全局状态：内存任务注册表 + 回收站 + 已解析包缓存 + 设置 + 独占运行槽位。
 
 use std::collections::HashMap;
 use std::sync::atomic::AtomicBool;
@@ -11,6 +11,7 @@ use crate::core::parser::ParsedPack;
 use crate::models::*;
 use super::persist::{load_settings, load_tasks};
 use super::schedule::sweep_task_staging;
+use super::trash::Trashed;
 
 #[derive(Default)]
 pub struct Inner {
@@ -23,6 +24,8 @@ pub struct Inner {
     pub last_file: Option<String>,
     /// 任务创建时前端确认过的最终方案（含用户勾改/本地与服务端新增）
     pub plans: HashMap<String, Vec<PlanMod>>,
+    /// 回收站：本次会话删掉的任务。只活在内存（不进 tasks.json），所以关应用即清空
+    pub trash: HashMap<String, Trashed>,
     pub settings: AppSettings,
     /// 当前独占运行的任务 id——同一时间只允许一条转换在跑，其余排队
     pub current: Option<String>,

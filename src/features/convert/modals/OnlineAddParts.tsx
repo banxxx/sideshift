@@ -2,7 +2,7 @@
 import { Puzzle } from "lucide-react";
 import { useEffect, useId, useState } from "react";
 import { motion } from "motion/react";
-import { SEG_PILL_SPRING } from "@/components/ui";
+import { SEG_PILL_SPRING, HOVER_FILL } from "@/components/ui";
 import { cn } from "@/lib/utils";
 
 export type Source = "modrinth" | "curseforge";
@@ -29,7 +29,8 @@ export function SourceSeg({ value, onChange }: { value: Source; onChange: (s: So
                         onClick={() => onChange(it.key)}
                         className={cn(
                             // 宽度用 flex-1 均分：固定 86px 会超出轨道净宽（176-4-2）挤压圆角
-                            "relative flex h-[26px] min-w-0 flex-1 items-center justify-center rounded-md text-[11px] leading-[16px] transition-colors",
+                            "relative flex h-[26px] min-w-0 flex-1 items-center justify-center rounded-md text-[11px] leading-[16px]",
+                            HOVER_FILL,
                             active
                                 ? "font-semibold text-accent-ink"
                                 : "font-medium text-text-3 hover:text-text-2"
@@ -39,7 +40,10 @@ export function SourceSeg({ value, onChange }: { value: Source; onChange: (s: So
                             <motion.span
                                 layoutId={`${pillId}-src-pill`}
                                 transition={SEG_PILL_SPRING}
-                                className="absolute inset-0 rounded-md bg-accent"
+                                className={cn(
+                                    "absolute inset-0 rounded-md bg-accent",
+                                    HOVER_FILL
+                                )}
                             />
                         )}
                         <span className="relative z-[1]">{it.label}</span>

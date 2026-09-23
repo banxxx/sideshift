@@ -11,7 +11,7 @@ import { Home, ListChecks, Settings, Moon, Sun } from "lucide-react";
 import { useRef, useState } from "react";
 import { AnimatePresence, motion } from "motion/react";
 import { NotificationStack } from "./NotificationStack";
-import { Tip, TIP_TRIGGER } from "@/components/ui";
+import { Tip, TIP_TRIGGER, HOVER_FILL } from "@/components/ui";
 import { cn } from "@/lib/utils";
 import { isDark, switchTheme, useTheme } from "@/lib/theme";
 import {
@@ -71,7 +71,8 @@ export function Sidebar() {
                             key={item.key}
                             onClick={() => switchPrimary(item.key)}
                             className={cn(
-                                "w-full h-9 rounded-lg flex items-center gap-2.5 px-3 text-[13px] font-medium transition-colors",
+                                "w-full h-9 rounded-lg flex items-center gap-2.5 px-3 text-[13px] font-medium",
+                                HOVER_FILL,
                                 active
                                     ? "bg-accent-dim text-accent"
                                     : "text-text-2 hover:bg-surface-2 hover:text-text-1"
@@ -102,7 +103,8 @@ export function Sidebar() {
                     aria-label={themeTip}
                     className={cn(
                         TIP_TRIGGER,
-                        "relative size-8 rounded-lg bg-surface-2 flex items-center justify-center text-text-2 hover:text-text-1 transition-colors"
+                        "relative size-8 rounded-lg bg-surface-2 flex items-center justify-center text-text-2 hover:text-text-1",
+                        HOVER_FILL
                     )}
                 >
                     {pulse > 0 && (

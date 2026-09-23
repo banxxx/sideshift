@@ -11,6 +11,7 @@ import type {
     PlanMod,
     StartResult,
     TaskLogLine,
+    TrashEntry,
 } from "@/lib/types";
 import { outputNameOf } from "@/lib/format";
 import {
@@ -347,13 +348,53 @@ export function mockRetryTask(id: string): StartResult | undefined {
     return mockStartTask(task.options, task.pack);
 }
 
-/** 从列表移除任务记录（终态任务才可删；运行中先取消） */
+/** 回收站（与 Rust 侧同构：只活在内存，刷新页面即清空），撤回要把任务原样放回 */
+const trash = new Map<string, { task: ConversionTask; deletedAt: number }>();
+
+/** 删除任务记录 = 搬进回收站（终态任务才可删；运行中先取消） */
 export function mockDeleteTask(id: string): void {
+    const task = tasks.get(id);
+    if (!task) return;
     const timer = timers.get(id);
     if (timer) clearInterval(timer);
     timers.delete(id);
     tasks.delete(id);
+    trash.set(id, { task, deletedAt: Date.now() });
     dequeueNext();
+}
+
+function toTrashEntry(id: string, t: ConversionTask, deletedAt: number): TrashEntry {
+    return {
+        taskId: id,
+        packFileName: t.pack.fileName,
+        loader: t.pack.loader,
+        mcVersion: t.options.mcVersion,
+        status: t.status,
+        outputFileName: t.outputFileName,
+        outputSizeBytes: t.outputSizeBytes,
+        deletedAt,
+    };
+}
+
+export function mockListTrash(): TrashEntry[] {
+    return [...trash.entries()]
+        .map(([id, e]) => toTrashEntry(id, e.task, e.deletedAt))
+        .sort((a, b) => b.deletedAt - a.deletedAt);
+}
+
+/** 撤回删除：任务回到列表（与 Rust 一样只放回内存仓，不做状态校验） */
+export function mockRestoreTask(id: string): void {
+    const e = trash.get(id);
+    if (!e) return;
+    trash.delete(id);
+    tasks.set(id, e.task);
+}
+
+/** 清空回收站，返回丢弃条数 */
+export function mockClearTrash(): number {
+    const n = trash.size;
+    trash.clear();
+    return n;
 }
 
 export function mockReport(taskId: string): ConversionReport | undefined {
