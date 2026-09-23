@@ -1,5 +1,11 @@
 /** 应用设置与更新检查 */
-import type { AppSettings, VersionOption } from "@/lib/types";
+import type {
+    AppSettings,
+    CacheCleanMode,
+    CacheUsage,
+    CleanReport,
+    VersionOption,
+} from "@/lib/types";
 import * as mock from "@/lib/mock";
 import { invokeOrMock, isTauri } from "./client";
 
@@ -35,6 +41,34 @@ export async function pickDirectory(): Promise<string | null> {
     const { open } = await import("@tauri-apps/plugin-dialog");
     const picked = await open({ directory: true, multiple: false });
     return typeof picked === "string" ? picked : null;
+}
+
+/**
+ * 缓存占用（Rust: cache_usage）。一次真实目录扫描，巨包缓存可能几千条目，
+ * 所以只在进设置页和清理之后各读一次，不做轮询。
+ */
+export async function getCacheUsage(): Promise<CacheUsage> {
+    if (!isTauri) return mock.mockCacheUsage();
+    return invokeOrMock("cache_usage", undefined, () => mock.mockCacheUsage());
+}
+
+/**
+ * 清理无用文件（Rust: clean_junk）：半截下载 + 孤儿暂存目录 + 空壳目录。
+ * 不碰下载缓存本体，所以有任务在跑时也能点。
+ */
+export async function cleanJunk(): Promise<CleanReport> {
+    if (!isTauri) return mock.mockCleanJunk();
+    return invokeOrMock("clean_junk", undefined, () => mock.mockCleanJunk());
+}
+
+/**
+ * 清理下载缓存（Rust: clean_cache）。
+ * mode=stale 只删超过 staleDays 未再使用的；mode=all 清空。all 在有任务运行/排队时
+ * 由后端 reject（删掉流水线正在取的文件会做出坏包），调用方要把那句话显示出来。
+ */
+export async function cleanCache(mode: CacheCleanMode): Promise<CleanReport> {
+    if (!isTauri) return mock.mockCleanCache(mode);
+    return invokeOrMock("clean_cache", { mode }, () => mock.mockCleanCache(mode));
 }
 
 /** 检查更新（Rust: check_update -> 最新版本号；与当前版本相同即无更新） */

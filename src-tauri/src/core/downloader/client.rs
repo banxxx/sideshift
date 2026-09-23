@@ -13,7 +13,7 @@ use super::source;
 use super::types::{
     DownloadError, Fetch, FetchSource, ItemOutcome, ItemSpec, OnDone, OnTransfer, TransferProgress,
 };
-use super::util::{cache_path_for, verify_cache_for};
+use super::util::{cache_path_for, mark_used, verify_cache_for, PART_MARKER};
 use crate::models::DownloadSource;
 
 const USER_AGENT: &str = "SideShift/0.1 (desktop pack converter)";
@@ -44,7 +44,7 @@ fn temp_path(target: &Path, attempt: u32) -> PathBuf {
         .file_name()
         .and_then(|s| s.to_str())
         .unwrap_or("download");
-    target.with_file_name(format!("{stem}.part{attempt}"))
+    target.with_file_name(format!("{stem}{PART_MARKER}{attempt}"))
 }
 
 pub struct Downloader {
@@ -264,6 +264,8 @@ impl Downloader {
                 attempts: 0,
                 cause: format!("{e}（dest={}）", item.dest.display()),
             })?;
+            // 复用即续命：缓存清理按 mtime 判过期（见 core::cleanup）
+            mark_used(&c);
             let bytes = std::fs::metadata(&c).map(|m| m.len()).unwrap_or(0);
             return Ok(ItemOutcome {
                 file_name: item.file_name.clone(),

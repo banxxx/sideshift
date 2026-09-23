@@ -18,3 +18,7 @@ pub use events::EVENT_CLASSIFIED;
 pub use persist::{save_settings, save_tasks};
 pub use schedule::{cancel, create_task, remove_task_staging, retry_task, StartResult};
 pub use state::{AppState, Inner};
+
+/// 单条任务的暂存目录名：`{cache}\tasks\{任务 id}\staging`。写它的（pipeline/schedule）与
+/// 判它是不是孤儿的（core::cleanup）都引这一个常量，分叉了就是「清理漏掉残留」那种查半天的 bug
+pub const CACHE_TASKS_DIR: &str = "tasks";

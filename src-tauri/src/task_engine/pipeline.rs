@@ -27,6 +27,7 @@ use super::persist::save_tasks;
 use super::schedule::{release_and_next, remove_task_staging};
 use super::state::{is_active, AppState};
 use super::util::{brief_list, fmt_size, now_ms, sanitize, unique_mod_name};
+use super::CACHE_TASKS_DIR;
 
 /// 在后台跑一条流水线；退出后回收暂存并拉起队首。
 /// （原「独占槽位交接点」注释：流水线退出——成功/失败/取消皆如此——后交回调度器）
@@ -206,7 +207,7 @@ async fn run_pipeline(app: AppHandle, state: Arc<AppState>, id: String) {
     }, true);
     let settings = state.inner.lock().unwrap().settings.clone();
     let staging = PathBuf::from(&settings.cache_dir)
-        .join("tasks")
+        .join(CACHE_TASKS_DIR)
         .join(&id)
         .join("staging");
     let _ = std::fs::remove_dir_all(&staging);

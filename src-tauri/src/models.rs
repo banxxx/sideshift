@@ -615,6 +615,47 @@ fn default_online_classify() -> bool {
     true
 }
 
+/// 缓存占用报表（设置页「存储与缓存」）。字段全部是**扫描实测**，没有估算值：
+/// 每类都给「个数 + 字节」两栏，是因为只有字节看不出"清掉了几百个小文件"，
+/// 只有个数又完全无法判断值不值得清。
+#[derive(Serialize, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct CacheUsage {
+    /// 缓存目录绝对路径（外显用；与设置里的 cacheDir 同源）
+    pub cache_dir: String,
+    /// 目录不存在 = 还没下载过任何东西。此时所有计数为 0，前端不该报错
+    pub exists: bool,
+    /// 下载缓存（可复用）
+    pub files_count: usize,
+    pub files_bytes: u64,
+    /// 其中最后一次使用早于 stale_days 前的
+    pub stale_count: usize,
+    pub stale_bytes: u64,
+    /// 半截下载的临时文件（有任务在跑时为 0，见 busy）
+    pub parts_count: usize,
+    pub parts_bytes: u64,
+    /// 注册表里已无此任务 id 的暂存目录（个数按目录算，不是一个文件算一个）
+    pub orphan_count: usize,
+    pub orphan_bytes: u64,
+    /// 空壳目录：零字节，但要让用户看见"清理确实收尾了"
+    pub empty_dirs: usize,
+    /// 有任务正在排队或运行：前端据此禁掉缓存清理，并把 parts 那一栏改口径说明
+    pub busy: bool,
+    pub stale_days: u64,
+}
+
+/// 一次清理的实际结果。字节数来自删除前逐文件读到的 metadata，
+/// 也就是"确实从盘上拿掉的量"，不是删除前的目录估算。
+#[derive(Serialize, Default, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct CleanReport {
+    /// 删掉的文件数（孤儿暂存按一个目录计一项，不摊到它内部的几百个文件）
+    pub items: usize,
+    pub bytes: u64,
+    /// 删不动的（被占用/权限）：非 0 时前端要外显，别让人以为清干净了
+    pub failed: usize,
+}
+
 /// 资源管理器/`openPath` 侧的目录串：Windows 上把正斜杠统一成反斜杠。
 /// Rust 自己的 IO 两种斜杠都吃，所以这条只在把路径交给系统前用一次。
 pub fn native_path(s: &str) -> String {

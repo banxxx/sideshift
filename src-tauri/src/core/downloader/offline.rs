@@ -9,6 +9,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 use super::types::{DownloadError, Fetch, FetchSource, ItemOutcome, ItemSpec, OnDone};
+use super::util::mark_used;
 
 /// 一次纯复制型任务：缓存命中或本地 jar → 目标路径
 #[derive(Clone)]
@@ -64,6 +65,10 @@ pub fn run_copies(
             item,
         } = job;
         let bytes = copy_to_dest(&src, &item)?;
+        // 复用即续命：缓存清理按 mtime 判「最后一次使用」，不刷新就会把常用包判成过期
+        if from_cache {
+            mark_used(&src);
+        }
         let source = match &item.fetch {
             Fetch::Url(_) => FetchSource::Network,
             Fetch::ZipEntry { .. } => FetchSource::Pack,

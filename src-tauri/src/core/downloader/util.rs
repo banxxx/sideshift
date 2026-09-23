@@ -27,6 +27,28 @@ pub fn urlencoding(s: &str) -> String {
     out
 }
 
+/// 下载缓存的根子目录名：`{cache}\files\{键}\{文件名}`。布局只在这里写一次，
+/// 清理侧（`core::cleanup`）引的是这个常量，否则两边各拼一遍字符串迟早分叉
+pub const CACHE_FILES_DIR: &str = "files";
+/// 半成品后缀：`{文件名}.part{尝试序号}`（写侧是 client 的 `temp_path`，判侧是 `is_partial_name`）
+pub(crate) const PART_MARKER: &str = ".part";
+
+/// 是不是半截下载的临时文件。用 contains 而不是 ends_with：后缀带尝试序号
+pub fn is_partial_name(name: &str) -> bool {
+    name.contains(PART_MARKER)
+}
+
+/// 命中复用时把「最后一次使用时间」写在文件自己身上。
+///
+/// 为什么是 mtime 而不是另立一份时间戳索引：mtime 跟着文件走，用户手工删缓存、
+/// 换目录、清半个盘都不会让索引失配（那种索引一旦对不上，过期判据就集体失效）。
+/// 写失败一律吞掉——缓存清理是个次要功能，没有能力把转换弄失败。
+pub fn mark_used(path: &Path) {
+    if let Ok(f) = std::fs::OpenOptions::new().write(true).open(path) {
+        let _ = f.set_modified(std::time::SystemTime::now());
+    }
+}
+
 /// sha1 → 小写 hex（mrpack/Modrinth/maven 的校验值口径均为 hex）
 pub fn sha1_hex(bytes: &[u8]) -> String {
     use sha1::{Digest, Sha1};
@@ -60,7 +82,7 @@ pub fn cache_path_for(cache_dir: &Path, item: &ItemSpec) -> Option<PathBuf> {
             _ => return None,
         },
     };
-    Some(cache_dir.join("files").join(key).join(&item.file_name))
+    Some(cache_dir.join(CACHE_FILES_DIR).join(key).join(&item.file_name))
 }
 
 /// 缓存复用前提：声明了 sha1 就必须与内容一致（不一致视作缓存损坏，重新获取）

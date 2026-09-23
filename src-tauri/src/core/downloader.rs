@@ -18,3 +18,5 @@ mod versions;
 pub use client::Downloader;
 pub use modrinth::ModrinthEnv;
 pub use types::{DownloadError, Fetch, FetchSource, ItemSpec, TransferProgress};
+// 缓存布局的两个事实交给清理侧用（core::cleanup）：目录名与半成品判据，写与删共用一份
+pub use util::{is_partial_name, CACHE_FILES_DIR};

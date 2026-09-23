@@ -12,7 +12,7 @@ use super::events::{log_line, push_line};
 use super::persist::save_tasks;
 use super::pipeline::spawn_pipeline;
 use super::state::{AppState, Inner};
-use super::util::now_ms;
+use super::{util::now_ms, CACHE_TASKS_DIR};
 
 /// 任务创建结果：queued = 已有任务在跑，本条进入排队队列
 #[derive(Serialize, Clone, Debug)]
@@ -158,12 +158,12 @@ pub fn release_and_next(app: &AppHandle, state: &Arc<AppState>, done_id: &str) -
 /// 回收某个任务的暂存目录（cache/tasks/<id>），文件本体留在 cache/files 供跨任务复用
 pub fn remove_task_staging(state: &AppState, id: &str) {
     let cache_dir = state.inner.lock().unwrap().settings.cache_dir.clone();
-    let _ = std::fs::remove_dir_all(PathBuf::from(cache_dir).join("tasks").join(id));
+    let _ = std::fs::remove_dir_all(PathBuf::from(cache_dir).join(CACHE_TASKS_DIR).join(id));
 }
 
 /// 启动回收：上次进程被强杀时来不及清理的暂存目录（注册表里已无此任务即删）
 pub fn sweep_task_staging(inner: &Inner) {
-    let dir = PathBuf::from(&inner.settings.cache_dir).join("tasks");
+    let dir = PathBuf::from(&inner.settings.cache_dir).join(CACHE_TASKS_DIR);
     let Ok(entries) = std::fs::read_dir(&dir) else {
         return;
     };

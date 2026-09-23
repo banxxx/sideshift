@@ -6,3 +6,4 @@ pub mod downloader;
 pub mod builder;
 pub mod estimate;
 pub mod verify;
+pub mod cleanup;
