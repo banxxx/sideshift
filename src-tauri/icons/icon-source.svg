@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 224 224">
+  <!-- 系统图标专用源（只喂 `npx tauri icon`，不进前端）：图形与 public/logo.svg 完全同形，
+       区别只是画布留了 12.5% 透明边 —— 位图占画面 168/224 = 75%，这是 Windows 应用图标的惯例量，
+       满格会让任务栏那块看着顶到边。tauri icon 没有留白/缩放参数，所以边只能画在源里。
+       ⚠️ 这是 public/logo.svg 的第二份几何，改形状必须两边一起改（横向 2:5 的分色比在这里是 48:120）。
+       派生命令见 README「品牌标识与图标」。 -->
+  <rect x="28" y="28" width="168" height="48" fill="#A9B2FF"/>
+  <rect x="28" y="76" width="168" height="120" fill="#4F5DE5"/>
+</svg>

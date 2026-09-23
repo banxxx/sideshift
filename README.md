@@ -34,13 +34,20 @@ Minecraft 模组包转换工具（Tauri 2 + React 19 + Vite）。开发环境细
 
 ## 品牌标识与图标
 
-**唯一图形源是 `public/logo.svg`，全应用不允许自绘 logo。** 它的 `viewBox` 已裁到图形本身（`2 2 28 28`），画布四周不留透明边 —— 所以容器给多大、看到的方块就是多大，不需要任何"反算尺寸"的魔法数。
+**不许自绘 logo。** 图形是同形的两份源，差别只在画布留不留边：
+
+| 源 | 画布 | 给谁用 | 为什么 |
+| --- | --- | --- | --- |
+| `public/logo.svg` | `viewBox="2 2 28 28"`，**满格无边距** | 前端（`<img>`、favicon） | 容器给多大看到的方块就多大，不需要"反算尺寸"的魔法数 |
+| `src-tauri/icons/icon-source.svg` | `viewBox="0 0 224 224"`，**留 12.5% 透明边**（图形占 168/224 = 75%） | 只喂 `npx tauri icon` 派生系统图标 | 满格在任务栏里顶到边；Windows 应用图标惯例是图形占 75–85%。`tauri icon` 没有留白/缩放参数，边只能画在源里 |
+
+两份的几何是同一个形状按倍率算出来的（分色比 `8:20` ⇄ `48:120`，都是 2:5），**改形状必须两边一起改**，否则界面与任务栏的 logo 会悄悄长得不一样。
 
 | 用在哪 | 怎么走 |
 | --- | --- |
 | 标题栏（主应用 + 安装壳） | `src/components/ui/Logo.tsx`，尺寸 `size-4` = 16×16。壳那边引同一份源码（vite `@` 别名指回 `src/`，且 `publicDir` 指回仓库根的 `public/`） |
 | 浏览器标签图标 | 主应用 `index.html` 的 `<link rel="icon" href="/logo.svg">`（壳没有这一行：窗口无系统边框，标签图标在这条三页流程里没有露脸的地方） |
-| 任务栏 / 安装包 / 卸载项 | `src-tauri/icons/` 那套位图，由 `npx tauri icon public/logo.svg` 从 svg 派生 |
+| 任务栏 / 安装包 / 卸载项 | `src-tauri/icons/` 那套位图，由 `npx tauri icon src-tauri/icons/icon-source.svg` 派生 |
 | 壳的 exe 图标 | `installer/icons/icon.ico`，是 `scripts/build-installer.mjs` 每次从 `src-tauri/icons/icon.ico` 复制的派生物，不入库 |
 
 尺寸规范：位图**一律由命令派生，不要手工做图**。`npx tauri icon` 一条命令重写 `src-tauri/icons/` 下桌面那 16 个文件，同时会顺带产出 `ios/`、`android/`、`64x64.png` —— 本项目只出 Windows，这三样用不到，重生成后删掉即可（下次跑命令还会再长出来）。
@@ -59,14 +66,17 @@ node -e "const fs=require('fs');const ico=fs.readFileSync('src-tauri/icons/icon.
 
 `6/6` 才算数；`0/6` 就是上面那个坑。别用 `[Drawing.Icon]::ExtractAssociatedIcon()` 抽查——它不带 alpha，拿到的全是透明加乱 RGB，不能当证据。
 
+这条只适用于 `SideShift.exe` 与壳 `SideShift-Setup.exe`。**NSIS 出的 `*_x64-setup.exe` 不适用**：它的图标组是 makensis 自己写的（组名 `#103` 而非 `#32512`，图重编码成 BMP），字节对不上属正常，照 0/6 去查它只会浪费时间。
+
 **改了图标但机器上仍然不变**，剩下两种可能：机器上跑的是旧 exe（安装版要重装，便携版要换 zip），或 Windows 的图标缓存记着旧图（换个目录放 exe 就能排除这层）。
 
-**改了 `public/logo.svg` 之后必须做的三件事**：重跑 `npx tauri icon public/logo.svg` → 重出三个产物（`tauri build` → `installer` → `portable`，图标嵌在 exe 资源里，不重出就是旧图）→ 抽查一张位图确认颜色真变了：
+**改了 logo 形状之后必须做的四件事**：两份 svg 都改（满格那份 + 带边那份，见上面的分色比）→ 重跑 `npx tauri icon src-tauri/icons/icon-source.svg` → 重出三个产物（`tauri build` → `installer` → `portable`，图标嵌在 exe 资源里，不重出就是旧图）→ 抽查一张位图确认颜色和留白都对：
 
 ```powershell
 Add-Type -AssemblyName System.Drawing
 $b = [Drawing.Bitmap]::FromFile("$PWD\src-tauri\icons\32x32.png")
-$b.GetPixel(1, 1); $b.GetPixel(16, 28)   # 上截应为 A9B2FF，下截应为 4F5DE5
+# 32x32 里图形应占 24px 居中：四角透明、(16,6) 上截 A9B2FF、(16,20) 下截 4F5DE5
+$b.GetPixel(0, 0).A; $b.GetPixel(16, 6); $b.GetPixel(16, 20)
 ```
 
 ## 版本号只有一个源
