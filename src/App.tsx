@@ -59,12 +59,19 @@ function Shell() {
             <TitleBar />
             <div className="flex-1 flex min-h-0">
                 <Sidebar />
-                {/* 页面内容区：设计稿 MainArea padding [24,32]（纵向 24 / 横向 32） */}
-                <main className="page-scroll flex-1 overflow-auto px-8 py-6">
+                {/* 页面内容区：设计稿 MainArea padding [24,32]（纵向 24 / 横向 32）。
+                    纵向留白**由各页自己的根元素带**（见下），这里只留横向：
+                    滚动容器自带的 padding-top 是吸顶页头盖不住的一条带子——sticky 的贴合边落在
+                    内容盒（padding 之下），页头永远差着这 24px，卡片从缝里露出来。
+                    契约：每个页面根元素 = `py-6`（任务列表页把 pt-6 放进吸顶盒里，好让贴合边=留白起点）。 */}
+                <main className="page-scroll flex-1 overflow-auto px-8">
                     <Page />
                 </main>
-                {/* 回收站入口：整窗右下角常驻（飞行卡片的落点），空回收站时透明不接收点击 */}
-                <TrashBin />
+                {/* 回收站入口：只在任务列表页挂着——删除与飞行落点都发生在那一页，别的页面
+                    亮一个够不着的垃圾桶只是噪音。仍在 Shell 层而不是塞进 TasksPage：
+                    它是 `fixed` 的落点，留在滚动容器外面不必去赌「fixed 后代是否被滚动容器裁」这一类
+                    实现细节，而且它一直挂在 DOM 里（空回收站时透明），飞行才量得到中心。 */}
+                {entry.key === "tasks" && <TrashBin />}
             </div>
         </div>
     );

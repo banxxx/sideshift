@@ -4,6 +4,8 @@ import type {
     CacheCleanMode,
     CacheUsage,
     CleanReport,
+    UpdateChannel,
+    UpdateInfo,
     VersionOption,
 } from "@/lib/types";
 
@@ -22,7 +24,18 @@ export const mockDefaultSettings: AppSettings = {
     verifyAfterBuild: false,
     downloadSource: "official",
     concurrency: 6,
+    // null = 跟随这一枚包的版本号，与 Rust 的默认一致（dev 下版本串由 api 层带上）
+    updateChannel: null,
 };
+
+/**
+ * 检查更新（浏览器 dev）：造一条"比本地新"的 release，让「发现新版本」这条界面路径在没后端时也能演。
+ * 返回哪一档跟着渠道走，所以设置页里切渠道能立刻看出区别；真实实现比的是 GitHub releases 列表。
+ */
+export function mockCheckUpdate(current: string, channel: UpdateChannel | null): UpdateInfo {
+    const beta = channel === "beta" || (channel === null && current.includes("-"));
+    return { current, latest: beta ? "1.0.0-beta.2" : "1.0.1", hasUpdate: true };
+}
 
 /** 下载源下拉（Settings · 网络）：与 Rust `list_download_sources` 同序同文案 */
 export const mockDownloadSources: VersionOption[] = [

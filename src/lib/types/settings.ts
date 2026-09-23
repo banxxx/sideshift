@@ -3,6 +3,9 @@
 /** 下载源（Settings · 网络）：官方 / BMCLAPI 国内镜像，镜像不通自动回落官方 */
 export type DownloadSource = "official" | "bmclapi";
 
+/** 更新渠道（Settings · 外观与关于）：正式版 / Beta，对应 GitHub release 的 prerelease 标志 */
+export type UpdateChannel = "stable" | "beta";
+
 export interface AppSettings {
     /** 服务端输出目录（报告页输出路径） */
     outputDir: string;
@@ -18,6 +21,24 @@ export interface AppSettings {
     concurrency: number;
     /** 自动分类时允许联网反查 Modrinth（关掉了只剩包内自证 + 本地索引 + 名称兜底） */
     autoClassifyOnline: boolean;
+    /**
+     * 更新渠道。`null` 是有意义的一档：**跟随这一枚包自己的版本号**——
+     * 版本号带预发布位的包收 Beta，纯版本号收正式版。在设置里选过一次就变成显式值。
+     */
+    updateChannel: UpdateChannel | null;
+}
+
+/**
+ * 检查更新的结果（Rust: check_update）。有没有更新是后端用 semver 比出来的，
+ * 前端不拿字符串自己比：`1.0.0-beta.2` 与 `1.0.0-beta.10` 这种号字符串一定比反。
+ */
+export interface UpdateInfo {
+    /** 本地版本，与前端注入的 APP_VERSION 同源 */
+    current: string;
+    /** 该渠道最新的一条 release；仓库还没发过 release 时为 null */
+    latest: string | null;
+    /** latest 严格新于 current 才算有更新 */
+    hasUpdate: boolean;
 }
 
 /**

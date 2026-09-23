@@ -198,7 +198,7 @@ export function TaskDetailPage() {
 
     if (!taskId || missing) {
         return (
-            <div className="flex flex-col gap-5">
+            <div className="flex flex-col gap-5 py-6">
                 <PageHeader title="任务详情" />
                 <Panel className="items-center py-16">
                     <p className="text-[13px] text-text-2">任务不存在或已过期。</p>
@@ -212,7 +212,7 @@ export function TaskDetailPage() {
 
     if (!task) {
         return (
-            <div className="flex flex-col gap-5">
+            <div className="flex flex-col gap-5 py-6">
                 <PageHeader title="任务详情" sub="正在读取任务状态…" />
                 <Panel className="items-center py-16">
                     <span className="h-4 w-40 animate-pulse rounded bg-stroke" />
@@ -299,7 +299,7 @@ export function TaskDetailPage() {
     };
 
     return (
-        <div className="flex flex-col gap-5">
+        <div className="flex flex-col gap-5 py-6">
             <PageHeader
                 title={packName}
                 sub={subLine(task, elapsed)}

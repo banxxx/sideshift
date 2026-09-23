@@ -1,5 +1,5 @@
 /**
- * 左侧导航栏（SS.pen 各帧 Sidebar：宽 212 / 品牌行 + BETA 徽章 / 导航行 36 高 / 底部版本+主题切换）
+ * 左侧导航栏（SS.pen 各帧 Sidebar：宽 212 / 品牌行 + 预发布徽章（稳定版不渲染）/ 导航行 36 高 / 底部版本+主题切换）
  *
  * 直接消费导航上下文：点一级页 = 清栈切换；二级页期间其所属一级页保持高亮。
  * 高亮样式按设计稿：accent-dim 底 + accent 图标文字（不是实心 accent 底）。
@@ -11,9 +11,10 @@ import { Home, ListChecks, Settings, Moon, Sun } from "lucide-react";
 import { useRef, useState } from "react";
 import { AnimatePresence, motion } from "motion/react";
 import { NotificationStack } from "./NotificationStack";
-import { Tip, TIP_TRIGGER, HOVER_FILL } from "@/components/ui";
+import { HOVER_FILL } from "@/components/ui";
 import { cn } from "@/lib/utils";
 import { isDark, switchTheme, useTheme } from "@/lib/theme";
+import { PRERELEASE_BADGE, VERSION_CORE } from "@/lib/api";
 import {
     SECONDARY_OWNER,
     useNavigation,
@@ -34,9 +35,9 @@ export function Sidebar() {
     // 每点一次换一个 key 重播光环；不需要退场，终态本身就是透明
     const [pulse, setPulse] = useState(0);
 
-    /** 快切只两态：点下去即锁定浅/深，因此文案先把「这会离开跟随系统」说破 */
+    /** 快切只两态：点下去即锁定浅/深，因此读屏文案先把「这会离开跟随系统」说破（按钮无图标外的可见文字，靠它当名字） */
     const next = dark ? "light" : "dark";
-    const themeTip =
+    const themeLabel =
         theme === "system"
             ? `跟随系统（当前${dark ? "深色" : "亮色"}）· 点击锁定为${next === "light" ? "亮色" : "深色"}`
             : `切换到${next === "light" ? "亮色" : "深色"}`;
@@ -49,14 +50,19 @@ export function Sidebar() {
 
     return (
         <aside className="w-[212px] shrink-0 bg-bg-panel border-r border-stroke-soft flex flex-col px-3 pt-4 pb-0">
-            {/* 品牌行：SideShift + BETA 徽章 */}
-            <div className="h-7 flex items-center gap-2.5 px-2">
+            {/* 品牌行：SideShift + 预发布徽章 */}
+            <div className="h-7 flex items-center gap-1.5 px-2">
                 <span className="font-heading text-base font-bold tracking-tight text-text-1">
                     SideShift
                 </span>
-                <span className="rounded-full bg-accent-dim px-[7px] py-0.5 text-[10px] font-semibold text-accent">
-                    BETA
-                </span>
+                {/* 预发布徽章：文案由版本号推导（见 api 的 PRERELEASE_BADGE），稳定版整枚不渲染。
+                    行高必须写死：html 的 24px 行高会继承进来，不锁就把 9px 字撑成 28px 高的胶囊。
+                    圆角不走 sm(6)——盒子只有 16 高，6 已经读作胶囊了。 */}
+                {PRERELEASE_BADGE && (
+                    <span className="inline-flex h-4 shrink-0 items-center rounded-[4px] bg-accent-dim px-1.5 text-[9px] font-semibold leading-none tracking-[0.04em] text-accent">
+                        {PRERELEASE_BADGE}
+                    </span>
+                )}
             </div>
 
             <div className="h-5" />
@@ -92,7 +98,7 @@ export function Sidebar() {
 
             {/* 底部：版本号 + 主题切换（32×32 surface-2 r8） */}
             <div className="flex items-center justify-between pt-3 pr-0 pb-3 pl-3">
-                <span className="font-mono text-[11px] text-text-3">v0.1.0</span>
+                <span className="font-mono text-[11px] text-text-3">v{VERSION_CORE}</span>
                 <button
                     ref={themeBtn}
                     onClick={() => {
@@ -100,9 +106,8 @@ export function Sidebar() {
                         // 圆心取这枚按钮：颜色从手指落点铺开才读得出因果（见 switchTheme 的时序说明）
                         switchTheme(next, themeBtn.current);
                     }}
-                    aria-label={themeTip}
+                    aria-label={themeLabel}
                     className={cn(
-                        TIP_TRIGGER,
                         "relative size-8 rounded-lg bg-surface-2 flex items-center justify-center text-text-2 hover:text-text-1",
                         HOVER_FILL
                     )}
@@ -133,8 +138,6 @@ export function Sidebar() {
                             </motion.span>
                         </AnimatePresence>
                     </span>
-                    {/* side="top"：这枚按钮离窗底只剩 pb-3，气泡朝下长会把整窗撑出一道常驻滚动条 */}
-                    <Tip label={themeTip} side="top" />
                 </button>
             </div>
         </aside>

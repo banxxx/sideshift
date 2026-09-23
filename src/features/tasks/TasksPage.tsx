@@ -1,21 +1,27 @@
 /**
  * 任务列表页 Tasks（SS.pen `YUUJQ`，空态 `YBR4K`）
  *
- * 结构：页头（标题 + 等宽统计副标 + 右侧分段筛选）→ 任务卡列表（gap16）。
+ * 结构：**吸顶页头**（标题 + 等宽统计副标 + 右侧分段筛选）→ 任务卡列表（gap16）。
  * 单卡（gap12 padding20）三行：
  *  row1 = 36×36 状态图标盒 + 包名/输出名两行 + 状态芯片 + 右侧耗时
  *  row2 = 进度条 + 百分比（仅运行中）
  *  row3 = 左等宽明细行 + 右操作按钮组（槽位固定：删除最左 → 状态动作 → 主按钮进详情，
  *         失败态改为错误盒 + 右对齐按钮；详情页是任务唯一的下钻目的地，列表不再各发各的跳转）
- * 空态为 560 高无边框块：56×56 图标盒 + 两行等宽文案 + accent 主按钮。
+ * 空态两套：整页无任务 = 70vh 无边框块（图标盒 + 两行等宽文案 + accent 主按钮）；
+ * 筛选后为空 = 同款视觉但更短，图标换 SearchX 说明「不是没有任务，是这一档没有」。
  *
  * 删除不是「点一下就没」，而是一段可反悔的动作（曲线与节奏见 ./delete-flight.ts）：
  * 两个入口（删除按钮 / 卡片聚焦后按 Delete）走同一条流程 ——
  * 卡片克隆出去沿弧线飞进右下角垃圾桶，`lead` 时刻才从列表摘掉并通知后端（下方卡片用 motion 的
  * layout 弹簧补位），落地前点它或按 Esc 都算追回，数据没动过。
+ *
+ * 换筛选是一次换页，不是一次重排：在场每张卡片一律从下方升起（./entry-curve.ts 那条「送 + 弹」曲线，
+ * 逐卡错峰），谁都不回自己原来的格子 —— 每张卡片自己的位移都单调向上（弹过目标线就定住，不摆回线下），
+ * 也就不会读成「两拨卡片方向相反地交错」。
+ * 被筛掉的当场消失（下落退场层试过，那张克隆会盖住页面，已整体删除）。
  */
-import { Check, Download, Inbox, RefreshCw, X } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import { Check, Download, Inbox, RefreshCw, SearchX, X } from "lucide-react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { motion, type Transition } from "motion/react";
 import * as api from "@/lib/api";
 import { notify } from "@/lib/notify";
@@ -40,6 +46,7 @@ import {
     startFlight,
     type Flight,
 } from "./delete-flight";
+import { ENTRY_RUN_MS, entryStepMs, playEntry } from "./entry-curve";
 
 type Filter = "all" | "running" | "success" | "failed";
 
@@ -104,6 +111,41 @@ export function TasksPage() {
     }, []);
 
     /**
+     * 换页签的位移（曲线与数字在 ./entry-curve.ts，取自样片的「果冻（定案 · 波数 1）· 换页语义」预设）：
+     * 演的是「换了一屏内容」，谁都不回自己原来的格子 —— 在场每张卡片（留下的、新挂载的都算）一律从下方
+     * risePx 升起，共用同一条「送 + 弹」曲线、逐卡错峰。所以每张卡片自己的位移都单调向上（弹过就定住，
+     * 不摆回线下），也不会出现「一拨上一拨下」。
+     *
+     * 这一拍必须把 motion 的 layout 投影关掉（`projecting`）：投影一开，位移就归弹簧管，而弹簧的过冲
+     * 按行程等比（挪 900px 弹 30px、挪 20px 弹 0.7px）；更要紧的是它会老老实实把留下来的卡片送回旧格子，
+     * 正好把换页语义打掉。入场演完（曲线满长 + 错峰满长）再把投影交还给弹簧，删除补位照旧 FLIP。
+     * 被筛掉的卡片当场从 DOM 消失：下落退场层试过，那张克隆会盖在页面上，已按用户判定整体删掉。
+     * useLayoutEffect 是必需的：effect 晚了就是「先画出新内容、再把它抹到 0」，看着像闪一下。
+     * 首屏不跑（交给卡片挂载时 motion 自己的 initial 淡入）。
+     */
+    const bodyRef = useRef<HTMLDivElement>(null);
+    const [projecting, setProjecting] = useState(true);
+    const projectTimer = useRef(0);
+    const firstPaint = useRef(true);
+    useLayoutEffect(() => {
+        if (firstPaint.current) {
+            firstPaint.current = false;
+            return;
+        }
+        // 曲线写内层：外层的 transform 归 layout 投影管（删除补位那一路），两层各写各的才不抢属性
+        const targets = Array.from(bodyRef.current?.querySelectorAll<HTMLElement>("[data-entry]") ?? []);
+        // 筛到空档时没有卡片可演，就让整块淡入一下，别让空态凭空出现
+        const nodes = targets.length ? targets : bodyRef.current ? [bodyRef.current] : [];
+        const step = prefersReducedMotion() ? 0 : entryStepMs(nodes.length);
+        const undo = nodes.map((el, i) => playEntry(el, i * step));
+        window.clearTimeout(projectTimer.current);
+        projectTimer.current = window.setTimeout(() => setProjecting(true), ENTRY_RUN_MS);
+        return () => undo.forEach((stop) => stop());
+    }, [filter]);
+
+    useEffect(() => () => window.clearTimeout(projectTimer.current), []);
+
+    /**
      * 摘除名单要再过一道「回收站里还在吗」：只按黑名单压，撤回那条路会漏——轮询把任务读
      * 回来了，黑名单还压着它，卡片就再也见不着。现在黑名单只在「仍在回收站里」或「还在飞」
      * 时生效，撤回/清空一落地就自动放行，两端不可能对不上账。
@@ -116,6 +158,13 @@ export function TasksPage() {
     /** 页头统计跟着收：正在飞的卡片也不该再挂在计数里等下一拍轮询 */
     const shown = left.filter((t) => !flying.has(t.id));
     const visible = shown.filter((t) => matchesFilter(filter, t));
+
+    /** 切页签：把 layout 投影关掉一整拍，这一趟的位移归 ./entry-curve.ts 那条曲线管（交还时机在入场 effect 里排）。 */
+    const changeFilter = (next: Filter) => {
+        if (next === filter) return;
+        setFilter(next);
+        setProjecting(false);
+    };
 
     const toggle = (
         setter: (fn: (prev: Set<string>) => Set<string>) => void,
@@ -180,32 +229,48 @@ export function TasksPage() {
     };
 
     return (
-        <div className="flex flex-col gap-5">
-            <PageHeader
-                compact
-                title="转换任务"
-                sub={tasks.length === 0 ? "从首页选择整合包，开始第一次转换" : summary(shown)}
-                subTone="mono"
-                right={<SegTabs items={FILTERS} value={filter} onChange={setFilter} />}
-            />
+        <div className="flex flex-col gap-5 pb-6">
+            {/* 吸顶页头：本页是全站唯一会长到好几屏的页面，筛选页签必须一直够得着。
+                留白这圈由**吸顶盒自己**出（pt-6），main 不再有纵向 padding、这里也不许用负 margin：
+                负 margin 会把盒子顶到 containing block（页根 div 的内容盒上沿）之外，浏览器原地把它
+                夹回来——静止时页头底色压住列表 24px，滚动时顶部又永远留一条盖不住的带子。
+                盒子贴在滚动容器上沿贴合，卡片是从它**底下**穿过去的。
+                pb-5 + -mb-5 抵掉 flex 的 gap-5：静止观感与不吸顶时逐像素相同，但那 20px 归底色管。
+                纯色底平时看不出来（页面底同色），只有卡片从底下滚过来才显形——不额外加描边，
+                本项目的页头没有分隔线。z-20 是必需的：卡片带 transform 就是层叠上下文，
+                按文档顺序会盖在页头上面。 */}
+            <div className="sticky top-0 z-20 -mb-5 bg-background pt-6 pb-5">
+                <PageHeader
+                    compact
+                    title="转换任务"
+                    sub={tasks.length === 0 ? "从首页选择整合包，开始第一次转换" : summary(shown)}
+                    subTone="mono"
+                    right={<SegTabs items={FILTERS} value={filter} onChange={changeFilter} />}
+                />
+            </div>
 
             {tasks.length === 0 ? (
                 <EmptyTasks />
             ) : (
-                <div className="flex flex-col gap-4">
-                    {visible.map((t, i) => (
-                        <TaskRow
-                            key={t.id}
-                            task={t}
-                            index={i}
-                            ghosted={flying.has(t.id)}
-                            onDelete={beginDelete}
-                        />
-                    ))}
-                    {visible.length === 0 && (
-                        <p className="py-10 text-center font-mono text-[11px] text-text-3">
-                            该筛选下暂无任务
-                        </p>
+                /* 常驻容器：卡片节点按 task.id 长期存续，重排的行程靠"切换前量一次 offsetTop、重排后
+                   再量一次"自己算（曲线打在每张卡自己的 data-entry 内层上）。为什么不用 AnimatePresence
+                   换 key：那会让旧内容先卸载/后卸载，两种都有代价——mode="wait" 中间塌一次高度（滚到下
+                   面切页签会跳），mode="popLayout" 则新旧同 id 卡片重叠，旧的 ref 清理会把新登记的那个
+                   节点删掉，删除飞行拿不到矩形。 */
+                <div ref={bodyRef} className="flex flex-col gap-4">
+                    {visible.length === 0 ? (
+                        <EmptyFilter />
+                    ) : (
+                        visible.map((t, i) => (
+                            <TaskRow
+                                key={t.id}
+                                task={t}
+                                index={i}
+                                ghosted={flying.has(t.id)}
+                                project={projecting}
+                                onDelete={beginDelete}
+                            />
+                        ))
                     )}
                 </div>
             )}
@@ -247,7 +312,7 @@ function countOf(tasks: ConversionTask[], filter: Exclude<Filter, "all">): numbe
     return tasks.filter((t) => matchesFilter(filter, t)).length;
 }
 
-/* ---------------- 空态（YBR4K） ---------------- */
+/* ---------------- 空态：整页无任务（YBR4K）/ 某一档筛完没有 ---------------- */
 
 /** 空态块高度：70vh 在 1200×800 基准下正好等于设计稿的 560；窗口变矮先收这里（下限 400 保证
  *  图标盒+两行文案+按钮 176 的内容不破版），变高封顶 640，免得拉成一整屏空白。 */
@@ -279,25 +344,56 @@ function EmptyTasks() {
     );
 }
 
+/** 某一档筛完没有任务：任务其实有，只是这一档没有，所以图标与文案都得跟「整页空」分开。
+ *  照旧做成居中的块（水平+垂直都居中），不留一行飘着的裸文字；比整页空态矮一档，
+ *  免得切个页签就换来一大片空白。出现时的淡入归整块内容那一次 fade-through，这里不再各自动画。 */
+function EmptyFilter() {
+    return (
+        <div className="flex h-[clamp(240px,38vh,380px)] flex-col items-center justify-center gap-4 rounded-[12px] bg-bg-app px-5 py-10">
+            <span className="flex size-14 items-center justify-center rounded-2xl bg-surface-2">
+                <SearchX className="size-6 text-text-3" />
+            </span>
+            <div className="flex flex-col items-center gap-1">
+                <span className="font-mono text-[16px] leading-[24px] font-semibold text-text-1">
+                    该筛选下暂无任务
+                </span>
+                <span className="font-mono text-[12px] leading-[18px] font-normal text-text-3">
+                    切回「全部」看看，或到首页再转换一个整合包
+                </span>
+            </div>
+        </div>
+    );
+}
+
 /* ---------------- 卡片行：键盘删除与补位弹簧挂在这一层 ---------------- */
 
 /**
- * motion.div 只做「这张卡在列表里的位置」，卡面仍是 TaskCard。
- * `layout="position"`：补位只平移不缩形（等高弹簧的等价物，正是样片里 FLIP 在做的事）。
+ * motion.div 只管「这张卡在列表里的位置」，卡面仍是 TaskCard。
+ * `layout="position"`：补位只平移不缩形（等高弹簧的等价物）。但换页签那一拍要关
+ * （`project=false`，见 TasksPage 的 changeFilter）：投影一开位移就归弹簧管，过冲按行程等比统一不了
+ * 手感，而且它会在外层再叠一次 FLIP，和入场曲线撞成双重位移。
+ * 位移曲线挂在**内层** `data-entry` 节点上：外层的 transform 归投影管（删除补位时它正写着 translateY），
+ * 两层各写各的才不会抢同一个属性。
+ * `initial/animate` 那记淡入仍留着：它管的是「第一次挂载」（进页面、从回收站恢复），
+ * 与换页签的统一入场是两条时间线，叠在一起都是淡入，不冲突。
  */
 function TaskRow({
     task,
     index,
     ghosted,
+    project,
     onDelete,
 }: {
     task: ConversionTask;
     index: number;
     /** 正在飞：本体隐身保位，画面交给 overlay 里的克隆 */
     ghosted: boolean;
+    /** 换页签那一拍为 false：位移交给入场曲线，别让弹簧把卡片送回旧位置 */
+    project: boolean;
     onDelete: (task: ConversionTask) => void;
 }) {
     const deletable = task.status !== "running" && task.status !== "queued";
+    const delay = prefersReducedMotion() ? 0 : Math.min(index, 5) * STAGGER_STEP;
     const fly = () => {
         if (deletable) onDelete(task);
     };
@@ -308,11 +404,15 @@ function TaskRow({
                 if (el) cardEls.set(task.id, el);
                 else cardEls.delete(task.id);
             }}
-            layout="position"
+            layout={project ? "position" : false}
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
             transition={{
                 ...REFLOW,
                 // 错峰按可见序号给；reduced-motion 下弹簧本来就被收掉，不必再排队
-                delay: prefersReducedMotion() ? 0 : Math.min(index, 5) * STAGGER_STEP,
+                delay,
+                // 淡入不跟着弹簧走：弹簧是给位移用的，opacity 过冲只会让卡片在满透明度上停一下
+                opacity: { duration: 0.18, delay, ease: "easeOut" },
             }}
             tabIndex={deletable ? 0 : -1}
             onKeyDown={(e) => {
@@ -327,7 +427,9 @@ function TaskRow({
                 ghosted && "invisible"
             )}
         >
-            <TaskCard task={task} onDelete={fly} />
+            <div data-entry>
+                <TaskCard task={task} onDelete={fly} />
+            </div>
         </motion.div>
     );
 }

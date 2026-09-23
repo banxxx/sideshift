@@ -492,7 +492,7 @@ export function ConvertPage() {
 
     if (!manifest) {
         return (
-            <div className="flex flex-col gap-5">
+            <div className="flex flex-col gap-5 py-6">
                 <PageHeader title="转换配置" />
                 <Panel className="items-center py-16">
                     <Layers className="size-6 text-text-3" />
@@ -525,7 +525,7 @@ export function ConvertPage() {
 
     return (
         <motion.div
-            className="flex flex-col gap-5 overflow-hidden"
+            className="flex flex-col gap-5 overflow-hidden py-6"
             variants={PAGE_RISE}
             initial="hidden"
             animate="show"

@@ -609,6 +609,46 @@ pub struct AppSettings {
     /// 旧 settings.json 无此字段 → default_fn 补 true，不能让整体反序列化失败丢用户设置
     #[serde(default = "default_online_classify")]
     pub auto_classify_online: bool,
+    /// 更新渠道。`None` 不是"没选过"的临时状态而是真语义：**跟随这一枚包自己的版本号**——
+    /// 带预发布位的包收 Beta，纯版本号收正式版，所以新装用户一个 setting 都没动也不会站错队。
+    /// 用户在设置页选过一次之后就是显式值，从此不再看自己的版本号（这正是他要的手动切换）。
+    #[serde(default)]
+    pub update_channel: Option<UpdateChannel>,
+}
+
+/// 更新渠道（Settings · 外观与关于）：正式版 / Beta，对应 GitHub release 的 prerelease 标志
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum UpdateChannel {
+    Stable,
+    Beta,
+    /// 手改 settings.json 写进无效值时认成占位，不能让整份设置因为一个坏枚举全丢（同 DownloadSource）
+    #[serde(other)]
+    Unspecified,
+}
+
+impl UpdateChannel {
+    /// 只认 beta，其余（含占位值）落回正式版——订阅错了方向比订阅保守更糟
+    pub fn normalized(self) -> Self {
+        if self == Self::Beta {
+            Self::Beta
+        } else {
+            Self::Stable
+        }
+    }
+}
+
+/// 检查更新的结果（Rust: check_update）。结论在 Rust 侧算，前端不再自己比字符串：
+/// `1.0.0-beta.2` 与 `1.0.0-beta.10` 这种号，字符串比较一定比反。
+#[derive(Serialize, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct UpdateInfo {
+    /// 本地版本（取自 tauri 的 package_info，与前端注入的 __APP_VERSION__ 同一个源）
+    pub current: String,
+    /// 该渠道下最新的那条 release；仓库还没发过 release、或本渠道一条都没有时为 null
+    pub latest: Option<String>,
+    /// latest 严格新于 current 才算有更新：同版本、更老都不提示
+    pub has_update: bool,
 }
 
 fn default_online_classify() -> bool {
@@ -687,6 +727,7 @@ impl Default for AppSettings {
             download_source: DownloadSource::Official,
             concurrency: 6,
             auto_classify_online: true,
+            update_channel: None,
         }
     }
 }
@@ -707,6 +748,7 @@ impl AppSettings {
             download_source: DownloadSource::Official,
             concurrency: 6,
             auto_classify_online: true,
+            update_channel: None,
         }
     }
 
@@ -716,6 +758,8 @@ impl AppSettings {
         self.output_dir = native_path(&self.output_dir);
         self.cache_dir = native_path(&self.cache_dir);
         self.download_source = self.download_source.normalized();
+        // 只在"选过"的时候归位；None 是"跟随当前构建"，不能被当成无效值顶成正式版
+        self.update_channel = self.update_channel.map(UpdateChannel::normalized);
         self
     }
 }
@@ -747,6 +791,21 @@ mod tests {
             .output_dir,
             if cfg!(windows) { "D:\\mc\\out" } else { "D:/mc/out" }
         );
+    }
+
+    /// 老 settings.json 里没有 updateChannel：必须补成 `None`（= 跟随当前构建），
+    /// 不能因为多一个字段就把用户整份设置丢掉；档位值写坏了也一样只能归位，不能连带失败。
+    #[test]
+    fn settings_without_update_channel_still_load() {
+        let legacy = r#"{"outputDir":"o","cacheDir":"c","stripClientOnly":true,"verifyAfterBuild":false,
+            "downloadSource":"official","concurrency":6,"autoClassifyOnline":true}"#;
+        let s: AppSettings = serde_json::from_str(legacy).expect("旧设置应能加载");
+        assert_eq!(s.update_channel, None);
+
+        let broken = r#"{"outputDir":"o","cacheDir":"c","stripClientOnly":true,"verifyAfterBuild":false,
+            "downloadSource":"official","concurrency":6,"updateChannel":"ntfs"}"#;
+        let s: AppSettings = serde_json::from_str(broken).expect("无效渠道值不该拖垮整份设置");
+        assert_eq!(s.normalized().update_channel, Some(UpdateChannel::Stable));
     }
 
     /// 一次性迁移只能命中「我们自己写进去的旧默认」：用户挑过/手打的路径差一个字符都不能动，

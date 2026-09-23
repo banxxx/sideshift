@@ -1,6 +1,7 @@
 [package]
 name = "sideshift-installer"
-version = "0.1.0"
+# 与主应用同一版本源（根 package.json，壳的 tauri.conf.json 也指过去），这里同步只为不互相打脸
+version = "1.0.0-beta.1"
 description = "SideShift 安装壳：界面收集数据目录偏好，真正的落盘交给官方 NSIS 静默安装"
 edition = "2021"
 

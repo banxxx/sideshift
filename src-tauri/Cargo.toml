@@ -1,6 +1,8 @@
 [package]
 name = "sideshift"
-version = "0.1.0"
+# 版本号唯一真源在根目录 package.json（tauri.conf.json 与前端构建注入都读它）。
+# 这里跟着同步只为让 CARGO_PKG_VERSION 不说假话，实际外显取自 app.package_info()。
+version = "1.0.0-beta.1"
 description = "A Tauri App"
 authors = ["you"]
 edition = "2021"
@@ -33,6 +35,8 @@ chrono = { version = "0.4", default-features = false, features = ["clock", "std"
 uuid = { version = "1", features = ["v4"] }
 thiserror = "2"
 sha1 = "0.10"
+# 检查更新要比 `1.0.0-beta.2` 与 `1.0.0` 谁新，字符串比较判不出（0.10.0 字面比 0.9.0 小）
+semver = "1"
 
 # 数据根预选要读每个盘的剩余空间（GetDiskFreeSpaceExW）；锁在 windows 目标里，
 # 其他平台编译不到这行，data_root 那边直接返回空候选、回落用户目录

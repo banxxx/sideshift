@@ -1,12 +1,13 @@
 {
   "name": "sideshift",
   "private": true,
-  "version": "0.1.0",
+  "version": "1.0.0-beta.1",
   "type": "module",
   "scripts": {
     "dev": "vite",
     "build": "tsc && vite build",
     "installer": "node scripts/build-installer.mjs",
+    "portable": "node scripts/build-portable.mjs",
     "preview": "vite preview",
     "tauri": "tauri"
   },

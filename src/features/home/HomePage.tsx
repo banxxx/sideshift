@@ -75,7 +75,7 @@ export function HomePage() {
     return (
         // overflow-hidden：进出场时 PackCard 右移 64px / ShiftRail 下移 72px 属于
         // 容器外变换，不裁剪会撑大 main 的滚动区域、闪出横竖滚动条
-        <div className="flex flex-col gap-5 min-h-full relative overflow-hidden">
+        <div className="flex flex-col gap-5 min-h-full relative overflow-hidden py-6">
             <PageHeader
                 title={
                     <span className="inline-flex items-center gap-2">
