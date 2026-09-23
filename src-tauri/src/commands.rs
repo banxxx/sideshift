@@ -1,4 +1,4 @@
-//! Tauri IPC 命令层：与 src/lib/api.ts 的 20 个命令契约一一对应。
+//! Tauri IPC 命令层：前端调用按域拆在 src/lib/api/ 下，注册清单见 lib.rs 的 generate_handler。
 //! 参数默认按 camelCase 暴露给 JS（Tauri v2 约定），JS 侧无需改名。
 
 use std::path::PathBuf;

@@ -34,6 +34,11 @@ uuid = { version = "1", features = ["v4"] }
 thiserror = "2"
 sha1 = "0.10"
 
+# 数据根预选要读每个盘的剩余空间（GetDiskFreeSpaceExW）；锁在 windows 目标里，
+# 其他平台编译不到这行，data_root 那边直接返回空候选、回落用户目录
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = ["Win32_Storage_FileSystem"] }
+
 
 # Read the optimization guideline for more details: https://tauri.app/concept/size/#cargo-configuration
 [profile.release]

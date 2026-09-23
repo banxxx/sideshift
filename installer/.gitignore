@@ -1,0 +1,8 @@
+# 构建产物：target 与主应用共用一个目录（见 scripts/build-installer.mjs，纯为复用已编译依赖），
+# gen 由 tauri-build 每次重写，ui/dist 是 vite 的产物
+/target
+/gen
+/ui/dist
+
+# exe 图标：由出包脚本从 src-tauri/icons/icon.ico 复制过来，入库就成了会漂移的第二份二进制
+/icons/icon.ico

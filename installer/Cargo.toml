@@ -1,0 +1,35 @@
+[package]
+name = "sideshift-installer"
+version = "0.1.0"
+description = "SideShift 安装壳：界面收集数据目录偏好，真正的落盘交给官方 NSIS 静默安装"
+edition = "2021"
+
+# 产物直接叫 SideShift-Setup.exe：发出去的那一个文件就是它的名字，不靠构建脚本改名
+[[bin]]
+name = "SideShift-Setup"
+path = "src/main.rs"
+
+# 与主应用完全分开的两个理由：① 主应用不该知道"安装"这件事（页面语义单一）
+# ② 壳要内嵌 Setup.exe，走 feature 开关会在同一个 crate 里长出第三种形态
+[dependencies]
+tauri = { version = "2", features = [] }
+tauri-plugin-dialog = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# 候选盘探测复用主应用的 data_root.rs（见 src/main.rs 的 #[path] 引入），依赖口径保持一致
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = ["Win32_Storage_FileSystem"] }
+
+[dev-dependencies]
+uuid = { version = "1", features = ["v4"] }
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[profile.release]
+codegen-units = 1
+lto = true
+opt-level = "s"
+strip = true
+panic = "abort"

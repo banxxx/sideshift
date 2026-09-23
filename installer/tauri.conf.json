@@ -1,0 +1,33 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "SideShift Setup",
+  "version": "0.1.0",
+  "identifier": "com.poso.sideshift",
+  "build": {
+    "beforeDevCommand": "pnpm exec vite --config installer/vite.config.ts",
+    "devUrl": "http://localhost:1421",
+    "beforeBuildCommand": "pnpm exec vite build --config installer/vite.config.ts",
+    "frontendDist": "./ui/dist"
+  },
+  "app": {
+    "windows": [
+      {
+        "title": "SideShift 安装",
+        "width": 760,
+        "height": 470,
+        "resizable": false,
+        "minimizable": false,
+        "maximizable": false,
+        "decorations": false,
+        "transparent": false,
+        "center": true
+      }
+    ],
+    "security": {
+      "csp": null
+    }
+  },
+  "bundle": {
+    "active": false
+  }
+}

@@ -1,0 +1,37 @@
+/**
+ * 安装壳的样式入口：以引入为主，只补一条主应用没有的规则。
+ * 令牌、字体、圆角、胶囊滚动条、Shift Rail 的 sheen、主题切换的圆形波（含 ::view-transition 规则）
+ * 全在主应用的 App.css 里；这里把它当唯一真源，顺带用 @source 让 Tailwind 看见共享组件的 class。
+ *
+ * 为什么不抄一份精简版：抄来的令牌会跟着设计稿漂移，装到用户机器上才发现"安装器和应用不是一套"，
+ * 而那正是这次改自绘安装器的理由。代价只是多打几 kB CSS。
+ */
+@import "../../../src/App.css";
+
+/* 共享组件与本页都用得到：Tailwind 只生成扫到的 class，所以源码目录要显式列出 */
+@source "../";
+@source "../../../src/components";
+@source "../../../src/lib";
+
+/* 换页：淡入上浮 300ms。安装壳是三页一步的直线流程，切页要有"推进"的方向感，
+ * 但应用里没有跨页转场可复用（它是单页路由 + 侧栏），所以这条只能自己写。 */
+@keyframes page-in {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+.page-in {
+  animation: page-in 300ms cubic-bezier(0.4, 0, 0.2, 1) both;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .page-in {
+    animation: none;
+  }
+}

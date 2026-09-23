@@ -3,8 +3,13 @@ import type { AppSettings, VersionOption } from "@/lib/types";
 
 const SETTINGS_KEY = "sideshift.settings";
 
+/**
+ * 默认目录对与 Rust 侧同构：`{数据根}\{output,cache}`。
+ * 真实数据根由 Rust 决定（便携包 → exe 同级 data；安装器指定 → 那个根；否则预选非系统盘），
+ * 浏览器 dev 没这些概念，写死这台机器常见的 D: 只为让界面有东西可显示。
+ */
 export const mockDefaultSettings: AppSettings = {
-    outputDir: "~/Documents/SideShift/output",
+    outputDir: "D:\\SideShift\\output",
     cacheDir: "D:\\SideShift\\cache",
     stripClientOnly: true,
     autoClassifyOnline: true,

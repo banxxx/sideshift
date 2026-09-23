@@ -1,4 +1,5 @@
 pub mod parser;
+pub mod data_root;
 pub mod env;
 pub mod detector;
 pub mod downloader;

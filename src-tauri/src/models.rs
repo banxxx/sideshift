@@ -625,6 +625,17 @@ pub fn native_path(s: &str) -> String {
     }
 }
 
+/// 老版本把默认目录写死在用户目录下（`~\SideShift\{output,cache}`），那份绝对路径会被
+/// settings.json 固化，升级后再也跟不到新的预选值。只改写「恰好等于旧默认」的字段——
+/// 那是我们自己写进去的，不是用户挑的；用户手打或选过的路径一律不动。
+pub fn unstick_legacy(dir: &str, legacy: &str, modern: &str) -> String {
+    if dir == legacy {
+        modern.to_string()
+    } else {
+        dir.to_string()
+    }
+}
+
 impl Default for AppSettings {
     fn default() -> Self {
         Self {
@@ -640,12 +651,16 @@ impl Default for AppSettings {
 }
 
 impl AppSettings {
-    pub fn defaults_for(home: &std::path::Path) -> Self {
+    /// 默认目录对挂在给定数据根下（`{根}\SideShift\{output,cache}` 的布局唯一真源）。
+    /// 数据根本身怎么挑见 `core::data_root::suggested_root`（便携 → 安装器指定 → 预选非系统盘 → 用户目录）
+    pub fn defaults_in(root: &std::path::Path) -> Self {
+        // 子目录名与安装壳显示的是同一份布局（`data_root::layout_in`），这里不重复写字面量。
+        // 一段一段 join：写成 join("SideShift/output") 在 Windows 上会得到
+        // `C:\Users\you\SideShift/output` 这种混合分隔符，见 native_path 的说明
+        let (output, cache) = crate::core::data_root::layout_in(root);
         Self {
-            // 一段一段 join：写成 join("SideShift/output") 在 Windows 上会得到
-            // `C:\Users\you\SideShift/output` 这种混合分隔符，见 native_path 的说明
-            output_dir: native_path(&home.join("SideShift").join("output").display().to_string()),
-            cache_dir: native_path(&home.join("SideShift").join("cache").display().to_string()),
+            output_dir: native_path(&output.display().to_string()),
+            cache_dir: native_path(&cache.display().to_string()),
             strip_client_only: true,
             verify_after_build: false,
             download_source: DownloadSource::Official,
@@ -670,13 +685,18 @@ mod tests {
 
     #[test]
     fn defaults_use_native_separators() {
-        let s = AppSettings::defaults_for(std::path::Path::new(if cfg!(windows) {
+        let home = std::path::Path::new(if cfg!(windows) {
             "C:\\Users\\ban"
         } else {
             "/home/ban"
-        }));
+        });
+        let s = AppSettings::defaults_in(&crate::core::data_root::suggested_root(home, home));
         assert!(!s.output_dir.contains('/'), "输出目录残留正斜杠: {}", s.output_dir);
         assert!(!s.cache_dir.contains('/'), "缓存目录残留正斜杠: {}", s.cache_dir);
+        // 数据根与 home 回落共用同一套布局（引导页档位与默认值必须对得上）
+        let in_home = AppSettings::defaults_in(&home.join("SideShift"));
+        assert!(in_home.output_dir.ends_with("output"));
+        assert!(in_home.cache_dir.ends_with("cache"));
         assert_eq!(
             AppSettings {
                 output_dir: "D:/mc/out".into(),
@@ -686,6 +706,27 @@ mod tests {
             .output_dir,
             if cfg!(windows) { "D:\\mc\\out" } else { "D:/mc/out" }
         );
+    }
+
+    /// 一次性迁移只能命中「我们自己写进去的旧默认」：用户挑过/手打的路径差一个字符都不能动，
+    /// 否则就是把别人的服务器目录搬走了。
+    #[test]
+    fn unstick_legacy_rewrites_only_the_old_default() {
+        assert_eq!(
+            unstick_legacy("C:\\Users\\ban\\SideShift\\output", "C:\\Users\\ban\\SideShift\\output", "E:\\SideShift\\output"),
+            "E:\\SideShift\\output"
+        );
+        for kept in [
+            "D:\\mc\\out",                                   // 用户自己挑的盘
+            "C:\\Users\\ban\\SideShift\\output\\",           // 旧默认多个分隔符
+            "C:\\Users\\ban\\.minecraft\\downloads",         // 另一个已有目录
+            "",                                              // 空字段由 load_settings 回落，不归这里管
+        ] {
+            assert_eq!(
+                unstick_legacy(kept, "C:\\Users\\ban\\SideShift\\output", "E:\\SideShift\\output"),
+                kept
+            );
+        }
     }
 
     /// 方案快照三段往返（下发前端 → 回传 start_conversion → 落盘回灌）必须留住端证据字段：
