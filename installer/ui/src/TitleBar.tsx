@@ -8,6 +8,7 @@
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { X } from "lucide-react";
 import { Tip, TIP_TRIGGER } from "@/components/ui/Tip";
+import { Logo } from "@/components/ui/Logo";
 import { cn } from "@/lib/utils";
 
 export function TitleBar() {
@@ -16,10 +17,7 @@ export function TitleBar() {
             data-tauri-drag-region
             className="flex h-10 shrink-0 select-none items-center gap-2.5 border-b border-stroke-soft bg-bg-panel px-4"
         >
-            <span className="flex size-4 flex-col">
-                <span className="h-[5px] shrink-0 bg-grass-top" />
-                <span className="flex-1 bg-accent" />
-            </span>
+            <Logo />
             <span className="text-[12px] leading-[18px] font-medium text-text-2">
                 SideShift 安装程序
             </span>

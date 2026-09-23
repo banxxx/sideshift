@@ -31,3 +31,4 @@ export { Bar, CountRow, ChangeRow, InfoRow, MetaCell, MiniMeta } from "./Meta";
 export { ModalShell } from "./Modal";
 export { Tip, TIP_TRIGGER } from "./Tip";
 export { HOVER_FILL } from "./HoverFill";
+export { Logo } from "./Logo";

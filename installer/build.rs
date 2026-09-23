@@ -11,6 +11,8 @@ const PAYLOAD: &str = "setup-payload.bin";
 
 fn main() {
     println!("cargo:rerun-if-env-changed=SIDESHIFT_RELEASE_DIR");
+    // 同主应用：tauri-build 不盯图标文件，不显式声明就会链到旧的 resource.lib
+    println!("cargo:rerun-if-changed=icons/icon.ico");
 
     let dir = match std::env::var("SIDESHIFT_RELEASE_DIR") {
         Ok(v) if !v.trim().is_empty() => PathBuf::from(v),

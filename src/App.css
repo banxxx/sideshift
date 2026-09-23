@@ -94,8 +94,7 @@
   --diamond: #0e7c94;         /* Fabric 徽章 */
 
   /* ---- Shift Rail 转换轨道 ---- */
-  --grass-top: #a9b2ff;       /* 信标草皮面 */
-  --grass-dirt: #4f5de5;      /* 信标泥土面 */
+  /* 信标两截面色已删：logo 改为直接引用 public/logo.svg（图形单源，见 components/ui/Logo.tsx） */
   --rail-track: #dfe2e8;      /* 轨道未达段 */
 
   /* ---- shadcn 语义变量映射（组件库内部消费） ---- */
@@ -161,8 +160,6 @@
   --amethyst: #b79cff;
   --diamond: #5bd3e8;
 
-  --grass-top: #8b95ff;
-  --grass-dirt: #363c77;
   --rail-track: #2a2d36;
 }
 
@@ -196,8 +193,6 @@
   --color-redstone-dim: var(--redstone-dim);
   --color-amethyst: var(--amethyst);
   --color-diamond: var(--diamond);
-  --color-grass-top: var(--grass-top);
-  --color-grass-dirt: var(--grass-dirt);
   --color-rail-track: var(--rail-track);
 
   /* shadcn 组件消费的颜色 */

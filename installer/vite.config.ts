@@ -15,6 +15,9 @@ const here = import.meta.dirname;
 export default defineConfig(() => ({
     plugins: [react(), tailwindcss()],
     root: path.resolve(here, "ui"),
+    // root 在 installer/ui，publicDir 默认就指向不存在的 installer/ui/public ⇒ /logo.svg 会 404。
+    // 直接指回仓库根的 public/：图形与主应用同一份源文件，不复制第二份
+    publicDir: path.resolve(here, "../public"),
     build: {
         outDir: path.resolve(here, "ui/dist"),
         emptyOutDir: true,

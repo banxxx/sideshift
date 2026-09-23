@@ -1,5 +1,7 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">
-  <!-- SideShift LogoMark：草方块信标（上半 grass-top，下半 accent 泥土），与设计稿一致 -->
-  <rect x="2" y="2" width="28" height="10" rx="0" fill="#A9B2FF"/>
-  <rect x="2" y="10" width="28" height="20" rx="0" fill="#4F5DE5"/>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="2 2 28 28">
+  <!-- SideShift 品牌标识（全应用唯一图形源）：草方块信标，上 #A9B2FF 下 #4F5DE5。
+       viewBox 刻意裁到图形本身 2 2 28 28 = 画布不留透明边，容器给多大就是多大；
+       桌面/任务栏/安装包那套位图由 `npx tauri icon public/logo.svg` 从这份派生。 -->
+  <rect x="2" y="2" width="28" height="10" fill="#A9B2FF"/>
+  <rect x="2" y="10" width="28" height="20" fill="#4F5DE5"/>
 </svg>

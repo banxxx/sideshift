@@ -32,6 +32,43 @@ Minecraft 模组包转换工具（Tauri 2 + React 19 + Vite）。开发环境细
 
 安装壳与主应用共用 `src-tauri/target`（两边依赖几乎重合，各留一份要多占几 GB），因此两条 cargo 任务会互相等锁，只能串行。
 
+## 品牌标识与图标
+
+**唯一图形源是 `public/logo.svg`，全应用不允许自绘 logo。** 它的 `viewBox` 已裁到图形本身（`2 2 28 28`），画布四周不留透明边 —— 所以容器给多大、看到的方块就是多大，不需要任何"反算尺寸"的魔法数。
+
+| 用在哪 | 怎么走 |
+| --- | --- |
+| 标题栏（主应用 + 安装壳） | `src/components/ui/Logo.tsx`，尺寸 `size-4` = 16×16。壳那边引同一份源码（vite `@` 别名指回 `src/`，且 `publicDir` 指回仓库根的 `public/`） |
+| 浏览器标签图标 | 主应用 `index.html` 的 `<link rel="icon" href="/logo.svg">`（壳没有这一行：窗口无系统边框，标签图标在这条三页流程里没有露脸的地方） |
+| 任务栏 / 安装包 / 卸载项 | `src-tauri/icons/` 那套位图，由 `npx tauri icon public/logo.svg` 从 svg 派生 |
+| 壳的 exe 图标 | `installer/icons/icon.ico`，是 `scripts/build-installer.mjs` 每次从 `src-tauri/icons/icon.ico` 复制的派生物，不入库 |
+
+尺寸规范：位图**一律由命令派生，不要手工做图**。`npx tauri icon` 一条命令重写 `src-tauri/icons/` 下桌面那 16 个文件，同时会顺带产出 `ios/`、`android/`、`64x64.png` —— 本项目只出 Windows，这三样用不到，重生成后删掉即可（下次跑命令还会再长出来）。
+
+### 任务栏 / 资源管理器那个图标走的是另一条链
+
+它**不是前端画的**，`<img src="/logo.svg">` 只管窗口里面那块 16×16。任务栏按钮、资源管理器缩略图、开始菜单和桌面快捷方式、卸载列表，看的全是 **exe 文件里内嵌的 Win32 图标资源**：`build.rs` → `tauri-build` 用 `bundle.icon` 里那个 `.ico` 编出 `resource.lib` → 链接期写进 exe。所以这条链上任何一环没走，界面上看着全对、外壳仍是旧图。
+
+**坑（实测踩过）**：`tauri-build` 只对 `tauri.conf.json` 和 `capabilities` 声明了 `cargo:rerun-if-changed`，**图标不在里面**。改完 `icon.ico` 直接 `tauri build`，build.rs 不会重跑，链接用的还是上次那份 `resource.lib`——构建一路绿灯，产物里是旧图标。两份 `build.rs` 已各自补上 `rerun-if-changed=icons/icon.ico`；这条声明别删。
+
+验证不看肉眼。`RT_ICON` 里的 PNG 是**原样**存进 exe 的（不做二次编码），所以拿 `icon.ico` 的条目字节去 exe 里找即可——在根目录跑：
+
+```powershell
+node -e "const fs=require('fs');const ico=fs.readFileSync('src-tauri/icons/icon.ico');const exe=fs.readFileSync(process.argv[1]);let ok=0;const n=ico.readUInt16LE(4);for(let i=0;i<n;i++){const o=6+16*i,s=ico.readUInt32LE(o+8),f=ico.readUInt32LE(o+12);if(exe.indexOf(ico.subarray(f,f+s))>=0)ok++}console.log(ok+'/'+n+' 图标条目在 exe 内')" src-tauri/target/release/SideShift.exe
+```
+
+`6/6` 才算数；`0/6` 就是上面那个坑。别用 `[Drawing.Icon]::ExtractAssociatedIcon()` 抽查——它不带 alpha，拿到的全是透明加乱 RGB，不能当证据。
+
+**改了图标但机器上仍然不变**，剩下两种可能：机器上跑的是旧 exe（安装版要重装，便携版要换 zip），或 Windows 的图标缓存记着旧图（换个目录放 exe 就能排除这层）。
+
+**改了 `public/logo.svg` 之后必须做的三件事**：重跑 `npx tauri icon public/logo.svg` → 重出三个产物（`tauri build` → `installer` → `portable`，图标嵌在 exe 资源里，不重出就是旧图）→ 抽查一张位图确认颜色真变了：
+
+```powershell
+Add-Type -AssemblyName System.Drawing
+$b = [Drawing.Bitmap]::FromFile("$PWD\src-tauri\icons\32x32.png")
+$b.GetPixel(1, 1); $b.GetPixel(16, 28)   # 上截应为 A9B2FF，下截应为 4F5DE5
+```
+
 ## 版本号只有一个源
 
 `package.json` 的 `version` 是真源，其余都是它的下游：
