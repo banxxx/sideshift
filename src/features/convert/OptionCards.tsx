@@ -11,6 +11,7 @@ import type {
     PackDirNode,
     PackManifest,
 } from "@/lib/types";
+import { RISE } from "@/lib/springs";
 import {
     Btn,
     Divider,
@@ -160,11 +161,7 @@ export function KeepDirsCard({
                                     initial={{ opacity: 0, y: -6 }}
                                     animate={{ opacity: 1, y: 0 }}
                                     exit={{ opacity: 0, y: -6 }}
-                                    transition={{
-                                        type: "spring",
-                                        stiffness: 320,
-                                        damping: 28,
-                                    }}
+                                    transition={RISE}
                                     className={`flex min-w-0 items-center gap-2.5 rounded-lg px-1.5 py-1 hover:bg-surface-2 ${HOVER_FILL}`}
                                 >
                                     <Folder className="size-3.5 shrink-0 text-accent" />

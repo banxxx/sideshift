@@ -22,7 +22,7 @@
  */
 import { Check, Download, Inbox, RefreshCw, SearchX, X } from "lucide-react";
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
-import { motion, type Transition } from "motion/react";
+import { motion } from "motion/react";
 import * as api from "@/lib/api";
 import { notify } from "@/lib/notify";
 import { useNavigation } from "@/lib/navigation";
@@ -40,6 +40,7 @@ import {
 import type { ConversionTask, TaskStatus } from "@/lib/types";
 import { Bar, Btn, PageHeader, Panel, SegTabs, ToneChip } from "@/components/ui";
 import { cn } from "@/lib/utils";
+import { REFLOW } from "@/lib/springs";
 import {
     abortAllFlights,
     prefersReducedMotion,
@@ -50,9 +51,6 @@ import { ENTRY_RUN_MS, entryStepMs, playEntry } from "./entry-curve";
 
 type Filter = "all" | "running" | "success" | "failed";
 
-/** 补位弹簧（样片实测 k=340 / c=26）：位移大的自己跑得快，到位时间近似恒定
- *  （实测 40px≈367ms、466px≈467ms）；错峰靠 delay 排出一道波，而不是靠快慢差。 */
-const REFLOW: Transition = { type: "spring", stiffness: 340, damping: 26, mass: 1 };
 /** 只给最靠前几张排错峰，第 6 张之后再等就成「卡片在原地迟到了」 */
 const STAGGER_STEP = 0.026;
 

@@ -25,7 +25,7 @@ export { ToneChip, TagChip, type Tone } from "./Chip";
 export { Btn, IconBtn, LinkBtn } from "./Button";
 export { Stepper, Toggle, TextInput, CheckBox, SearchBox } from "./Field";
 export { SearchSelect, type SelectOption } from "./SearchSelect";
-export { SegTabs, SEG_PILL_SPRING } from "./Tabs";
+export { SegTabs } from "./Tabs";
 export { InlineRow, SectionTitle, SettingRow, NoteRow, ListRow } from "./Row";
 export { Bar, CountRow, ChangeRow, InfoRow, MetaCell, MiniMeta } from "./Meta";
 export { ModalShell } from "./Modal";

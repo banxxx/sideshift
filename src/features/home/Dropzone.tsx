@@ -21,6 +21,7 @@ import { AnimatePresence, motion } from "motion/react";
 import { Upload } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { isTauri } from "@/lib/api";
+import { LIFT, MORPH } from "@/lib/springs";
 
 interface DropzoneProps {
     /** 打开文件框；可返回 Promise（选包对话框），settle 后组件会复位悬停态 */
@@ -37,16 +38,8 @@ interface DropzoneProps {
     className?: string;
 }
 
-/** 柔光/边框等动画由 motion 驱动；此处仅两个共享节奏常量 */
+/** 柔光/边框等动画由 motion 驱动；此处仅一个共享节奏常量（两根弹簧在 @/lib/springs） */
 const FADE = { duration: 0.2 } as const;
-/** 上浮用弹簧，比线性位移更像"被托起来" */
-const LIFT_SPRING = { type: "spring", stiffness: 380, damping: 28 } as const;
-/** layoutId 形态变换（大卡↔紧凑卡）的弹簧：稍软，位移/尺寸同步收敛 */
-export const MORPH_SPRING = {
-    type: "spring",
-    stiffness: 260,
-    damping: 28,
-} as const;
 
 export function Dropzone({
     onPick,
@@ -176,7 +169,7 @@ export function Dropzone({
                 initial={false}
                 layoutId={layoutId}
                 animate={{ y: active ? -2 : 0 }}
-                transition={{ ...LIFT_SPRING, layout: MORPH_SPRING }}
+                transition={{ ...LIFT, layout: MORPH }}
                 className={cn(
                     "group relative rounded-[12px] bg-surface border px-7 py-8 flex flex-col items-center justify-center gap-4 cursor-pointer select-none transition-colors duration-200",
                     active ? "border-transparent" : "border-stroke",
@@ -308,13 +301,8 @@ export function Dropzone({
                         </AnimatePresence>
                     </div>
                     <p className="font-mono text-xs text-text-3">
-                        支持 .mrpack · .zip · .7z
+                        支持 .mrpack · .zip 文件格式
                     </p>
-                    {!compact && (
-                        <p className="text-xs text-text-3">
-                            识别后显示加载器、Minecraft 版本、模组数量与包体积
-                        </p>
-                    )}
                     <p className="text-[13px] font-semibold text-accent">
                         或点击选择文件
                     </p>

@@ -11,6 +11,7 @@ import { AnimatePresence, motion } from "motion/react";
 import type { ModDisposition, PlanMod } from "@/lib/types";
 import { Btn, LinkBtn, Panel, PanelHead, SegTabs } from "@/components/ui";
 import { cn } from "@/lib/utils";
+import { PLAN_LAND, PLAN_LAYOUT } from "@/lib/springs";
 import { badgeFor, PlanModRow } from "./PlanModRow";
 import { LAND_MAX_STEPS, LAND_STAGGER_MS } from "./constants";
 import type { ListFocus } from "./modals";
@@ -183,18 +184,10 @@ export function ModPlanCard({
                                             transition={{
                                                 /* layout 不排队：补位要立刻跟上，
                                                    否则后面的行会先僵住再弹走 */
-                                                layout: {
-                                                    type: "spring",
-                                                    stiffness: 420,
-                                                    damping: 34,
-                                                    mass: 0.7,
-                                                },
+                                                layout: PLAN_LAYOUT,
                                                 /* 轻微回弹，落位时「顿」一下 */
                                                 default: {
-                                                    type: "spring",
-                                                    stiffness: 400,
-                                                    damping: 28,
-                                                    mass: 0.8,
+                                                    ...PLAN_LAND,
                                                     delay: step / 1000,
                                                 },
                                             }}

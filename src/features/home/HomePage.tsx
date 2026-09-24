@@ -22,6 +22,7 @@ import { PackCard } from "@/features/home/PackCard";
 import type { PackCardStatus } from "@/features/home/PackCard";
 import { ShiftRail } from "@/components/shared/ShiftRail";
 import { PageHeader } from "@/components/ui";
+import { MORPH, RAIL_RISE } from "@/lib/springs";
 
 /** idle 分支容器：具名 variants 把 show/hide 标签向后代（HelpRow 三卡）传播；
  *  入场延迟 120ms 让 Dropzone 先行，退场整体 0.18 淡出与三卡下沉同步发生 */
@@ -132,7 +133,7 @@ export function HomePage() {
                                 initial={{ x: 64, opacity: 0 }}
                                 animate={{ x: 0, opacity: 1 }}
                                 exit={{ x: 64, opacity: 0, transition: { duration: 0.18 } }}
-                                transition={{ type: "spring", stiffness: 260, damping: 28 }}
+                                transition={MORPH}
                             >
                                 <PackCard
                                     manifest={manifest ?? shown?.pack ?? null}
@@ -154,12 +155,7 @@ export function HomePage() {
                             initial={{ y: 72, opacity: 0 }}
                             animate={{ y: 0, opacity: 1 }}
                             exit={{ y: 72, opacity: 0, transition: { duration: 0.18 } }}
-                            transition={{
-                                type: "spring",
-                                stiffness: 240,
-                                damping: 28,
-                                delay: 0.06,
-                            }}
+                            transition={{ ...RAIL_RISE, delay: 0.06 }}
                         >
                             <ShiftRail
                                 statuses={

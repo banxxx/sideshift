@@ -6,6 +6,7 @@ import { AnimatePresence, motion } from "motion/react";
 import { cn } from "@/lib/utils";
 import { TONE_TEXT, type Tone } from "./Chip";
 import { HOVER_FILL } from "./HoverFill";
+import { COUNT_ROLL } from "@/lib/springs";
 
 /* ---------------- 进度条：h6 轨道 $surface-2 r99 + 色条 ---------------- */
 
@@ -49,7 +50,7 @@ export function CountRow({
                         initial={{ y: 16, opacity: 0 }}
                         animate={{ y: 0, opacity: 1 }}
                         exit={{ y: -16, opacity: 0 }}
-                        transition={{ type: "spring", stiffness: 420, damping: 32 }}
+                        transition={COUNT_ROLL}
                         className={cn(
                             "font-mono text-[14px] leading-[20px] font-semibold",
                             TONE_TEXT[tone]

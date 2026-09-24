@@ -9,6 +9,7 @@ import { motion } from "motion/react";
 import { cn } from "@/lib/utils";
 import { Tip, TIP_TRIGGER } from "./Tip";
 import { HOVER_FILL } from "./HoverFill";
+import { TOGGLE_PRESS, TOGGLE_SLIDE } from "@/lib/springs";
 
 /**
  * 只读回看的统一「不可修改」外观（带框控件：步进器 / 输入框 / 下拉）：
@@ -100,9 +101,9 @@ export function Stepper({
 }
 
 /* ---------------- 开关：36×20（卡内）/ 38×22（设置行），滑块 16 白色 ----------------
- * 动效三层，参数与 .scratch/toggle-motion-proto.html 对齐（60Hz 积分实测）：
- *  - 行程：滑块走 translateX，spring 500/28/0.9 → 117ms 到 95%、过冲 0.34px（刚磕一下壁）。
- *    比分段胶囊的 420/36 更硬，因为 14px 的行程拖不起 200ms。
+ * 动效三层，两根弹簧取自 @/lib/springs，实测数据出自 .scratch/toggle-motion-proto.html（60Hz 积分）：
+ *  - 行程：滑块走 translateX，用 TOGGLE_SLIDE → 117ms 到 95%、过冲 0.34px（刚磕一下壁）。
+ *    比 SEG_PILL 更硬，因为 14px 的行程拖不起 200ms。
  *  - 按压：按住时滑块沿行程方向拉伸 1.16，松手由 scaleX 自己的 spring 收回——不改变位移，
  *    纯手感，且和行程是两个独立属性，中途连点各走各的。
  *  - 染色：轨道底色 surface-2 ↔ accent，走 HOVER_FILL 的节奏（180ms），比滑块到位稍晚一点，
@@ -112,10 +113,8 @@ export function Stepper({
 
 /** 两种尺寸行程同为 14px：内宽 30（sm 36−2−2×2 / md 38−2−3×2）− 滑块 16 */
 const TOGGLE_TRAVEL = 14;
-const TOGGLE_SPRING = { type: "spring", stiffness: 500, damping: 28, mass: 0.9 } as const;
 /** 按压横向拉伸量：16×1.16 单侧只长 1.3px，仍在轨道内缩里，不会顶出圆头 */
 const TOGGLE_STRETCH = 1.16;
-const TOGGLE_PRESS_SPRING = { type: "spring", stiffness: 700, damping: 30 } as const;
 
 export function Toggle({
     checked,
@@ -162,7 +161,7 @@ export function Toggle({
                     x: checked ? TOGGLE_TRAVEL : 0,
                     scaleX: live && pressed ? TOGGLE_STRETCH : 1,
                 }}
-                transition={{ x: TOGGLE_SPRING, scaleX: TOGGLE_PRESS_SPRING }}
+                transition={{ x: TOGGLE_SLIDE, scaleX: TOGGLE_PRESS }}
                 className={cn(
                     // 绝对定位 + inset-y-0/my-auto 居中：不给 motion 的 transform 让路，
                     // 位移和拉伸都写在同一条 transform 上

@@ -7,6 +7,7 @@
  */
 import { motion, type Variants } from "motion/react";
 import { Archive, Folder, Server, type LucideIcon } from "lucide-react";
+import { RISE } from "@/lib/springs";
 
 const row: Variants = {
     hidden: {},
@@ -19,7 +20,7 @@ const card: Variants = {
     show: {
         opacity: 1,
         y: 0,
-        transition: { type: "spring", stiffness: 320, damping: 28 },
+        transition: RISE,
     },
     hide: { opacity: 0, y: 18, transition: { duration: 0.15 } },
 };

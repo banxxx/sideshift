@@ -8,9 +8,7 @@ import { motion } from "motion/react";
 import { type LucideIcon } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { HOVER_FILL } from "./HoverFill";
-
-/** 分段控件选中胶囊的滑动弹簧：短促、不回弹 */
-export const SEG_PILL_SPRING = { type: "spring", stiffness: 420, damping: 36 } as const;
+import { SEG_PILL } from "@/lib/springs";
 
 export function SegTabs<T extends string>({
     items,
@@ -59,7 +57,7 @@ export function SegTabs<T extends string>({
                         {active && (
                             <motion.span
                                 layoutId={`${pillId}-seg-pill`}
-                                transition={SEG_PILL_SPRING}
+                                transition={SEG_PILL}
                                 className={cn(
                                     "absolute inset-0 rounded-md border border-stroke bg-surface",
                                     HOVER_FILL
