@@ -36,7 +36,7 @@ export function HomePage() {
     const { navigate } = useNavigation();
     const { manifest, parsing, error, errorName, selectedAt, parse, pickByDialog, reset } =
         usePackStore();
-    const { active } = useActiveTask();
+    const { active, ready } = useActiveTask();
 
     // Tauri 下 OS 拖入 → 直接解析第一个文件；拖拽悬停标志用于拖放卡高亮
     const fileDragging = useTauriFileDrop((paths) => void parse(paths[0]));
@@ -73,6 +73,15 @@ export function HomePage() {
 
     const rail = view === "converting" && shown ? taskToRail(shown) : null;
 
+    /**
+     * 首帧闸门：任务快照还没落地、本地也没有「已选包」的证据 ⇒ 还不知道该摆哪套布局，先留白。
+     * `active === null` 单独看有两层意思（确实没任务 / 还没查过），赌错的代价是冷启动正好有任务
+     * 在跑时，先画一帧大拖放卡、再被 layoutId 的共享元素动效拽成紧凑卡，看着像界面自己跳了一下。
+     * 留白只有一帧（listTasks 走内存），且下面按它整块挂卸 AnimatePresence：
+     * 闸门开合不重播已有动画，`initial={false}` 对新实例照样成立。
+     */
+    const unknown = !ready && !manifest && !parsing && !error;
+
     return (
         // overflow-hidden：进出场时 PackCard 右移 64px / ShiftRail 下移 72px 属于
         // 容器外变换，不裁剪会撑大 main 的滚动区域、闪出横竖滚动条
@@ -96,103 +105,107 @@ export function HomePage() {
                 - popLayout 让退场分支脱离文档流，入场布局立即就位、不互相挤压；
                 - Dropzone 挂同一 layoutId，motion 自动投影"大卡缩小左上归位"（退出反向）；
                 - PackCard 从右滑入、ShiftRail 从下方滑入，错峰 60ms，退场按原路径返回 */}
-            <AnimatePresence mode="popLayout" initial={false}>
-                {view === "idle" ? (
-                    <motion.div
-                        key="idle"
-                        className="flex-1 flex flex-col items-center justify-center gap-5 py-2"
-                        variants={IDLE_BRANCH}
-                        initial="hidden"
-                        animate="show"
-                        exit="hide"
-                    >
-                        <Dropzone
-                            layoutId="dropzone"
-                            onPick={pickByDialog}
-                            onDropPaths={(p) => void parse(p[0])}
-                            fileDragging={fileDragging}
-                        />
-                        <HelpRow />
-                    </motion.div>
-                ) : (
-                    <motion.div key="cards" className="flex flex-col gap-5">
-                        {/* 上半：拖放卡（≈58% 宽）+ 已选包详情卡。
-                            高度用 36vh 卡在设计稿的 288：1200×800 下 36vh 正好 288（像素级保真），
-                            窗口变矮时先收这里，而不是把下面的轨道卡挤出滚动区 */}
-                        <div className="flex h-[clamp(256px,36vh,288px)] items-stretch gap-5">
+            {unknown ? (
+                <div className="flex-1" />
+            ) : (
+                <AnimatePresence mode="popLayout" initial={false}>
+                    {view === "idle" ? (
+                        <motion.div
+                            key="idle"
+                            className="flex-1 flex flex-col items-center justify-center gap-5 py-2"
+                            variants={IDLE_BRANCH}
+                            initial="hidden"
+                            animate="show"
+                            exit="hide"
+                        >
                             <Dropzone
                                 layoutId="dropzone"
-                                compact
-                                busy={parsing}
                                 onPick={pickByDialog}
                                 onDropPaths={(p) => void parse(p[0])}
                                 fileDragging={fileDragging}
                             />
+                            <HelpRow />
+                        </motion.div>
+                    ) : (
+                        <motion.div key="cards" className="flex flex-col gap-5">
+                            {/* 上半：拖放卡（≈58% 宽）+ 已选包详情卡。
+                                高度用 36vh 卡在设计稿的 288：1200×800 下 36vh 正好 288（像素级保真），
+                                窗口变矮时先收这里，而不是把下面的轨道卡挤出滚动区 */}
+                            <div className="flex h-[clamp(256px,36vh,288px)] items-stretch gap-5">
+                                <Dropzone
+                                    layoutId="dropzone"
+                                    compact
+                                    busy={parsing}
+                                    onPick={pickByDialog}
+                                    onDropPaths={(p) => void parse(p[0])}
+                                    fileDragging={fileDragging}
+                                />
+                                <motion.div
+                                    className="flex min-w-0 flex-1"
+                                    initial={{ x: 64, opacity: 0 }}
+                                    animate={{ x: 0, opacity: 1 }}
+                                    exit={{ x: 64, opacity: 0, transition: { duration: 0.18 } }}
+                                    transition={MORPH}
+                                >
+                                    <PackCard
+                                        manifest={manifest ?? shown?.pack ?? null}
+                                        status={cardStatus}
+                                        error={error}
+                                        fileName={errorName ?? undefined}
+                                        onChangeFile={reset}
+                                        onPrimary={() =>
+                                            converting && shown
+                                                ? navigate("task", { taskId: shown.id })
+                                                : navigate("convert", { manifest })
+                                        }
+                                    />
+                                </motion.div>
+                            </div>
+
+                            {/* Shift Rail 实况小窗 */}
                             <motion.div
-                                className="flex min-w-0 flex-1"
-                                initial={{ x: 64, opacity: 0 }}
-                                animate={{ x: 0, opacity: 1 }}
-                                exit={{ x: 64, opacity: 0, transition: { duration: 0.18 } }}
-                                transition={MORPH}
+                                initial={{ y: 72, opacity: 0 }}
+                                animate={{ y: 0, opacity: 1 }}
+                                exit={{ y: 72, opacity: 0, transition: { duration: 0.18 } }}
+                                transition={{ ...RAIL_RISE, delay: 0.06 }}
                             >
-                                <PackCard
-                                    manifest={manifest ?? shown?.pack ?? null}
-                                    status={cardStatus}
-                                    error={error}
-                                    fileName={errorName ?? undefined}
-                                    onChangeFile={reset}
-                                    onPrimary={() =>
-                                        converting && shown
-                                            ? navigate("task", { taskId: shown.id })
-                                            : navigate("convert", { manifest })
+                                <ShiftRail
+                                    statuses={
+                                        rail
+                                            ? rail.statuses
+                                            : /* 未开始：第 1 站是"当前站"（灰底 + 很淡的光环） */
+                                              { parser: "active" }
+                                    }
+                                    status={
+                                        rail
+                                            ? rail.status
+                                            : parsing
+                                              ? { label: "解析中", tone: "gold" }
+                                              : { label: "已检测 · 待转换", tone: "emerald" }
+                                    }
+                                    logs={rail?.logs ?? []}
+                                    runFrac={rail?.runFrac}
+                                    subs={rail?.subs}
+                                    clipHeader={
+                                        shown
+                                            ? `SideShift 日志 · ${shown.pack.fileName} · ${shown.id} · ${shown.status}`
+                                            : undefined
+                                    }
+                                    waiting={
+                                        rail?.waiting ?? {
+                                            title: "等待开始转换",
+                                            detail: `已选择 ${truncateMiddle(manifest?.fileName ?? "", 40)} · 点击「配置并转换」进入转换配置`,
+                                        }
+                                    }
+                                    onOpenTask={
+                                        shown ? () => navigate("task", { taskId: shown.id }) : undefined
                                     }
                                 />
                             </motion.div>
-                        </div>
-
-                        {/* Shift Rail 实况小窗 */}
-                        <motion.div
-                            initial={{ y: 72, opacity: 0 }}
-                            animate={{ y: 0, opacity: 1 }}
-                            exit={{ y: 72, opacity: 0, transition: { duration: 0.18 } }}
-                            transition={{ ...RAIL_RISE, delay: 0.06 }}
-                        >
-                            <ShiftRail
-                                statuses={
-                                    rail
-                                        ? rail.statuses
-                                        : /* 未开始：第 1 站是"当前站"（灰底 + 很淡的光环） */
-                                          { parser: "active" }
-                                }
-                                status={
-                                    rail
-                                        ? rail.status
-                                        : parsing
-                                          ? { label: "解析中", tone: "gold" }
-                                          : { label: "已检测 · 待转换", tone: "emerald" }
-                                }
-                                logs={rail?.logs ?? []}
-                                runFrac={rail?.runFrac}
-                                subs={rail?.subs}
-                                clipHeader={
-                                    shown
-                                        ? `SideShift 日志 · ${shown.pack.fileName} · ${shown.id} · ${shown.status}`
-                                        : undefined
-                                }
-                                waiting={
-                                    rail?.waiting ?? {
-                                        title: "等待开始转换",
-                                        detail: `已选择 ${truncateMiddle(manifest?.fileName ?? "", 40)} · 点击「配置并转换」进入转换配置`,
-                                    }
-                                }
-                                onOpenTask={
-                                    shown ? () => navigate("task", { taskId: shown.id }) : undefined
-                                }
-                            />
                         </motion.div>
-                    </motion.div>
-                )}
-            </AnimatePresence>
+                    )}
+                </AnimatePresence>
+            )}
         </div>
     );
 }

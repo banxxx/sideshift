@@ -18,6 +18,8 @@
  *  - failed          重试转换(accent) → 返回任务列表
  *  - cancelled       重新转换(accent) → 返回任务列表
  *  - success         打开输出位置(accent) → 复制转换方案 → 返回任务列表
+ * 状态动作那一组随状态整块换批（`Swap`：旧组抽离文档流溶解、新组立刻占位），
+ * 「返回任务列表」不参与——它永远钉在最后一条，跟着换批抖一下反而看不出这是回退出口。
  *
  * 顶部是**吸顶页头**（与任务列表页同一套规则）：这一页能滚出两屏以上，页签一旦够不着，
  * 页面就只剩当前那一签。换签是一次横向翻页（`TAB_SWEEP`：点右侧那档就从右边进来），
@@ -62,6 +64,7 @@ import {
     Panel,
     PanelHead,
     SegTabs,
+    Swap,
     Tip,
     TIP_TRIGGER,
     ToneChip,
@@ -233,6 +236,12 @@ export function TaskDetailPage() {
     const chip = progressChip(task);
     const track = stageTrack(task);
     const running = task.status === "running" || task.status === "queued";
+    /**
+     * 右栏动作组的身份：排队转运行中不换动作（那只是同一条「取消转换」），
+     * 所以 key 认的是「屏上这组按钮」而不是状态字面值 —— 拿 status 当 key 会在
+     * queued→running 时空演一次进出场。
+     */
+    const actionKey = running ? "running" : task.status;
     const started = task.startedAt ?? task.createdAt;
     const elapsed = (task.finishedAt ?? Date.now()) - started;
     const lastLog = task.logs[task.logs.length - 1];
@@ -582,59 +591,63 @@ export function TaskDetailPage() {
                         />
                         <Divider />
 
-                        {running && (
-                            <Btn
-                                size="sm"
-                                variant="danger"
-                                full
-                                className="font-medium"
-                                onClick={() => void cancel()}
-                            >
-                                取消转换
-                            </Btn>
-                        )}
-                        {task.status === "failed" && (
-                            <Btn
-                                size="sm"
-                                variant="primary"
-                                full
-                                className="font-semibold"
-                                onClick={() => void retry()}
-                            >
-                                重试转换
-                            </Btn>
-                        )}
-                        {task.status === "cancelled" && (
-                            <Btn
-                                size="sm"
-                                variant="primary"
-                                full
-                                className="font-semibold"
-                                onClick={() => void retry()}
-                            >
-                                重新转换
-                            </Btn>
-                        )}
-                        {task.status === "success" && (
-                            <>
+                        {/* 状态动作组整块换（取消转换 → 打开输出位置 + 复制方案）：走 Swap，
+                            旧组当场抽离文档流溶解、新组立刻占位，右栏不必先塌一次高度 */}
+                        <Swap swapKey={actionKey}>
+                            {running && (
                                 <Btn
+                                    size="sm"
+                                    variant="danger"
+                                    full
+                                    className="font-medium"
+                                    onClick={() => void cancel()}
+                                >
+                                    取消转换
+                                </Btn>
+                            )}
+                            {task.status === "failed" && (
+                                <Btn
+                                    size="sm"
                                     variant="primary"
                                     full
                                     className="font-semibold"
-                                    onClick={() => void openOutput()}
+                                    onClick={() => void retry()}
                                 >
-                                    打开输出位置
+                                    重试转换
                                 </Btn>
+                            )}
+                            {task.status === "cancelled" && (
                                 <Btn
                                     size="sm"
+                                    variant="primary"
                                     full
-                                    className="bg-surface text-text-1"
-                                    onClick={() => void copyPlan()}
+                                    className="font-semibold"
+                                    onClick={() => void retry()}
                                 >
-                                    {planCopied ? "已复制方案" : "复制转换方案"}
+                                    重新转换
                                 </Btn>
-                            </>
-                        )}
+                            )}
+                            {task.status === "success" && (
+                                <>
+                                    <Btn
+                                        variant="primary"
+                                        full
+                                        className="font-semibold"
+                                        onClick={() => void openOutput()}
+                                    >
+                                        打开输出位置
+                                    </Btn>
+                                    <Btn
+                                        size="sm"
+                                        full
+                                        className="bg-surface text-text-1"
+                                        onClick={() => void copyPlan()}
+                                    >
+                                        {planCopied ? "已复制方案" : "复制转换方案"}
+                                    </Btn>
+                                </>
+                            )}
+                        </Swap>
                         {/* 回退固定占动作组最后一条 */}
                         <Btn size="sm" full onClick={() => switchPrimary("tasks")}>
                             返回任务列表

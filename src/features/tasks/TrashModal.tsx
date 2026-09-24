@@ -5,8 +5,10 @@
  * 「长按垃圾桶清空」这件事用户猜不到，所以脚注写明，并在页脚给一个等价的「清空」按钮
  * （键盘用户没有长按，这条出口是必需的）。
  */
+import { AnimatePresence, motion } from "motion/react";
 import { Trash2 } from "lucide-react";
 import { Btn, ListRow, ToneChip, type Tone } from "@/components/ui";
+import { SWAP } from "@/lib/page-motion";
 import { formatSize, loaderLabel, truncateMiddle } from "@/lib/format";
 import { notify } from "@/lib/notify";
 import { restoreDeleted, useTrash } from "@/lib/trash-store";
@@ -32,19 +34,42 @@ function ago(ts: number): string {
 
 export function TrashList() {
     const entries = useTrash();
-    if (entries.length === 0) {
-        return (
-            <div className="flex flex-1 flex-col items-center justify-center gap-2 text-text-3">
-                <Trash2 className="size-5" />
-                <span className="font-mono text-[11px] leading-[16px]">回收站已清空</span>
-            </div>
-        );
-    }
+    /**
+     * 一层 AnimatePresence 同时管两件事：单行撤回要从眼前滑走（撤回的语义是「这行被拿回去了」，
+     * 当场消失等于没给回执），最后一行走完又要换「已清空」那块。
+     * 所以两种内容挂在**同一个** AnimatePresence 下——空态若写成提前 return，
+     * 外壳跟着卸载，最后一行的退场就永远不会播。
+     * `relative` 必需：退场层被注入绝对定位，坐标按最近定位祖先算，滚动容器不定位就会量到窗外。
+     */
     return (
-        <div className="-mx-1 flex min-h-0 flex-1 flex-col gap-1.5 overflow-auto">
-            {entries.map((e) => (
-                <TrashRow key={e.taskId} entry={e} />
-            ))}
+        <div className="relative -mx-1 flex min-h-0 flex-1 flex-col gap-1.5 overflow-auto">
+            <AnimatePresence mode="popLayout" initial={false}>
+                {entries.length === 0 ? (
+                    <motion.div
+                        key="empty"
+                        variants={SWAP}
+                        initial="hidden"
+                        animate="show"
+                        exit="exit"
+                        className="flex flex-1 flex-col items-center justify-center gap-2 text-text-3"
+                    >
+                        <Trash2 className="size-5" />
+                        <span className="font-mono text-[11px] leading-[16px]">回收站已清空</span>
+                    </motion.div>
+                ) : (
+                    entries.map((e) => (
+                        <motion.div
+                            key={e.taskId}
+                            variants={SWAP}
+                            initial="hidden"
+                            animate="show"
+                            exit="exit"
+                        >
+                            <TrashRow entry={e} />
+                        </motion.div>
+                    ))
+                )}
+            </AnimatePresence>
         </div>
     );
 }

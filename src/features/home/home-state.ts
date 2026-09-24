@@ -51,9 +51,14 @@ const ACTIVE: ConversionTask["status"][] = ["queued", "running"];
 /**
  * 活跃任务（当前实况小窗数据源）：queued/running 中 createdAt 最新的一个；
  * 无活跃任务时返回最近一次结束的任务（成功/失败/取消），用于全绿终态展示。
+ *
+ * `ready` = 第一次快照已经落地（读失败也算落地）。`active === null` 单独看有两种意思：
+ * 「确实没有任务」和「还没查过」，首页只有前者该摆拖放大卡；否则冷启动有在跑的任务时，
+ * 会先画一帧大拖放卡、再被共享元素动效拽成紧凑卡，看着像界面自己跳了一下。
  */
 export function useActiveTask() {
     const [active, setActive] = useState<ConversionTask | null>(null);
+    const [ready, setReady] = useState(false);
     const alive = useRef(true);
     // 进度事件合并窗：一次转换可以打出成百上千条日志，逐事件全量拉任务列表
     // （含日志数组）会直接把 webview 打满——实测 7000+ 事件时整个应用卡死
@@ -62,13 +67,15 @@ export function useActiveTask() {
     const refresh = useCallback(async () => {
         // Phase 2 之前 Rust 侧还没有 list_tasks，Tauri 下会 reject；
         // 这里吞掉异常保持空态，避免 1s 轮询把控制台刷满未捕获拒绝。
-        let list: ConversionTask[];
+        let list: ConversionTask[] | null = null;
         try {
             list = await api.listTasks();
         } catch {
-            return;
+            /* 保持空态 */
         }
         if (!alive.current) return;
+        setReady(true);
+        if (!list) return;
         const sorted = [...list].sort((a, b) => b.createdAt - a.createdAt);
         const running = sorted.find((t) => ACTIVE.includes(t.status));
         setActive(running ?? sorted.find((t) => t.status !== "queued") ?? null);
@@ -100,5 +107,5 @@ export function useActiveTask() {
         };
     }, [refresh, scheduleRefresh]);
 
-    return { active, refresh };
+    return { active, ready, refresh };
 }

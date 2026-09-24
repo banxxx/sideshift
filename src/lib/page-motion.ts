@@ -9,6 +9,7 @@
  * 全程只有一层页面在屏上，所以滚动容器不必拆分、吸顶页头也不会两层叠印）。
  * 页内错峰由容器把节奏传给各块（PAGE_RISE → CARD_RISE），块与块之间 60ms。
  * 页签换页（TAB_SWEEP）是这套节拍的「小一号」版本：同一对进/出配比，行程与时长都缩一档。
+ * 局部换一批（SWAP，见 @/components/ui/Swap）再缩一档：6px、进 180 / 出 90，指尖还停在原地。
  */
 import type { Transition, Variants } from "motion/react";
 import { RISE } from "./springs";
@@ -50,4 +51,21 @@ export const TAB_SWEEP: Variants = {
     hidden: (dir: number) => ({ opacity: 0, x: dir * 18, transition: TAB_IN }),
     show: { opacity: 1, x: 0, transition: TAB_IN },
     exit: (dir: number) => ({ opacity: 0, x: dir * -18, transition: TAB_OUT }),
+};
+
+/** 局部换一批入场：比页签再小一档——指尖没离开这块区域，不该读出「换了一屏」 */
+const SWAP_IN: Transition = { duration: 0.18, ease: [0.2, 0.8, 0.2, 1] };
+/** 局部换一批退场：让位给新内容，旧的那一批只是消失，不等它 */
+const SWAP_OUT: Transition = { duration: 0.09, ease: "easeOut" };
+
+/**
+ * 同一位置换一批 DOM（状态按钮组、清单↔空态、标题栏返回件）的进出场。
+ * 纵向 6px：这里的语义是「新的一批落位」，不是页签那种「往旁边翻一页」，所以不横向走。
+ *
+ * 搭配见 @/components/ui/Swap（popLayout + initial={false} + 自带 relative 外壳，原因写在那儿）。
+ */
+export const SWAP: Variants = {
+    hidden: { opacity: 0, y: 6, transition: SWAP_IN },
+    show: { opacity: 1, y: 0, transition: SWAP_IN },
+    exit: { opacity: 0, y: -4, transition: SWAP_OUT },
 };

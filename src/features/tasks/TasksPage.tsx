@@ -40,7 +40,7 @@ import {
     useTrash,
 } from "@/lib/trash-store";
 import type { ConversionTask, TaskStatus } from "@/lib/types";
-import { Bar, Btn, PageHeader, Panel, SegTabs, ToneChip } from "@/components/ui";
+import { Bar, Btn, PageHeader, Panel, SegTabs, Swap, ToneChip } from "@/components/ui";
 import { cn } from "@/lib/utils";
 import { REFLOW } from "@/lib/springs";
 import {
@@ -261,33 +261,39 @@ export function TasksPage() {
                 />
             </div>
 
-            {!loaded ? (
-                <LoadingTasks />
-            ) : tasks.length === 0 ? (
-                <EmptyTasks />
-            ) : (
-                /* 常驻容器：卡片节点按 task.id 长期存续，重排的行程靠"切换前量一次 offsetTop、重排后
-                   再量一次"自己算（曲线打在每张卡自己的 data-entry 内层上）。为什么不用 AnimatePresence
-                   换 key：那会让旧内容先卸载/后卸载，两种都有代价——mode="wait" 中间塌一次高度（滚到下
-                   面切页签会跳），mode="popLayout" 则新旧同 id 卡片重叠，旧的 ref 清理会把新登记的那个
-                   节点删掉，删除飞行拿不到矩形。 */
-                <div ref={bodyRef} className="flex flex-col gap-4">
-                    {visible.length === 0 ? (
-                        <EmptyFilter />
-                    ) : (
-                        visible.map((t, i) => (
-                            <TaskRow
-                                key={t.id}
-                                task={t}
-                                index={i}
-                                ghosted={flying.has(t.id)}
-                                project={projecting}
-                                onDelete={beginDelete}
-                            />
-                        ))
-                    )}
-                </div>
-            )}
+            {/* 骨架 → 卡片/空态 是同位换批（首帧读档落地那一刻整块换掉），
+                走全站共用的一对进出节拍（SWAP：进 180ms 落 6px / 出 90ms 溶解）。
+                筛选结果为空 ↔ 有卡片 这一档**不**套 Swap：卡片这层的进出场由 entry-curve 那条
+                「送+弹」曲线管，两层退场叠在同一片区域只会互相盖（廿九轮的判定）。 */}
+            <Swap swapKey={!loaded ? "loading" : tasks.length === 0 ? "empty" : "list"}>
+                {!loaded ? (
+                    <LoadingTasks />
+                ) : tasks.length === 0 ? (
+                    <EmptyTasks />
+                ) : (
+                    /* 常驻容器：卡片节点按 task.id 长期存续，重排的行程靠"切换前量一次 offsetTop、重排后
+                       再量一次"自己算（曲线打在每张卡自己的 data-entry 内层上）。为什么不用 AnimatePresence
+                       换 key：那会让旧内容先卸载/后卸载，两种都有代价——mode="wait" 中间塌一次高度（滚到下
+                       面切页签会跳），mode="popLayout" 则新旧同 id 卡片重叠，旧的 ref 清理会把新登记的那个
+                       节点删掉，删除飞行拿不到矩形。 */
+                    <div ref={bodyRef} className="flex flex-col gap-4">
+                        {visible.length === 0 ? (
+                            <EmptyFilter />
+                        ) : (
+                            visible.map((t, i) => (
+                                <TaskRow
+                                    key={t.id}
+                                    task={t}
+                                    index={i}
+                                    ghosted={flying.has(t.id)}
+                                    project={projecting}
+                                    onDelete={beginDelete}
+                                />
+                            ))
+                        )}
+                    </div>
+                )}
+            </Swap>
         </div>
     );
 }

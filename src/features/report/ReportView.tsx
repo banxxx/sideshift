@@ -66,12 +66,20 @@ export function ReportView({
 }) {
     /** 变更明细的展开态：一次只开一行，收拢即卸载 */
     const [openKey, setOpenKey] = useState<ModDisposition | null>(null);
-    /** 方案快照：只有这里的三行展开清单用得到，独立于上层装载 */
-    const [plan, setPlan] = useState<PlanMod[]>([]);
+    /**
+     * 方案快照：只有这里的三行展开清单用得到，独立于上层装载。
+     * null = 还没读到（≠ 读到了空清单：旧存档没有快照时后端就返回 []），
+     * 首帧拿 `[]` 当「没有清单」会让三行的可点状态先关后开，看着像闪一下。
+     */
+    const [plan, setPlan] = useState<PlanMod[] | null>(null);
 
     useEffect(() => {
         let alive = true;
-        void api.getTaskPlan(taskId).then((p) => alive && setPlan(p));
+        void api
+            .getTaskPlan(taskId)
+            .then((p) => alive && setPlan(p))
+            // 读失败按「确实没有快照」收口，不能让三行停在可点 + 骨架上不动
+            .catch(() => alive && setPlan([]));
         return () => {
             alive = false;
         };
@@ -84,8 +92,14 @@ export function ReportView({
     /** 进服务端包的模组数 = 保留 + 新增（剔除项不算，首启核对日志用的就是这个数） */
     const modCount = report.kept + report.added;
 
-    const rowsOf = (d: ModDisposition) => plan.filter((m) => m.disposition === d);
+    const rowsOf = (d: ModDisposition) => (plan ?? []).filter((m) => m.disposition === d);
     const toggle = (d: ModDisposition) => setOpenKey((cur) => (cur === d ? null : d));
+    /**
+     * 三行能不能展开：快照还没读到也算能（点进去先给骨架），只有「确认没有快照」才收回。
+     * 计数（剔除/保留/新增）上层已经装载好了，行能不能点不该等快照才定 ——
+     * 先渲染成不可点的纯文本、落地后再变按钮，就是一眼看得见的跳变。
+     */
+    const expandable = plan === null || plan.length > 0;
 
     const steps = buildSteps({
         fileName: report.outputFileName,
@@ -156,7 +170,7 @@ export function ReportView({
                 <PanelHead
                     title="变更明细"
                     right={
-                        plan.length > 0 ? (
+                        expandable ? (
                             <span className="text-[10px] leading-[14px] text-text-3">
                                 点击行看清单
                             </span>
@@ -174,9 +188,13 @@ export function ReportView({
                     }
                     count={report.removed}
                     open={openKey === "remove"}
-                    onClick={plan.length ? () => toggle("remove") : undefined}
+                    onClick={expandable ? () => toggle("remove") : undefined}
                 />
-                <ChangeList rows={rowsOf("remove")} open={openKey === "remove"} />
+                <ChangeList
+                    rows={rowsOf("remove")}
+                    open={openKey === "remove"}
+                    loading={plan === null}
+                />
                 <ChangeRow
                     icon={Check}
                     tone="emerald"
@@ -184,9 +202,13 @@ export function ReportView({
                     sub="两端通用的功能模组与前置库"
                     count={report.kept}
                     open={openKey === "keep"}
-                    onClick={plan.length ? () => toggle("keep") : undefined}
+                    onClick={expandable ? () => toggle("keep") : undefined}
                 />
-                <ChangeList rows={rowsOf("keep")} open={openKey === "keep"} />
+                <ChangeList
+                    rows={rowsOf("keep")}
+                    open={openKey === "keep"}
+                    loading={plan === null}
+                />
                 <ChangeRow
                     icon={Plus}
                     tone="accent"
@@ -194,9 +216,13 @@ export function ReportView({
                     sub={addedSub(loader, rowsOf("add"), report.added)}
                     count={report.added}
                     open={openKey === "add"}
-                    onClick={plan.length ? () => toggle("add") : undefined}
+                    onClick={expandable ? () => toggle("add") : undefined}
                 />
-                <ChangeList rows={rowsOf("add")} open={openKey === "add"} />
+                <ChangeList
+                    rows={rowsOf("add")}
+                    open={openKey === "add"}
+                    loading={plan === null}
+                />
 
                 {/* 待人工确认项不再单列成一行名单（几十项会顶爆这一行）：
                     转换时它们已被归进剔除并置顶，要看就在上面「剔除」行展开，行内带金色说明；
@@ -317,16 +343,37 @@ export function buildPlanSummary(
         .join("\n");
 }
 
-/** 变更清单展开面板：只在展开时挂载，收起即卸载，不留隐藏 DOM */
-function ChangeList({ rows, open }: { rows: PlanMod[]; open: boolean }) {
-    if (!open || rows.length === 0) return null;
-    const shown = rows.slice(0, LIST_CAP);
+/**
+ * 变更清单展开面板：只在展开时挂载，收起即卸载，不留隐藏 DOM。
+ * 快照还没读到时给三行骨架（点了没反应 = 用户以为这行不能点；先撑住高度，
+ * 真实清单落地时行位不动，不会看着像跳）。
+ */
+function ChangeList({
+    rows,
+    open,
+    loading,
+}: {
+    rows: PlanMod[];
+    open: boolean;
+    loading: boolean;
+}) {
+    if (!open) return null;
+    if (!loading && rows.length === 0) return null;
+    /** 骨架期不铺真实行：rows 空是因为快照还没读到，不是「真的没有」，那时长度交给骨架占 */
+    const shown = loading ? [] : rows.slice(0, LIST_CAP);
     return (
         <motion.div
             initial={{ opacity: 0, height: 0 }}
             animate={{ opacity: 1, height: "auto" }}
             className="log-scroll -mx-1 max-h-[220px] min-w-0 overflow-auto rounded-md bg-surface-2/40 px-1 py-1"
         >
+            {loading &&
+                [0, 1, 2].map((i) => (
+                    <div key={i} className="flex h-[46px] items-center gap-3 px-1">
+                        <span className="h-[13px] flex-1 animate-pulse rounded bg-stroke" />
+                        <span className="h-[11px] w-14 shrink-0 animate-pulse rounded bg-stroke-soft" />
+                    </div>
+                ))}
             {shown.map((m) => (
                 <ListRow key={m.id} className="py-1.5">
                     <span className="flex min-w-0 flex-1 flex-col">

@@ -11,7 +11,7 @@ import { type ReactNode } from "react";
 import { cn } from "@/lib/utils";
 import { Divider } from "./Panel";
 import { Tip, TIP_TRIGGER } from "./Tip";
-import { HOVER_FILL } from "./HoverFill";
+import { HOVER_PRESS } from "./HoverFill";
 
 /** 弹窗最大放大倍率（对设计稿尺寸而言） */
 const MODAL_SCALE_MAX = 1.35;
@@ -113,7 +113,7 @@ export function ModalShell({
                                         TIP_TRIGGER,
                                         "size-7 rounded-lg border border-stroke bg-surface text-text-2",
                                         "flex items-center justify-center hover:bg-surface-2",
-                                        HOVER_FILL
+                                        HOVER_PRESS
                                     )}
                                 >
                                     <ArrowLeft className="size-3.5" />
@@ -127,7 +127,7 @@ export function ModalShell({
                                     TIP_TRIGGER,
                                     "size-7 rounded-lg border border-stroke text-text-2",
                                     "flex items-center justify-center hover:bg-surface-2",
-                                    HOVER_FILL
+                                    HOVER_PRESS
                                 )}
                             >
                                 <X className="size-3.5" />

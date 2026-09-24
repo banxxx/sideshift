@@ -61,7 +61,12 @@ export function OnlineAddModal({
         total: 0,
         results: [],
     });
-    const [loading, setLoading] = useState(false);
+    /**
+     * 初值 true：弹窗壳常驻挂载，首帧时列表还是空的。空 = 「没搜到」还是「没搜过」，
+     * 光看 `result` 分不出来，所以由这里显式记着「第一次请求还没落地」，
+     * 否则打开瞬间会先闪一帧「无匹配结果 · 共 0 个结果」。
+     */
+    const [loading, setLoading] = useState(true);
     const [error, setError] = useState<string | null>(null);
 
     // 弹窗壳常驻挂载：每次打开重置回一级视图与包自身版本/加载器
@@ -75,6 +80,8 @@ export function OnlineAddModal({
         setVerSel(mcVersion);
         setLoSel(loader);
         setCatSel("all");
+        // 上一次搜索的结果不能在外壳重新挂起的那一帧里露底：先回到「请求中」
+        setLoading(true);
     }, [open, mcVersion, loader]);
 
     // 搜索词防抖 300ms：真实后端逐键请求会打爆 Modrinth
@@ -292,7 +299,9 @@ export function OnlineAddModal({
             footerNote={
                 error
                     ? `${source === "modrinth" ? "Modrinth" : "CurseForge"} · 加载失败`
-                    : `${source === "modrinth" ? "Modrinth" : "CurseForge"} · 共 ${result.total} 个结果`
+                    : loading
+                      ? `${source === "modrinth" ? "Modrinth" : "CurseForge"} · 搜索中…`
+                      : `${source === "modrinth" ? "Modrinth" : "CurseForge"} · 共 ${result.total} 个结果`
             }
             footerActions={
                 <>

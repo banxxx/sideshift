@@ -7,8 +7,10 @@
  * 处于二级页面时（canGoBack），最小化左侧出现 undo-2 返回按钮，
  * 并用 1×14 短竖线（$stroke）与最小化隔开。窗口控制逻辑见 @/lib/window-controls。
  */
+import { AnimatePresence, motion } from "motion/react";
 import { Minus, Square, X, Copy, Undo2 } from "lucide-react";
-import { Tip, HOVER_FILL, Logo } from "@/components/ui";
+import { Tip, HOVER_PRESS, Logo } from "@/components/ui";
+import { SWAP } from "@/lib/page-motion";
 import { cn } from "@/lib/utils";
 import { useNavigation } from "@/lib/navigation";
 import { useWindowControls } from "@/lib/window-controls";
@@ -37,19 +39,31 @@ export function TitleBar() {
                 onDoubleClick={win.toggleMaximize}
             />
 
-            {/* 右侧：窗口控件（gap 2px；二级页多出一个返回按钮 + 分隔竖线） */}
-            <div className="flex items-center gap-0.5 h-full">
-                {canGoBack && (
-                    <>
-                        <WindowButton onClick={back} title="返回上一页">
-                            <Undo2 className="size-[13px]" />
-                        </WindowButton>
-                        <span
-                            aria-hidden
-                            className="h-3.5 w-px bg-stroke self-center"
-                        />
-                    </>
-                )}
+            {/* 右侧：窗口控件（gap 2px；二级页多出一个返回按钮 + 分隔竖线）。
+                `relative` 必需：返回件走 popLayout 退场时被抽成绝对定位，坐标按最近定位祖先算。
+                返回件用 Fragment 包不进 AnimatePresence（它要一个带 key 的 motion 子节点），
+                所以合成一层 flex 壳，壳内的 gap 与外壳一致，间距逐像素等价于改动前。 */}
+            <div className="relative flex items-center gap-0.5 h-full">
+                <AnimatePresence mode="popLayout" initial={false}>
+                    {canGoBack && (
+                        <motion.div
+                            key="back"
+                            variants={SWAP}
+                            initial="hidden"
+                            animate="show"
+                            exit="exit"
+                            className="flex items-center gap-0.5"
+                        >
+                            <WindowButton onClick={back} title="返回上一页">
+                                <Undo2 className="size-[13px]" />
+                            </WindowButton>
+                            <span
+                                aria-hidden
+                                className="h-3.5 w-px bg-stroke self-center"
+                            />
+                        </motion.div>
+                    )}
+                </AnimatePresence>
                 <WindowButton onClick={win.minimize} title="最小化">
                     <Minus className="size-[13px]" />
                 </WindowButton>
@@ -99,7 +113,7 @@ function WindowButton({
             className={cn(
                 "group/tip relative h-[26px] w-[34px] rounded-md flex items-center justify-center",
                 "text-text-2 hover:bg-surface-2 hover:text-text-1",
-                HOVER_FILL,
+                HOVER_PRESS,
                 variant === "close" &&
                 "hover:bg-redstone-dim hover:text-redstone"
             )}
