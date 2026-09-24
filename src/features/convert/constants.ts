@@ -1,7 +1,5 @@
-/** Convert 页的静态配置与纯函数：下拉选项、入场节拍常量、目录树定位 */
-import type { Variants } from "motion/react";
+/** Convert 页的静态配置与纯函数：下拉选项、行落位节拍、目录树定位 */
 import type { SelectOption } from "@/components/ui";
-import { RISE } from "@/lib/springs";
 import type { PackDirNode, VersionOption } from "@/lib/types";
 
 /** 服务端推荐保留目录：包树顶层探测到即预勾选（小写比对） */
@@ -34,15 +32,7 @@ export const PREVIEW_ROWS = 5;
 export const LAND_STAGGER_MS = 110;
 export const LAND_MAX_STEPS = PREVIEW_ROWS - 1;
 
-/** 页面入场：容器管节奏，各卡依次上浮（弹簧与帮助卡、目录行共用 RISE） */
-export const PAGE_RISE: Variants = {
-    hidden: {},
-    show: { transition: { staggerChildren: 0.06, delayChildren: 0.04 } },
-};
-export const CARD_RISE: Variants = {
-    hidden: { opacity: 0, y: 14 },
-    show: { opacity: 1, y: 0, transition: RISE },
-};
+/** 页面入场节拍（容器 PAGE_RISE + 各块 CARD_RISE）已上收到 src/lib/page-motion.ts，全站共用 */
 
 export const GAMEMODE_OPTIONS: SelectOption[] = [
     { value: "survival", label: "生存" },

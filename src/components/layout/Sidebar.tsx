@@ -3,6 +3,8 @@
  *
  * 直接消费导航上下文：点一级页 = 清栈切换；二级页期间其所属一级页保持高亮。
  * 高亮样式按设计稿：accent-dim 底 + accent 图标文字（不是实心 accent 底）。
+ * 淡底不是每行各画一块，而是一颗共享胶囊（layoutId="nav-pill"）在行间滑：
+ * 跨行也滑（设置→首页从任务列表那行穿过去），与分段页签的胶囊同一招、同一条弹簧。
  *
  * 底部那行守「信息在左、动作在右」的全应用排布语法：版本号靠左（24px，正好对上导航行
  * 图标的左缘），主题钮靠右（12px，正好对上导航胶囊的右缘，也与标题栏窗口控件同一条竖线）。
@@ -12,6 +14,7 @@ import { useRef, useState } from "react";
 import { AnimatePresence, motion } from "motion/react";
 import { NotificationStack } from "./NotificationStack";
 import { HOVER_FILL } from "@/components/ui";
+import { PILL_SLIDE } from "@/lib/springs";
 import { cn } from "@/lib/utils";
 import { isDark, switchTheme, useTheme } from "@/lib/theme";
 import { PRERELEASE_BADGE, VERSION_CORE } from "@/lib/api";
@@ -67,7 +70,8 @@ export function Sidebar() {
 
             <div className="h-5" />
 
-            {/* 导航：行 36 高 r8，激活 accent-dim 底 + accent 字 */}
+            {/* 导航：行 36 高 r8，激活 accent 字；淡底交给一颗共享胶囊（layoutId），
+                切分类时它从旧行滑到新行——跨行也滑，不瞬移换色 */}
             <nav className="flex flex-col gap-1">
                 {navItems.map((item) => {
                     const Icon = item.icon;
@@ -77,15 +81,24 @@ export function Sidebar() {
                             key={item.key}
                             onClick={() => switchPrimary(item.key)}
                             className={cn(
-                                "w-full h-9 rounded-lg flex items-center gap-2.5 px-3 text-[13px] font-medium",
+                                "relative w-full h-9 rounded-lg px-3 text-[13px] font-medium",
                                 HOVER_FILL,
                                 active
-                                    ? "bg-accent-dim text-accent"
+                                    ? "text-accent"
                                     : "text-text-2 hover:bg-surface-2 hover:text-text-1"
                             )}
                         >
-                            <Icon className="size-4" />
-                            <span>{item.label}</span>
+                            {active && (
+                                <motion.span
+                                    layoutId="nav-pill"
+                                    transition={PILL_SLIDE}
+                                    className="absolute inset-0 rounded-lg bg-accent-dim"
+                                />
+                            )}
+                            <span className="relative z-[1] flex h-full items-center gap-2.5">
+                                <Icon className="size-4" />
+                                <span>{item.label}</span>
+                            </span>
                         </button>
                     );
                 })}

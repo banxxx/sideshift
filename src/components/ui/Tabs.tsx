@@ -8,7 +8,7 @@ import { motion } from "motion/react";
 import { type LucideIcon } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { HOVER_FILL } from "./HoverFill";
-import { SEG_PILL } from "@/lib/springs";
+import { PILL_SLIDE } from "@/lib/springs";
 
 export function SegTabs<T extends string>({
     items,
@@ -57,7 +57,7 @@ export function SegTabs<T extends string>({
                         {active && (
                             <motion.span
                                 layoutId={`${pillId}-seg-pill`}
-                                transition={SEG_PILL}
+                                transition={PILL_SLIDE}
                                 className={cn(
                                     "absolute inset-0 rounded-md border border-stroke bg-surface",
                                     HOVER_FILL

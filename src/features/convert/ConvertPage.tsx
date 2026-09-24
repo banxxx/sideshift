@@ -48,7 +48,8 @@ import {
 import { DirPickerModal, OnlineAddModal, PlanListModal, type ListFocus } from "@/features/convert/modals";
 import { LaunchArgsCard, KeepDirsCard, RuntimeEnvCard, ServerSettingsCard } from "./OptionCards";
 import { ModPlanCard } from "./ModPlanCard";
-import { CARD_RISE, KEEP_DIR_PRESETS, PAGE_RISE, PREVIEW_ROWS, toOption } from "./constants";
+import { CARD_RISE, PAGE_RISE } from "@/lib/page-motion";
+import { KEEP_DIR_PRESETS, PREVIEW_ROWS, toOption } from "./constants";
 
 export function ConvertPage() {
     const { entry, navigate, switchPrimary } = useNavigation();

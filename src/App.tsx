@@ -4,9 +4,10 @@
  */
 import type { ComponentType } from "react";
 import { useEffect } from "react";
-import { MotionConfig } from "motion/react";
+import { AnimatePresence, MotionConfig, motion } from "motion/react";
 import { Sidebar } from "@/components/layout/Sidebar";
 import { TitleBar } from "@/components/layout/TitleBar";
+import { PAGE_IN, PAGE_OUT } from "@/lib/page-motion";
 import { HomePage } from "@/features/home/HomePage";
 import { TasksPage } from "@/features/tasks/TasksPage";
 import { SettingsPage } from "@/features/settings/SettingsPage";
@@ -15,6 +16,7 @@ import { TaskDetailPage } from "@/features/task/TaskDetailPage";
 import { TrashBin } from "@/features/tasks/TrashBin";
 import { PackStoreProvider } from "@/lib/pack-store";
 import {
+    EntryFreezer,
     NavigationProvider,
     useNavigation,
     type PageKey,
@@ -63,10 +65,25 @@ function Shell() {
                     纵向留白**由各页自己的根元素带**（见下），这里只留横向：
                     滚动容器自带的 padding-top 是吸顶页头盖不住的一条带子——sticky 的贴合边落在
                     内容盒（padding 之下），页头永远差着这 24px，卡片从缝里露出来。
-                    契约：每个页面根元素 = `py-6`（任务列表页把 pt-6 放进吸顶盒里，好让贴合边=留白起点）。 */}
-                <main className="page-scroll flex-1 overflow-auto px-8">
-                    <Page />
-                </main>
+                    契约：每个页面根元素 = `py-6`（任务列表页把 pt-6 放进吸顶盒里，好让贴合边=留白起点）。
+                    换页串行（mode="wait"：旧页退场演完才挂新页），所以屏上永远只有一层页面——
+                    滚动容器仍归 main，不必下放、吸顶页头也不会两层叠印。
+                    key 只取页名：同一页内的数据刷新（筛选变化、轮询到新任务）不该重播整页入场。
+                    EntryFreezer 把栈顶钉在挂载那一刻：退场那一拍栈已经换了，旧页若跟着读新栈顶，
+                    任务详情页会读不到 taskId 而先闪一句「任务不存在或已过期」。见 navigation.tsx。 */}
+                <AnimatePresence initial={false} mode="wait">
+                    <motion.main
+                        key={entry.key}
+                        initial={{ opacity: 0, y: 24 }}
+                        animate={{ opacity: 1, y: 0, transition: PAGE_IN }}
+                        exit={{ opacity: 0, y: -10, transition: PAGE_OUT }}
+                        className="page-scroll flex-1 overflow-auto px-8"
+                    >
+                        <EntryFreezer entry={entry}>
+                            <Page />
+                        </EntryFreezer>
+                    </motion.main>
+                </AnimatePresence>
                 {/* 回收站入口：只在任务列表页挂着——删除与飞行落点都发生在那一页，别的页面
                     亮一个够不着的垃圾桶只是噪音。仍在 Shell 层而不是塞进 TasksPage：
                     它是 `fixed` 的落点，留在滚动容器外面不必去赌「fixed 后代是否被滚动容器裁」这一类

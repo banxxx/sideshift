@@ -1,9 +1,10 @@
 /**
- * 全站 motion 弹簧的唯一出处：14 个用点、11 条弹簧，数值是各处原本就在用的原值。
+ * 全站 motion 弹簧的唯一出处：16 个用点、11 条弹簧，数值是各处原本就在用的原值。
  *
  * 改之前先读这三条，它们都是踩出来的：
- *  1. 弹簧的过冲距离与位移成正比（行程 400px 就会飞过头约 100px）。所以列表重排、换页、
- *     卡片大位移一律不走这里的弹簧，改用 src/features/tasks/entry-curve.ts 里自算的「送+弹」曲线。
+ *  1. 过冲 = 行程 × 这条弹簧的固定比例。下面这些常量都偏硬（ζ≈0.65–0.95，越线不到 1%，只读得出"快"读不出"弹"）；
+ *     一旦把阻尼软到看得见弹，几百 px 的行程就是几十 px 越线。所以列表重排、换页、卡片大位移一律不走这里的弹簧，
+ *     要"弹"改用 src/features/tasks/entry-curve.ts 里峰值固定 px 的「送+弹」曲线。
  *  2. 手势甩出去的续动只能用 stiffness/damping/mass。写成 visualDuration 或 duration 的
  *     话，motion 会把继承速度强行清零，甩动直接没有反应。
  *  3. 不要只写 visualDuration 而不写 bounce —— motion 会静默忽略前者，
@@ -23,8 +24,8 @@ export const TOGGLE_SLIDE: Transition = {
 /** 开关松手收回横向拉伸：比行程再硬一档，与位移互不干扰 */
 export const TOGGLE_PRESS: Transition = { type: "spring", stiffness: 700, damping: 30 };
 
-/** 分段页签选中胶囊滑动：短促、不回弹 */
-export const SEG_PILL: Transition = { type: "spring", stiffness: 420, damping: 36 };
+/** 选中胶囊滑动：分段页签的三档、侧栏三个分类的导航行共用（同一件事——一块淡底在候选之间滑） */
+export const PILL_SLIDE: Transition = { type: "spring", stiffness: 420, damping: 36 };
 /** 计数滚动（旧数上滑、新数升入）：16px 微行程 */
 export const COUNT_ROLL: Transition = { type: "spring", stiffness: 420, damping: 32 };
 

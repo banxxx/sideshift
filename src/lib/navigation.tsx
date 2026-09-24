@@ -5,6 +5,7 @@
  * - 二级页面（SecondaryPage）：从一级页面下钻进入（转换配置/任务详情），
  *   标题栏最小化左侧出现 undo-2 返回按钮 + 短竖线分隔，点击回退一层
  * - 实现方式：内存导航栈。navigate() 压栈，back() 弹栈，switchPrimary() 清栈重建
+ * - 栈顶用 EntryFreezer 冻成「本层挂载时那一份」再发给页面，原因见该组件的注释
  */
 import {
     createContext,
@@ -56,6 +57,28 @@ const NavigationContext = createContext<Navigation | null>(null);
 /** 供 DEV 调试句柄读取的最新导航实例（见文件底部 __nav） */
 const navSingleton: { current: Navigation | null } = { current: null };
 
+/**
+ * 本层页面挂载时的栈顶。页面读到的 entry 由它提供，而不是直接读实时栈顶。
+ *
+ * 换页是串行的（App.tsx 的 `mode="wait"`）：旧页还要在屏上演 140ms，栈顶却已经换到新页了。
+ * context 是穿透这层快照的，于是退场中的二级页会拿新栈顶去解自己的参数——
+ * 详情页于是读不到 taskId，在返回列表之前先宣布「任务不存在或已过期」，也就是用户看到的闪一下。
+ */
+const EntrySnapshotContext = createContext<StackEntry | null>(null);
+
+/**
+ * 包在一层页面外面，把传进来的栈顶钉死在挂载那一刻（useState 的初值只在首渲染取一次，
+ * 之后 props 再怎么变都不跟着走）。退场那 140ms 里旧页照旧按自己那份参数演完。
+ */
+export function EntryFreezer({ entry, children }: { entry: StackEntry; children: ReactNode }) {
+    const [frozen] = useState(entry);
+    return (
+        <EntrySnapshotContext.Provider value={frozen}>
+            {children}
+        </EntrySnapshotContext.Provider>
+    );
+}
+
 export function NavigationProvider({ children }: { children: ReactNode }) {
     const [stack, setStack] = useState<StackEntry[]>([{ key: "home" }]);
 
@@ -103,8 +126,12 @@ if (import.meta.env.DEV) {
 
 export function useNavigation(): Navigation {
     const ctx = useContext(NavigationContext);
+    const frozen = useContext(EntrySnapshotContext);
     if (!ctx) {
         throw new Error("useNavigation 必须在 <NavigationProvider> 内使用");
     }
-    return ctx;
+    return useMemo(
+        () => (frozen ? { ...ctx, entry: frozen } : ctx),
+        [ctx, frozen]
+    );
 }

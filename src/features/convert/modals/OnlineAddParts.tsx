@@ -3,7 +3,7 @@ import { Puzzle } from "lucide-react";
 import { useEffect, useId, useState } from "react";
 import { motion } from "motion/react";
 import { HOVER_FILL } from "@/components/ui";
-import { SEG_PILL } from "@/lib/springs";
+import { PILL_SLIDE } from "@/lib/springs";
 import { cn } from "@/lib/utils";
 
 export type Source = "modrinth" | "curseforge";
@@ -40,7 +40,7 @@ export function SourceSeg({ value, onChange }: { value: Source; onChange: (s: So
                         {active && (
                             <motion.span
                                 layoutId={`${pillId}-src-pill`}
-                                transition={SEG_PILL}
+                                transition={PILL_SLIDE}
                                 className={cn(
                                     "absolute inset-0 rounded-md bg-accent",
                                     HOVER_FILL

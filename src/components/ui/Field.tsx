@@ -103,7 +103,7 @@ export function Stepper({
 /* ---------------- 开关：36×20（卡内）/ 38×22（设置行），滑块 16 白色 ----------------
  * 动效三层，两根弹簧取自 @/lib/springs，实测数据出自 .scratch/toggle-motion-proto.html（60Hz 积分）：
  *  - 行程：滑块走 translateX，用 TOGGLE_SLIDE → 117ms 到 95%、过冲 0.34px（刚磕一下壁）。
- *    比 SEG_PILL 更硬，因为 14px 的行程拖不起 200ms。
+ *    比 PILL_SLIDE 更硬，因为 14px 的行程拖不起 200ms。
  *  - 按压：按住时滑块沿行程方向拉伸 1.16，松手由 scaleX 自己的 spring 收回——不改变位移，
  *    纯手感，且和行程是两个独立属性，中途连点各走各的。
  *  - 染色：轨道底色 surface-2 ↔ accent，走 HOVER_FILL 的节奏（180ms），比滑块到位稍晚一点，

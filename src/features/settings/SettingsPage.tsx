@@ -13,9 +13,11 @@
  */
 import { FlaskConical, Folder, Monitor, Moon, RefreshCw, Sun, Trash2 } from "lucide-react";
 import { useCallback, useEffect, useState, type ReactNode } from "react";
+import { motion } from "motion/react";
 import * as api from "@/lib/api";
 import { formatSize } from "@/lib/format";
 import { notify, type NoticeKind } from "@/lib/notify";
+import { CARD_RISE, PAGE_RISE } from "@/lib/page-motion";
 import { switchTheme, useTheme, type Theme } from "@/lib/theme";
 import type { AppSettings, CacheUsage, CleanReport, UpdateChannel } from "@/lib/types";
 import {
@@ -220,7 +222,12 @@ export function SettingsPage() {
     if (!settings) return <SettingsSkeleton />;
 
     return (
-        <div className="flex flex-col gap-5 py-6">
+        <motion.div
+            variants={PAGE_RISE}
+            initial="hidden"
+            animate="show"
+            className="flex flex-col gap-5 py-6"
+        >
             <PageHeader compact title="设置" sub="转换行为、存储、网络与外观偏好" />
 
             <div className="flex w-full flex-col gap-5">
@@ -431,19 +438,22 @@ export function SettingsPage() {
                     建议只在愿意顺手报 bug 的时候切过来。
                 </p>
             </ModalShell>
-        </div>
+        </motion.div>
     );
 }
 
-/** 分组：等宽小标题 + 无内边距卡片（行间 1px $stroke-soft 分隔） */
+/**
+ * 分组：等宽小标题 + 无内边距卡片（行间 1px $stroke-soft 分隔）。
+ * 本身是页内错峰的一块（CARD_RISE），节奏由页面根容器给
+ */
 function Section({ title, children }: { title: string; children: ReactNode }) {
     return (
-        <section className="flex w-full flex-col gap-2">
+        <motion.section variants={CARD_RISE} className="flex w-full flex-col gap-2">
             <SectionTitle>{title}</SectionTitle>
             <Panel gap={0} className="divide-y divide-stroke-soft p-0">
                 {children}
             </Panel>
-        </section>
+        </motion.section>
     );
 }
 

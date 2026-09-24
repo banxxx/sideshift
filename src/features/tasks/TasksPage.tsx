@@ -9,6 +9,8 @@
  *         失败态改为错误盒 + 右对齐按钮；详情页是任务唯一的下钻目的地，列表不再各发各的跳转）
  * 空态两套：整页无任务 = 70vh 无边框块（图标盒 + 两行等宽文案 + accent 主按钮）；
  * 筛选后为空 = 同款视觉但更短，图标换 SearchX 说明「不是没有任务，是这一档没有」。
+ * 两套空态都在**首轮读数到手之后**才允许出现（`loaded` 闸门）——读盘是异步的，
+ * 抢在前头就会每次进页闪一张"这里什么都没有"，再蹦出真实列表。
  *
  * 删除不是「点一下就没」，而是一段可反悔的动作（曲线与节奏见 ./delete-flight.ts）：
  * 两个入口（删除按钮 / 卡片聚焦后按 Delete）走同一条流程 ——
@@ -81,6 +83,9 @@ const PRIMARY_LABEL: Record<TaskStatus, string> = {
 
 export function TasksPage() {
     const [tasks, setTasks] = useState<ConversionTask[]>([]);
+    /** 第一轮读数到手前不许宣布「没有任务」：`listTasks()` 是异步的，空态与列表都由它把关，
+     *  否则每次进这一页都会先闪一张空壳、再蹦出列表（换页那 260ms 入场正好把它放大）。 */
+    const [loaded, setLoaded] = useState(false);
     const [filter, setFilter] = useState<Filter>("all");
     /** 飞行中：卡片本体隐身但**保住槽位**（视觉交给 overlay 里的克隆） */
     const [flying, setFlying] = useState<Set<string>>(new Set());
@@ -96,7 +101,10 @@ export function TasksPage() {
             api
                 .listTasks()
                 .then((list) => setTasks([...list].sort((a, b) => b.createdAt - a.createdAt)))
-                .catch(() => setTasks([]));
+                // 读失败按空列表处理，但照样算"读到了"：闸门一直压着会让页面卡在占位上，
+                // 比报一次空更糟。1s 轮询会在下一趟把真实数据换回来。
+                .catch(() => setTasks([]))
+                .finally(() => setLoaded(true));
         void load();
         const timer = window.setInterval(load, 1000);
         return () => window.clearInterval(timer);
@@ -241,13 +249,21 @@ export function TasksPage() {
                 <PageHeader
                     compact
                     title="转换任务"
-                    sub={tasks.length === 0 ? "从首页选择整合包，开始第一次转换" : summary(shown)}
+                    sub={
+                        !loaded
+                            ? "正在读取任务…"
+                            : tasks.length === 0
+                              ? "从首页选择整合包，开始第一次转换"
+                              : summary(shown)
+                    }
                     subTone="mono"
                     right={<SegTabs items={FILTERS} value={filter} onChange={changeFilter} />}
                 />
             </div>
 
-            {tasks.length === 0 ? (
+            {!loaded ? (
+                <LoadingTasks />
+            ) : tasks.length === 0 ? (
                 <EmptyTasks />
             ) : (
                 /* 常驻容器：卡片节点按 task.id 长期存续，重排的行程靠"切换前量一次 offsetTop、重排后
@@ -310,7 +326,33 @@ function countOf(tasks: ConversionTask[], filter: Exclude<Filter, "all">): numbe
     return tasks.filter((t) => matchesFilter(filter, t)).length;
 }
 
-/* ---------------- 空态：整页无任务（YBR4K）/ 某一档筛完没有 ---------------- */
+/* ---------------- 首轮读数占位 / 空态：整页无任务（YBR4K）/ 某一档筛完没有 ---------------- */
+
+/** 占位照真实卡的骨架排（同一张 Panel、同样的两行文字高度）：读数到手时高度几乎不动，
+ *  不会看到"矮一截又长回来"。这里不挂 motion —— 它演的是"还没有内容"，不是内容入场。 */
+function LoadingTasks() {
+    return (
+        <div className="flex flex-col gap-4">
+            {Array.from({ length: 3 }, (_, i) => (
+                <Panel key={i} gap={12}>
+                    <div className="flex w-full items-center gap-3">
+                        <span className="size-9 shrink-0 animate-pulse rounded-[10px] bg-surface-2" />
+                        <div className="flex min-w-0 flex-1 flex-col gap-[3px]">
+                            <span className="h-[13px] w-40 animate-pulse rounded bg-stroke" />
+                            <span className="h-[10px] w-56 animate-pulse rounded bg-stroke-soft" />
+                        </div>
+                        <span className="h-[22px] w-16 shrink-0 animate-pulse rounded-full bg-stroke" />
+                        <span className="h-[11px] w-8 shrink-0 animate-pulse rounded bg-stroke-soft" />
+                    </div>
+                    <div className="flex w-full items-center justify-between gap-3">
+                        <span className="h-[11px] w-52 animate-pulse rounded bg-stroke-soft" />
+                        <span className="h-8 w-24 shrink-0 animate-pulse rounded-lg bg-stroke" />
+                    </div>
+                </Panel>
+            ))}
+        </div>
+    );
+}
 
 /** 空态块高度：70vh 在 1200×800 基准下正好等于设计稿的 560；窗口变矮先收这里（下限 400 保证
  *  图标盒+两行文案+按钮 176 的内容不破版），变高封顶 640，免得拉成一整屏空白。 */

@@ -18,7 +18,12 @@
  *  - failed          重试转换(accent) → 返回任务列表
  *  - cancelled       重新转换(accent) → 返回任务列表
  *  - success         打开输出位置(accent) → 复制转换方案 → 返回任务列表
+ *
+ * 顶部是**吸顶页头**（与任务列表页同一套规则）：这一页能滚出两屏以上，页签一旦够不着，
+ * 页面就只剩当前那一签。换签是一次横向翻页（`TAB_SWEEP`：点右侧那档就从右边进来），
+ * 与页签上滑动的选中胶囊同一条轴；退场层走 popLayout 抽离文档流，容器不会先塌一次高度。
  */
+import { AnimatePresence, motion } from "motion/react";
 import { useEffect, useRef, useState } from "react";
 import * as api from "@/lib/api";
 import { notify } from "@/lib/notify";
@@ -62,6 +67,7 @@ import {
     ToneChip,
 } from "@/components/ui";
 import { useLogFollow } from "@/lib/log-view";
+import { CARD_RISE, PAGE_RISE, TAB_SWEEP } from "@/lib/page-motion";
 import { cn } from "@/lib/utils";
 
 /** HH:MM（状态行短语用；字段级的时间一律 formatStamp 带年月日） */
@@ -113,6 +119,9 @@ export function TaskDetailPage() {
     /** 实时条数据源：进度事件比 800ms 轮询密一个量级，轮询到的快照作为兜底覆写 */
     const [activity, setActivity] = useState<ActivityInfo | undefined>(undefined);
     const logRef = useRef<HTMLDivElement>(null);
+    /** 换页签的方向（±1）：交给 TAB_SWEEP 决定内容进出的那一侧。ref 而不是 state——
+     *  它只是给动画读的旁证，改它不该单独触发一次渲染。 */
+    const tabDir = useRef(0);
     useLogFollow(logRef, task?.logs.length ?? 0);
 
     const succeeded = task?.status === "success";
@@ -242,6 +251,12 @@ export function TaskDetailPage() {
     const items = tabsOf(task.status);
     const active: TaskTab = items.includes(tab) ? tab : "overview";
 
+    /** 页签一律走这里换：顺手把方向记下来（点在右侧那一档 = 新内容从右边进来） */
+    const changeTab = (next: TaskTab) => {
+        tabDir.current = items.indexOf(next) >= items.indexOf(active) ? 1 : -1;
+        setTab(next);
+    };
+
     /** 打开产物所在目录：静默失败会被当成「按钮坏了」，一律把错误外显到全局提示区 */
     const openOutput = async () => {
         if (!outPath) {
@@ -271,7 +286,7 @@ export function TaskDetailPage() {
         if (!res) return;
         if (res.queued) notify("已有转换正在进行，重试任务已加入队列", "info");
         // 同一 id 原地重跑：回到概况、清掉上一轮的报告，重新起轮询而不是再压一层导航栈
-        setTab("overview");
+        changeTab("overview");
         setReport(null);
         setOutPath(null);
         setNonce((n) => n + 1);
@@ -299,226 +314,256 @@ export function TaskDetailPage() {
     };
 
     return (
-        <div className="flex flex-col gap-5 py-6">
-            <PageHeader
-                title={packName}
-                sub={subLine(task, elapsed)}
-                right={
-                    <SegTabs
-                        items={items.map((k) => ({ key: k, label: TAB_LABEL[k] }))}
-                        value={active}
-                        onChange={setTab}
-                    />
-                }
-            />
+        <motion.div
+            className="flex flex-col gap-5 pb-6"
+            variants={PAGE_RISE}
+            initial="hidden"
+            animate="show"
+        >
+            {/* 吸顶页头：概况签在窄窗口下能滚出两屏，方案/结果更是长清单——页签够不着就等于
+                这一页只剩当前那一签。盒子与规则同任务列表页：留白这圈由吸顶盒自己出（pt-6），
+                pb-5 + -mb-5 抵掉根 div 的 gap-5（静止观感逐像素不变，但那 20px 归底色管），
+                z-20 压过带 transform 的卡片层。 */}
+            <motion.div
+                variants={CARD_RISE}
+                className="sticky top-0 z-20 -mb-5 bg-background pt-6 pb-5"
+            >
+                <PageHeader
+                    title={packName}
+                    sub={subLine(task, elapsed)}
+                    right={
+                        <SegTabs
+                            items={items.map((k) => ({ key: k, label: TAB_LABEL[k] }))}
+                            value={active}
+                            onChange={changeTab}
+                        />
+                    }
+                />
+            </motion.div>
 
-            <div className="flex items-start gap-5">
-                {/* 左列按页签换内容：这里不摆跨页按钮，换看别的内容只顶上那排页签 */}
-                <div className="flex min-w-0 flex-1 flex-col gap-4">
-                    {active === "overview" && (
-                        <>
-                            {task.error && (
-                                <TaskErrorCard
-                                    error={task.error}
-                                    fileName={
-                                        task.error.stage === "parser"
-                                            ? task.pack.fileName
-                                            : undefined
-                                    }
-                                    onRetry={() => void retry()}
-                                    onFix={
-                                        task.error.stage === "parser"
-                                            ? () => switchPrimary("home")
-                                            : task.error.stage === "detector"
-                                              ? () => setTab("plan")
-                                              : undefined
-                                    }
-                                    onShowLog={
-                                        task.error.stage === "parser"
-                                            ? () =>
-                                                  logRef.current?.scrollIntoView({
-                                                      behavior: "smooth",
-                                                      block: "end",
-                                                  })
-                                            : undefined
-                                    }
-                                    onCopyDiagnostics={
-                                        task.error.stage === "builder"
-                                            ? () => void copyDiagnostics()
-                                            : undefined
-                                    }
-                                    copied={copied}
-                                />
-                            )}
-
-                            {/* ---- 转换进度 ---- */}
-                            <Panel gap={12}>
-                                <PanelHead
-                                    inline
-                                    title="转换进度"
-                                    right={
-                                        <ToneChip
-                                            tone={chip.tone}
-                                            size="sm"
-                                            className={cn("px-2.5", chip.plain && "bg-surface-2")}
-                                        >
-                                            {chip.label}
-                                        </ToneChip>
-                                    }
-                                />
-                                {/* 父子两条一组：粗=整包总进度（阶段加权，分钟级），细=当前动作（秒级字节量） */}
-                                <div className="flex w-full flex-col gap-1.5">
-                                    <Bar
-                                        percent={task.progress}
-                                        fillClass={BAR_COLOR[task.status]}
-                                    />
-                                    <ActivitySubBar activity={act} />
-                                </div>
-
-                                <div className="flex w-full justify-between gap-3">
-                                    <span className="text-[12px] leading-[18px] font-medium text-text-1">
-                                        {progressHeadline(task)}
-                                    </span>
-                                    <span className="shrink-0 font-mono text-[11px] leading-[16px] font-normal text-text-2">
-                                        {task.progress}%
-                                    </span>
-                                </div>
-                                {/* 第二行：有当前动作时是「正在弄哪个文件」，否则回落最后一条日志。
-                                    完整文件名走 Tip（外层只管截断，气泡要在裁刀之外才不会被切掉） */}
-                                <div className="flex w-full justify-between gap-3">
-                                    <span
-                                        className={cn(
-                                            TIP_TRIGGER,
-                                            "flex min-w-0 flex-1 items-center"
-                                        )}
-                                    >
-                                        <span
-                                            className={cn(
-                                                "min-w-0 truncate font-mono text-[11px] leading-[16px] font-normal",
-                                                act ? "text-text-2" : "text-text-3"
-                                            )}
-                                        >
-                                            {act
-                                                ? `${act.kind === "net" ? "下载" : "打包"} · ${act.subject}`
-                                                : (lastLog?.message ?? "等待日志…")}
-                                        </span>
-                                        <Tip
-                                            label={act?.subject ?? lastLog?.message}
-                                            align="start"
-                                            wide
+            <motion.div variants={CARD_RISE} className="flex items-start gap-5">
+                {/* 左列按页签换内容：这里不摆跨页按钮，换看别的内容只顶上那排页签。
+                    换页是一次横向翻页（TAB_SWEEP：点哪一侧就从哪一侧进来），
+                    popLayout 让退场那层抽离文档流，容器高度当场就是新内容的，不会先塌一次。 */}
+                <div className="relative flex min-w-0 flex-1 flex-col gap-4">
+                    <AnimatePresence mode="popLayout" initial={false} custom={tabDir.current}>
+                        <motion.div
+                            key={active}
+                            custom={tabDir.current}
+                            variants={TAB_SWEEP}
+                            initial="hidden"
+                            animate="show"
+                            exit="exit"
+                            className="flex flex-col gap-4"
+                        >
+                            {active === "overview" && (
+                                <>
+                                    {task.error && (
+                                        <TaskErrorCard
+                                            error={task.error}
+                                            fileName={
+                                                task.error.stage === "parser"
+                                                    ? task.pack.fileName
+                                                    : undefined
+                                            }
+                                            onRetry={() => void retry()}
+                                            onFix={
+                                                task.error.stage === "parser"
+                                                    ? () => switchPrimary("home")
+                                                    : task.error.stage === "detector"
+                                                      ? () => changeTab("plan")
+                                                      : undefined
+                                            }
+                                            onShowLog={
+                                                task.error.stage === "parser"
+                                                    ? () =>
+                                                          logRef.current?.scrollIntoView({
+                                                              behavior: "smooth",
+                                                              block: "end",
+                                                          })
+                                                    : undefined
+                                            }
+                                            onCopyDiagnostics={
+                                                task.error.stage === "builder"
+                                                    ? () => void copyDiagnostics()
+                                                    : undefined
+                                            }
+                                            copied={copied}
                                         />
-                                    </span>
-                                    <span
-                                        className={cn(
-                                            "shrink-0 font-mono text-[11px] leading-[16px] font-normal tabular-nums",
-                                            act?.attempt && act.attempt > 1
-                                                ? "text-gold"
-                                                : task.status === "failed"
-                                                  ? "text-redstone"
-                                                  : "text-text-3"
-                                        )}
-                                    >
-                                        {act
-                                            ? activityMeasure(act)
-                                            : progressAside(task, elapsed)}
-                                    </span>
-                                </div>
+                                    )}
 
-                                <Divider />
+                                    {/* ---- 转换进度 ---- */}
+                                    <Panel gap={12}>
+                                        <PanelHead
+                                            inline
+                                            title="转换进度"
+                                            right={
+                                                <ToneChip
+                                                    tone={chip.tone}
+                                                    size="sm"
+                                                    className={cn("px-2.5", chip.plain && "bg-surface-2")}
+                                                >
+                                                    {chip.label}
+                                                </ToneChip>
+                                            }
+                                        />
+                                        {/* 父子两条一组：粗=整包总进度（阶段加权，分钟级），细=当前动作（秒级字节量） */}
+                                        <div className="flex w-full flex-col gap-1.5">
+                                            <Bar
+                                                percent={task.progress}
+                                                fillClass={BAR_COLOR[task.status]}
+                                            />
+                                            <ActivitySubBar activity={act} />
+                                        </div>
 
-                                {/* 微型轨道：当前站 → 下一站 */}
-                                <div className="flex w-full items-center gap-2.5">
-                                    <span
-                                        className={cn(
-                                            "size-2 shrink-0 rounded-full",
-                                            toneDot(track.current.tone)
-                                        )}
-                                    />
-                                    <span
-                                        className={cn(
-                                            "text-[11px] leading-[16px] font-semibold",
-                                            toneText(track.current.tone)
-                                        )}
-                                    >
-                                        {track.current.label}
-                                    </span>
-                                    {track.next && (
-                                        <>
-                                            <span className="h-0.5 w-9 shrink-0 rounded-full bg-stroke" />
-                                            <span className="size-2 shrink-0 rounded-full bg-stroke" />
-                                            <span className="text-[11px] leading-[16px] font-normal text-text-3">
-                                                {track.next}
+                                        <div className="flex w-full justify-between gap-3">
+                                            <span className="text-[12px] leading-[18px] font-medium text-text-1">
+                                                {progressHeadline(task)}
                                             </span>
-                                        </>
-                                    )}
-                                </div>
-                            </Panel>
-
-                            {/* ---- 日志：定高 260 + 框内滚动，卡高不随日志条数变化 ---- */}
-                            <Panel gap={12}>
-                                <PanelHead
-                                    title="日志"
-                                    right={
-                                        <LogCopyButton
-                                            logs={task.logs}
-                                            header={`SideShift 日志 · ${task.pack.fileName} · ${task.id}`}
-                                        />
-                                    }
-                                />
-                                <div
-                                    ref={logRef}
-                                    className="log-scroll flex h-[260px] w-full flex-col gap-1 overflow-y-auto rounded-md bg-surface-2 p-3"
-                                >
-                                    {task.logs.length === 0 && (
-                                        <span className="font-mono text-[10px] leading-[14px] text-text-3">
-                                            等待开始转换…
-                                        </span>
-                                    )}
-                                    {hiddenLogs > 0 && (
-                                        <span className="font-mono text-[10px] leading-[14px] text-text-3">
-                                            （仅显示最近 {LOG_RENDER_CAP} 条 · 已省略 {hiddenLogs}{" "}
-                                            条，复制可取全部 {task.logs.length} 条）
-                                        </span>
-                                    )}
-                                    {visibleLogs.map((l, i) => (
-                                        <div key={i} className="flex w-full gap-2">
-                                            <span className="shrink-0 font-mono text-[10px] leading-[14px] font-normal text-amethyst">
-                                                [{l.stage}]
+                                            <span className="shrink-0 font-mono text-[11px] leading-[16px] font-normal text-text-2">
+                                                {task.progress}%
+                                            </span>
+                                        </div>
+                                        {/* 第二行：有当前动作时是「正在弄哪个文件」，否则回落最后一条日志。
+                                            完整文件名走 Tip（外层只管截断，气泡要在裁刀之外才不会被切掉） */}
+                                        <div className="flex w-full justify-between gap-3">
+                                            <span
+                                                className={cn(
+                                                    TIP_TRIGGER,
+                                                    "flex min-w-0 flex-1 items-center"
+                                                )}
+                                            >
+                                                <span
+                                                    className={cn(
+                                                        "min-w-0 truncate font-mono text-[11px] leading-[16px] font-normal",
+                                                        act ? "text-text-2" : "text-text-3"
+                                                    )}
+                                                >
+                                                    {act
+                                                        ? `${act.kind === "net" ? "下载" : "打包"} · ${act.subject}`
+                                                        : (lastLog?.message ?? "等待日志…")}
+                                                </span>
+                                                <Tip
+                                                    label={act?.subject ?? lastLog?.message}
+                                                    align="start"
+                                                    wide
+                                                />
                                             </span>
                                             <span
                                                 className={cn(
-                                                    "min-w-0 flex-1 break-words font-mono text-[10px] leading-[14px] font-normal",
-                                                    l.level === "error"
-                                                        ? "text-redstone"
-                                                        : l.level === "warn"
-                                                          ? "text-text-3"
-                                                          : "text-text-2"
+                                                    "shrink-0 font-mono text-[11px] leading-[16px] font-normal tabular-nums",
+                                                    act?.attempt && act.attempt > 1
+                                                        ? "text-gold"
+                                                        : task.status === "failed"
+                                                          ? "text-redstone"
+                                                          : "text-text-3"
                                                 )}
                                             >
-                                                {l.message}
+                                                {act
+                                                    ? activityMeasure(act)
+                                                    : progressAside(task, elapsed)}
                                             </span>
                                         </div>
-                                    ))}
-                                </div>
-                            </Panel>
-                        </>
-                    )}
 
-                    {active === "result" &&
-                        (report ? (
-                            <ReportView
-                                taskId={task.id}
-                                report={report}
-                                task={task}
-                                outPath={outPath}
-                            />
-                        ) : (
-                            <Panel className="items-center py-16">
-                                <span className="h-4 w-40 animate-pulse rounded bg-stroke" />
-                            </Panel>
-                        ))}
+                                        <Divider />
 
-                    {active === "plan" && <PlanReviewView taskId={task.id} manifest={task.pack} />}
+                                        {/* 微型轨道：当前站 → 下一站 */}
+                                        <div className="flex w-full items-center gap-2.5">
+                                            <span
+                                                className={cn(
+                                                    "size-2 shrink-0 rounded-full",
+                                                    toneDot(track.current.tone)
+                                                )}
+                                            />
+                                            <span
+                                                className={cn(
+                                                    "text-[11px] leading-[16px] font-semibold",
+                                                    toneText(track.current.tone)
+                                                )}
+                                            >
+                                                {track.current.label}
+                                            </span>
+                                            {track.next && (
+                                                <>
+                                                    <span className="h-0.5 w-9 shrink-0 rounded-full bg-stroke" />
+                                                    <span className="size-2 shrink-0 rounded-full bg-stroke" />
+                                                    <span className="text-[11px] leading-[16px] font-normal text-text-3">
+                                                        {track.next}
+                                                    </span>
+                                                </>
+                                            )}
+                                        </div>
+                                    </Panel>
+
+                                    {/* ---- 日志：定高 260 + 框内滚动，卡高不随日志条数变化 ---- */}
+                                    <Panel gap={12}>
+                                        <PanelHead
+                                            title="日志"
+                                            right={
+                                                <LogCopyButton
+                                                    logs={task.logs}
+                                                    header={`SideShift 日志 · ${task.pack.fileName} · ${task.id}`}
+                                                />
+                                            }
+                                        />
+                                        <div
+                                            ref={logRef}
+                                            className="log-scroll flex h-[260px] w-full flex-col gap-1 overflow-y-auto rounded-md bg-surface-2 p-3"
+                                        >
+                                            {task.logs.length === 0 && (
+                                                <span className="font-mono text-[10px] leading-[14px] text-text-3">
+                                                    等待开始转换…
+                                                </span>
+                                            )}
+                                            {hiddenLogs > 0 && (
+                                                <span className="font-mono text-[10px] leading-[14px] text-text-3">
+                                                    （仅显示最近 {LOG_RENDER_CAP} 条 · 已省略 {hiddenLogs}{" "}
+                                                    条，复制可取全部 {task.logs.length} 条）
+                                                </span>
+                                            )}
+                                            {visibleLogs.map((l, i) => (
+                                                <div key={i} className="flex w-full gap-2">
+                                                    <span className="shrink-0 font-mono text-[10px] leading-[14px] font-normal text-amethyst">
+                                                        [{l.stage}]
+                                                    </span>
+                                                    <span
+                                                        className={cn(
+                                                            "min-w-0 flex-1 break-words font-mono text-[10px] leading-[14px] font-normal",
+                                                            l.level === "error"
+                                                                ? "text-redstone"
+                                                                : l.level === "warn"
+                                                                  ? "text-text-3"
+                                                                  : "text-text-2"
+                                                        )}
+                                                    >
+                                                        {l.message}
+                                                    </span>
+                                                </div>
+                                            ))}
+                                        </div>
+                                    </Panel>
+                                </>
+                            )}
+
+                            {active === "result" &&
+                                (report ? (
+                                    <ReportView
+                                        taskId={task.id}
+                                        report={report}
+                                        task={task}
+                                        outPath={outPath}
+                                    />
+                                ) : (
+                                    <Panel className="items-center py-16">
+                                        <span className="h-4 w-40 animate-pulse rounded bg-stroke" />
+                                    </Panel>
+                                ))}
+
+                            {active === "plan" && (
+                                <PlanReviewView taskId={task.id} manifest={task.pack} />
+                            )}
+                        </motion.div>
+                    </AnimatePresence>
                 </div>
 
                 {/* 右栏：任务信息 + 本页唯一的动作区 */}
@@ -604,8 +649,8 @@ export function TaskDetailPage() {
                         </p>
                     </Panel>
                 </aside>
-            </div>
-        </div>
+            </motion.div>
+        </motion.div>
     );
 }
 
