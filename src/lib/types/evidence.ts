@@ -1,10 +1,19 @@
 /** 端判定证据的词表（Rust 侧同一套枚举，serde 字面量必须逐字对齐） */
+import type { ModSourceKind } from "./mods";
 
-/** 用户在添加那一刻钉住的 Modrinth 构建（方案显示版本 = 构建下载版本） */
+/** 用户在添加那一刻钉住的构建（方案显示版本 = 构建下载版本） */
 export interface PinnedVersion {
+    /**
+     * 构建直链。Modrinth 是 CDN 永久链；**CurseForge 恒为空串**——它的下载链是带时效的签名
+     * URL，落档就会到期，所以构建时按 `source` + `fileId` 现取一条（Rust: `needs_curseforge_link`）。
+     */
     url: string;
     sha1?: string;
     fileName: string;
+    /** 来源平台；缺省 = Modrinth（老存档里只有这一家钉过） */
+    source?: ModSourceKind;
+    /** CurseForge 的 file id，与方案行 id（mod id）配对定位要取链的那份构建 */
+    fileId?: string;
 }
 
 /** 端证据的来源（可信度由高到低；前端据此标注「依据什么判定」） */

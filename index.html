@@ -74,7 +74,13 @@
         position: absolute;
         left: 0;
         width: var(--sp-size);
-        height: calc(var(--sp-size) / 4);
+        /* +1px 是拼接缝的旋钮：整页按显示器缩放比栅格化时，图块的切割边会落在半像素上，
+           那条边于是按「图块 vs 启动页底色」做抗锯齿 ⇒ 拼回去是一道背景色的头发丝。
+           向下多画 1px 让上一条图块垫在下面（背景图仍是同一张 64px、位置对齐 ⇒ 重叠区是同一批像素，
+           不会画错内容），下一块的软边就变成「图块 vs 图块」混合，缝当场没了。
+           最下面那块多出的 1px 落在图形之外（no-repeat ⇒ 不画任何东西），无副作用。
+           若你看到的不是头发丝而是更宽的缝，把这里的 1px 加大即可。 */
+        height: calc(var(--sp-size) / 4 + 1px);
         background-image: url("/logo.svg");
         background-repeat: no-repeat;
         background-size: var(--sp-size) var(--sp-size);
@@ -120,7 +126,8 @@
         position: relative;
         width: 132px;
         height: 4px;
-        border-radius: 1px;
+        /* 轨道与里面的光带同一个圆角口径（999px = 4px 高的胶囊）；1px 时看着仍是直角 */
+        border-radius: 999px;
         overflow: hidden;
         background: #eef0f3;
       }

@@ -36,12 +36,12 @@ export interface ModSearchResult {
     compatible: boolean;
     /** 是否已在新增列表中 */
     alreadyAdded: boolean;
-    /** 项目级两侧支持度（Rust 由 Modrinth client_side/server_side 换算）：添加前端标签用 */
+    /** 项目级两侧支持度（Rust 由 Modrinth client_side/server_side 换算）：添加前端标签用；CurseForge 一律缺省 */
     clientSide?: SideFlag;
     serverSide?: SideFlag;
 }
 
-/** 搜索源：目前只有 Modrinth 一家真接，词表保留两态 */
+/** 搜索源：两家都真接；CurseForge 要用户自己的 API Key（Rust 缺 Key 时报可读错误） */
 export type ModSourceKind = "modrinth" | "curseforge";
 
 /** 在线搜索筛选参数 */
@@ -67,12 +67,12 @@ export interface ModVersionEntry {
     date: string;
     sizeBytes: number;
     recommended: boolean;
-    /** 该构建主文件直链（在线添加时随版本一起钉住） */
+    /** 该构建主文件直链（在线添加时随版本一起钉住）；CurseForge 给空串，见 `PinnedVersion.url` */
     url: string;
     sha1?: string;
     /** 服务端下载文件名 */
     fileName: string;
-    /** 构建级 environment 换算出的两侧支持度：这一份构建要不要进服务端包 */
+    /** 构建级 environment 换算出的两侧支持度：这一份构建要不要进服务端包；CurseForge 无此声明 → 两边都缺省 */
     clientSide?: SideFlag;
     serverSide?: SideFlag;
 }

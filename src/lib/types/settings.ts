@@ -26,6 +26,13 @@ export interface AppSettings {
      * 版本号带预发布位的包收 Beta，纯版本号收正式版。在设置里选过一次就变成显式值。
      */
     updateChannel: UpdateChannel | null;
+    /**
+     * CurseForge Core API 的 `x-api-key`（第三方应用走官方表单申请，地址见 `CURSEFORGE_APPLY_FORM`；
+     * `console.curseforge.com` 是给游戏方的 Studios 控制台，不是这里）。
+     * `null`/缺省 = 没配：那一侧的搜索与版本列表整块不可用，「从网络添加模组」在切到 CurseForge
+     * 时给出去申请的出口，而不是让用户对着一条 403 猜原因。只存本机 settings.json，不进日志。
+     */
+    curseforgeApiKey?: string | null;
 }
 
 /**

@@ -1,5 +1,6 @@
 /** 系统集成：本地路径拼接与交由系统打开（文件管理器 / 默认程序 / 浏览器） */
 import { invoke } from "@tauri-apps/api/core";
+import { notify } from "@/lib/notify";
 import { isTauri } from "./client";
 import { getSettings } from "./settings";
 
@@ -51,6 +52,12 @@ export async function openExternal(url: string): Promise<void> {
         window.open(url, "_blank", "noopener");
         return;
     }
-    const { openUrl } = await import("@tauri-apps/plugin-opener");
-    await openUrl(url);
+    try {
+        const { openUrl } = await import("@tauri-apps/plugin-opener");
+        await openUrl(url);
+    } catch (e) {
+        // 调用点都是 `void openExternal(...)`，插件拒绝（权限、无关联程序）时界面上一片安静，
+        // 只能靠这条提示把真因暴露出来。这里不 rethrow：调用方没有 catch，抛出去仍是未处理拒绝。
+        notify(`打开链接失败 · ${e instanceof Error ? e.message : String(e)}`, "error");
+    }
 }

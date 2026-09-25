@@ -31,6 +31,7 @@ fn downloader_of(state: &S<'_>) -> Downloader {
     let s = lock(&state).settings.clone();
     Downloader::new(PathBuf::from(&s.cache_dir), s.concurrency as usize)
         .with_source(s.download_source.normalized())
+        .with_curseforge_key(s.curseforge_api_key.clone())
 }
 
 /* ---------------- 解析 / 选项 ---------------- */
@@ -578,21 +579,25 @@ pub async fn search_mods(
 #[tauri::command]
 pub async fn list_mod_versions(
     state: S<'_>,
+    source: ModSource,
     mod_id: String,
 ) -> Result<Vec<ModVersionEntry>, String> {
     let mc = last_parsed(&state)
         .map(|p| p.manifest.mc_version.clone())
         .unwrap_or_else(|| "1.20.1".into());
     downloader_of(&state)
-        .list_mod_versions(&mod_id, &mc)
+        .list_mod_versions(source, &mod_id, &mc)
         .await
         .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
-pub async fn list_mod_categories(state: S<'_>) -> Result<Vec<String>, String> {
+pub async fn list_mod_categories(
+    state: S<'_>,
+    source: ModSource,
+) -> Result<Vec<String>, String> {
     downloader_of(&state)
-        .list_mod_categories()
+        .list_mod_categories(source)
         .await
         .map_err(|e| e.to_string())
 }

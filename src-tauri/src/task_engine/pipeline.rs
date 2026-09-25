@@ -216,7 +216,8 @@ async fn run_pipeline(app: AppHandle, state: Arc<AppState>, id: String) {
         PathBuf::from(&settings.cache_dir),
         settings.concurrency as usize,
     )
-    .with_source(settings.download_source.normalized());
+    .with_source(settings.download_source.normalized())
+    .with_curseforge_key(settings.curseforge_api_key.clone());
     let source_path = parsed
         .manifest
         .source_path
@@ -236,8 +237,31 @@ async fn run_pipeline(app: AppHandle, state: Arc<AppState>, id: String) {
         // 在线添加的钉住行最先匹配：用户选哪个构建，构建时就下哪个（不再解析最新版）
         if let Some(p) = &row.pinned {
             let file_name = unique_mod_name(&mut used_names, &p.file_name, &row.id);
+            // CurseForge 的直链是带时效的签名 URL，建档时存不下来 → 构建期现取一条。
+            // 拿不到必须停下：空 URL 下载要么报错要么落一个废 jar 进服务端包
+            let url = if p.needs_curseforge_link() {
+                let file_id = p.file_id.clone().unwrap_or_default();
+                match dl.curseforge_download_url(&row.id, &file_id).await {
+                    Ok(u) => u,
+                    Err(e) => {
+                        let detail = e.to_string();
+                        fail(&app, &state, &id, TaskError {
+                            stage: PipelineStage::Downloader,
+                            title: "CurseForge 取链接失败".into(),
+                            detail,
+                            retryable: true,
+                            attempts: None,
+                            log_tail: None,
+                            exit_code: None,
+                        });
+                        return;
+                    }
+                }
+            } else {
+                p.url.clone()
+            };
             items.push(ItemSpec {
-                fetch: Fetch::Url(p.url.clone()),
+                fetch: Fetch::Url(url),
                 sha1: p.sha1.clone(),
                 dest: mods_dir.join(&file_name),
                 file_name,

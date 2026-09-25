@@ -200,7 +200,7 @@ function host(): HTMLDivElement {
     if (flightHost) return flightHost;
     flightHost = document.createElement("div");
     flightHost.dataset.flightLayer = "";
-    // 整层不吃事件，只有飞行卡片本身吃：点飞行中的卡片 = 追回
+    // 整层不吃事件，只有飞行卡片本身吃：点飞行中的卡片 = 追回（lead 之后关掉，见 gateAndLead）
     flightHost.style.cssText = "position:fixed;inset:0;pointer-events:none;z-index:80";
     document.body.appendChild(flightHost);
     return flightHost;
@@ -223,7 +223,10 @@ export function startFlight(el: HTMLElement, onLead?: () => void): Flight {
     const to = binCenter() ?? start;
     const dur = reduced ? 140 : FLIGHT.durationMs;
     const bow = reduced ? 0 : FLIGHT.bowPx;
-    const leadMs = reduced ? 0 : Math.max(0, Math.min(FLIGHT.leadMs, dur * 0.6));
+    /** 提前量对两条路同样成立：reduced 的 `dur` 只有 140ms，`dur * .6` 这个夹子会自动把它
+     *  收成 84ms，于是「腾位置」照样落在淡出的尾巴上（56ms 处），与真实飞行同一条规则。
+     *  以前这里写死 `reduced ? 0`，配合下面定时器的短路就等于「reduced 下 lead 永不发生」。 */
+    const leadMs = Math.max(0, Math.min(FLIGHT.leadMs, dur * 0.6));
 
     const cl = el.cloneNode(true) as HTMLElement;
     cl.removeAttribute("id");
@@ -277,7 +280,21 @@ export function startFlight(el: HTMLElement, onLead?: () => void): Flight {
     let finished = false;
     let recalled = false;
 
-    const leadTimer = reduced || !onLead ? 0 : window.setTimeout(() => onLead(), dur - leadMs);
+    /** lead 之后克隆必须彻底不吃事件：删除已经提交，这时「追回」不再是「取消这一下」，
+     *  而是「从回收站撤回一条已提交的删除」——那件事该由看得见的按钮做（弹窗里的「撤回」、或 Esc）。
+     *  留着它就是个隐形陷阱：落点正是桶心，`scale()` 连命中区一起缩，末段那张卡片盖住垃圾桶按钮
+     *  中央那条横带（z-80 高于按钮的 z-40），而 opacity 已经走到 0.18→0。点下去既不开弹窗、
+     *  又把刚删的任务要了回来。键盘那条路（下面的 Escape）不依赖 pointer-events，照旧可用。
+     *  reduced 路没有位移、压不到按钮，闸门照样落下：封口条件统一成「一提交就不可点」，不分两条路。 */
+    const gateAndLead = () => {
+        cl.style.pointerEvents = "none";
+        cl.style.cursor = "default";
+        onLead?.();
+    };
+    /* 调用方唯一提交删除的入口，两条动画路都必须走到：这里原先挂着 `reduced ||`，
+       于是「减弱动态效果」下 onLead 永不触发 → commitDelete/setGone 全没跑，
+       点删除只是原地淡出一下，卡片照旧留在列表，而垃圾桶已经亮起了乐观占位。 */
+    const leadTimer = !onLead ? 0 : window.setTimeout(gateAndLead, dur - leadMs);
 
     const onKey = (e: KeyboardEvent) => {
         if (e.key === "Escape") recall();

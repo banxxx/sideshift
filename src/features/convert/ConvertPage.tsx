@@ -290,13 +290,14 @@ export function ConvertPage() {
     /** 后端预估（estimate_download，与构建同源：缓存扣减 + HEAD 实测），到位前用 localEstimate */
     const [remoteEstimate, setRemoteEstimate] = useState<DownloadEstimate | null>(null);
 
-    /** 预估指纹：影响下载分类/大小的字段全列入，任一变化即重新防抖请求 */
+    /** 预估指纹：影响下载分类/大小的字段全列入，任一变化即重新防抖请求。
+     *  钉住行既看 url（Modrinth 的永久链）也看 fileId（CurseForge 的链存档里没有，换构建只有 id 会变） */
     const estimateKey = useMemo(() => {
         const rows = activeMods
             .filter((m) => m.disposition !== "remove")
             .map(
                 (m) =>
-                    `${m.id}|${m.disposition}|${m.sizeBytes ?? 0}|${m.needsDownload ? 1 : 0}|${m.localPath ?? ""}|${m.pinned?.url ?? ""}`
+                    `${m.id}|${m.disposition}|${m.sizeBytes ?? 0}|${m.needsDownload ? 1 : 0}|${m.localPath ?? ""}|${m.pinned?.url ?? ""}|${m.pinned?.fileId ?? ""}`
             )
             .join(";");
         return `${rows}#${options?.mcVersion}#${options?.loaderVersion}#${(options?.keepDirs ?? []).join(",")}`;
@@ -459,7 +460,15 @@ export function ConvertPage() {
         const sides = {
             clientSide: buildSides ? version.clientSide : mod.clientSide,
             serverSide: buildSides ? version.serverSide : mod.serverSide,
-            envSource: (buildSides ? "modrinthHash" : "modrinthProject") as EnvSource,
+            // 两侧支持度只有 Modrinth 声明；CurseForge 一家不给，依据就写「无依据」，
+            // 不能挂一枚「平台项目」徽章说我们查过（等 jar 到手才有离线取证那一层）
+            envSource: (
+                mod.source === "curseforge"
+                    ? "unknown"
+                    : buildSides
+                      ? "modrinthHash"
+                      : "modrinthProject"
+            ) as EnvSource,
         };
         // 钉住用户此刻所选构建：构建时按此下载，版本与所选严格一致
         const row: PlanMod = {
@@ -478,6 +487,9 @@ export function ConvertPage() {
                 url: version.url,
                 sha1: version.sha1,
                 fileName: version.fileName,
+                // CurseForge 的 url 是空串（时效签名链），构建时靠这两样现取
+                source: mod.source,
+                fileId: mod.source === "curseforge" ? version.id : undefined,
             },
         };
         const replaced = extras.find((m) => m.id === mod.id);

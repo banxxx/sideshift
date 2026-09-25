@@ -5,13 +5,13 @@
  * 行与行之间用 1px $stroke-soft 分隔（divide-y），行标尺 padding[14,20]。
  *  - 转换选项：服务端输出目录 / 剔除客户端专属资源
  *  - 存储与缓存：工作缓存目录 / 下载缓存 / 无用文件（占用数字来自后端真实扫描）
- *  - 网络：下载源 / 构建后自检 / 联网反查端信息 / 并发下载数
+ *  - 网络：下载源 / CurseForge API Key / 构建后自检 / 联网反查端信息 / 并发下载数
  *  - 外观与关于：主题（三态分段）/ 更新渠道（正式版·Beta 两档，切 Beta 要确认）/ 版本（检查更新）
  * 读写走 @/lib/api 门面；主题走 @/lib/theme 单一真源（侧栏按钮同步）。
  * 设置是「改一处即持久化」，所以写盘失败必须外显（否则界面显示已生效、重启又回退），
  * 失败后从后端重读一次，让界面与真正常量的那份一致。
  */
-import { FlaskConical, Folder, Monitor, Moon, RefreshCw, Sun, Trash2 } from "lucide-react";
+import { ExternalLink, FlaskConical, Folder, Monitor, Moon, RefreshCw, Sun, Trash2 } from "lucide-react";
 import { useCallback, useEffect, useState, type ReactNode } from "react";
 import { motion } from "motion/react";
 import * as api from "@/lib/api";
@@ -109,6 +109,11 @@ export function SettingsPage() {
     const [update, setUpdate] = useState<UpdateState>("idle");
     /** 切到 Beta 的二次确认：改动的是"以后会装上什么包"，点一下就换太轻率 */
     const [confirmBeta, setConfirmBeta] = useState(false);
+    /**
+     * CurseForge Key 的本地草稿：设置是「改一处即持久化」的，但 Key 是手打的字符串，
+     * 逐键写盘会把用户的输入中途存成半截。失焦（或回车）才落一次盘。
+     */
+    const [cfKey, setCfKey] = useState("");
 
     useEffect(() => {
         void api
@@ -165,6 +170,21 @@ export function SettingsPage() {
             await patch(key === "cacheDir" ? { cacheDir: dir } : { outputDir: dir });
         } catch (e) {
             notify(`打开目录选择器失败：${errOf(e)}`, "error");
+        }
+    };
+
+    // Key 的显示值跟着后端那一份走：保存失败时 patch 会重读设置，草稿也要跟着回位，
+    // 否则输入框留着没生效的半截串，界面与常量又不一致了
+    useEffect(() => {
+        setCfKey(settings?.curseforgeApiKey ?? "");
+    }, [settings?.curseforgeApiKey]);
+
+    /** 失焦/回车时落盘：与已存的那份一样就什么都不做（不写盘、也不报「已保存」） */
+    const commitCfKey = async () => {
+        const v = cfKey.trim();
+        if (v === (settings?.curseforgeApiKey ?? "").trim()) return;
+        if (await patch({ curseforgeApiKey: v || null })) {
+            notify(v ? "已保存 CurseForge API Key" : "已清除 CurseForge API Key", "success");
         }
     };
 
@@ -355,6 +375,36 @@ export function SettingsPage() {
                         />
                     </SettingRow>
                     <SettingRow
+                        label="CurseForge API Key"
+                        desc={
+                            settings.curseforgeApiKey
+                                ? "已配置：网络添加里的 CurseForge 搜索与构建列表可用"
+                                : "未配置：CurseForge API Key，点「获取」填表申请"
+                        }
+                    >
+                        <TextInput
+                            plain
+                            value={cfKey}
+                            placeholder="粘贴 API Key"
+                            spellCheck={false}
+                            autoComplete="off"
+                            className="w-[220px]"
+                            onChange={(e) => setCfKey(e.target.value)}
+                            onBlur={() => void commitCfKey()}
+                            onKeyDown={(e) => {
+                                // 回车算「输完了」：借用失焦走同一条落盘路径，不用另加一个保存按钮
+                                if (e.key === "Enter") (e.target as HTMLInputElement).blur();
+                            }}
+                        />
+                        <Btn
+                            size="sm"
+                            icon={ExternalLink}
+                            onClick={() => void api.openExternal(api.CURSEFORGE_APPLY_FORM)}
+                        >
+                            获取
+                        </Btn>
+                    </SettingRow>
+                    <SettingRow
                         label="构建后自检"
                         desc="打包完成后离线对账产物：模组是否齐、jar 是否完整、依赖是否被误剔"
                     >
@@ -470,7 +520,7 @@ function SettingsSkeleton() {
     const groups: Array<[string, number]> = [
         ["转换选项", 2],
         ["存储与缓存", 3],
-        ["网络", 4],
+        ["网络", 5],
         ["外观与关于", 3],
     ];
     return (

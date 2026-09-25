@@ -87,13 +87,11 @@ export function entryStepMs(count: number): number {
     return Math.min(ENTRY.stepMaxMs, Math.max(ENTRY.stepMinMs, ENTRY.waveMs / (count - 1)));
 }
 
-/** 演完整趟：曲线本身 + 错峰满长 + 一点余量。调用方拿它排「什么时候把 layout 投影打开」 */
-export const ENTRY_RUN_MS = Math.round(CURVE.total + ENTRY.waveMs + 120);
-
 /**
  * 让一张卡片演一次「升起 + 弹同一下」。`fill: "backwards"` 是必需的：没有它，排在错峰队列后面的卡片
  * 会在自己那一段开始前沿着最终位置亮着，到点才跳回起点。
  * 返回撤销函数：连续切页签时把上一批掐掉，免得两条曲线在同一节点上打架。
+ * 掐掉就是「落在终点」——曲线终点正是 translateY(0)/opacity 1，等于卡片本来所在的位置，不会跳。
  */
 export function playEntry(el: HTMLElement, delayMs: number): () => void {
     const reduced = prefersReducedMotion();

@@ -211,14 +211,32 @@ pub struct ActivityInfo {
     /// 第几次尝试（1 起）；>1 说明前面失败过，前端要标出来
     pub attempt: u32,
 }
-/// 用户在添加那一刻选定的 Modrinth 构建（与版本行一一对应，保证方案显示版本 = 实际下载版本）
+/// 用户在添加那一刻选定的构建（与版本行一一对应，保证方案显示版本 = 实际下载版本）
 #[derive(Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct PinnedVersion {
+    /// Modrinth：CDN 永久直链，存档下来构建时照打。
+    /// CurseForge：**空串** —— 它的文件链是带时效的签名 URL，落档等于埋一颗到点失效的雷，
+    /// 所以构建时按 `mod_id + file_id` 现取一条新鲜的（见 `downloader::curseforge_download_url`）
     pub url: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sha1: Option<String>,
     pub file_name: String,
+    /// 来源平台。老存档无此字段 → None = Modrinth 那条老路（不取链、直接用 url）
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source: Option<ModSource>,
+    /// CurseForge 的 file id（`source = Curseforge` 时有值；与方案行 id = mod id 配对定位文件）
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub file_id: Option<String>,
+}
+
+impl PinnedVersion {
+    /// 这一钉是不是「构建时还得向 CurseForge 要一次链接」：三个条件缺一条都不去要
+    pub fn needs_curseforge_link(&self) -> bool {
+        self.url.is_empty()
+            && self.source == Some(ModSource::Curseforge)
+            && self.file_id.is_some()
+    }
 }
 
 /// 下载量预估（core::estimate，与构建取件分类同源）：转换摘要卡「预计下载」数据源
@@ -614,6 +632,11 @@ pub struct AppSettings {
     /// 用户在设置页选过一次之后就是显式值，从此不再看自己的版本号（这正是他要的手动切换）。
     #[serde(default)]
     pub update_channel: Option<UpdateChannel>,
+    /// CurseForge Core API 的 `x-api-key`。**None / 空串 = 没配**：那一侧的搜索与构建列表整块不可用，
+    /// 界面据此给「去获取 Key」的出口，而不是让用户对着一条 403 猜原因。
+    /// 这是用户自己的凭据：只写在 settings.json（他本机数据根），不进日志、不进仓库。
+    #[serde(default)]
+    pub curseforge_api_key: Option<String>,
 }
 
 /// 更新渠道（Settings · 外观与关于）：正式版 / Beta，对应 GitHub release 的 prerelease 标志
@@ -728,6 +751,7 @@ impl Default for AppSettings {
             concurrency: 6,
             auto_classify_online: true,
             update_channel: None,
+            curseforge_api_key: None,
         }
     }
 }
@@ -749,6 +773,7 @@ impl AppSettings {
             concurrency: 6,
             auto_classify_online: true,
             update_channel: None,
+            curseforge_api_key: None,
         }
     }
 
@@ -760,6 +785,12 @@ impl AppSettings {
         self.download_source = self.download_source.normalized();
         // 只在"选过"的时候归位；None 是"跟随当前构建"，不能被当成无效值顶成正式版
         self.update_channel = self.update_channel.map(UpdateChannel::normalized);
+        // 凭据字段：粘贴时常带首尾空白，带着空格发出去的 403 用户读不懂，
+        // 所以在这里一次归位；清空的串记成 None，让「没配」与「配了个空」是同一个状态
+        self.curseforge_api_key = self
+            .curseforge_api_key
+            .map(|k| k.trim().to_string())
+            .filter(|k| !k.is_empty());
         self
     }
 }
@@ -806,6 +837,36 @@ mod tests {
             "downloadSource":"official","concurrency":6,"updateChannel":"ntfs"}"#;
         let s: AppSettings = serde_json::from_str(broken).expect("无效渠道值不该拖垮整份设置");
         assert_eq!(s.normalized().update_channel, Some(UpdateChannel::Stable));
+    }
+
+    /// 老设置里没有这个字段：必须能加载（缺 Key = CurseForge 侧整块不可用，不是错误）
+    #[test]
+    fn settings_without_curseforge_key_still_load() {
+        let legacy = r#"{"outputDir":"o","cacheDir":"c","stripClientOnly":true,"verifyAfterBuild":false,
+            "downloadSource":"official","concurrency":6,"autoClassifyOnline":true}"#;
+        let s: AppSettings = serde_json::from_str(legacy).expect("旧设置应能加载");
+        assert_eq!(s.curseforge_api_key, None);
+    }
+
+    /// 粘贴进来的 Key 常带空白：带着空格发出去只会收到一条读不懂的 403，所以读写两端都归位；
+    /// 全空串等于「没配」，界面才不会再显示一个空输入框当成已配置
+    #[test]
+    fn curseforge_key_trims_and_blank_becomes_none() {
+        let s = AppSettings {
+            curseforge_api_key: Some("  $23-abc:def  ".into()),
+            ..Default::default()
+        }
+        .normalized();
+        assert_eq!(s.curseforge_api_key.as_deref(), Some("$23-abc:def"));
+
+        for blank in ["", "   ", "\t\n"] {
+            let s = AppSettings {
+                curseforge_api_key: Some(blank.into()),
+                ..Default::default()
+            }
+            .normalized();
+            assert_eq!(s.curseforge_api_key, None, "{blank:?} 应归位为未配置");
+        }
     }
 
     /// 一次性迁移只能命中「我们自己写进去的旧默认」：用户挑过/手打的路径差一个字符都不能动，

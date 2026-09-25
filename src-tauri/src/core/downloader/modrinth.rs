@@ -127,10 +127,10 @@ impl Downloader {
     }
 
     pub async fn search_mods(&self, q: &ModSearchQuery) -> Result<ModSearchPage, DownloadError> {
+        // 两家平台唯一的分发点在这里（命令层不再各判一次）：CurseForge 要用户自己的 API Key，
+        // 缺 Key / Key 被拒都由那一侧报可读的 `Refused`
         if q.source == ModSource::Curseforge {
-            return Err(DownloadError::NotFound(
-                "CurseForge 搜索需要 API Key，一期请使用 Modrinth".into(),
-            ));
+            return self.search_curseforge(q).await;
         }
         let page_size = 20u32;
         let offset = (q.page.saturating_sub(1)) * page_size;
@@ -191,12 +191,16 @@ impl Downloader {
         })
     }
 
-    /// 某模组的可用构建（按请求 MC 版本兼容性排序）
+    /// 某模组的可用构建（按请求 MC 版本兼容性排序）。`source` 决定查哪家
     pub async fn list_mod_versions(
         &self,
+        source: ModSource,
         mod_id: &str,
         mc_version: &str,
     ) -> Result<Vec<ModVersionEntry>, DownloadError> {
+        if source == ModSource::Curseforge {
+            return self.list_curseforge_versions(mod_id, mc_version).await;
+        }
         let url = format!("{MODRINTH_API}/project/{mod_id}/version");
         let v = self.get_json(&url).await?;
         let mut entries = Vec::new();
@@ -264,8 +268,11 @@ impl Downloader {
         Ok(entries)
     }
 
-    /// Modrinth 官方类别标签（GET /tag/category，取模组向条目去重排序），供「类别」下拉
-    pub async fn list_mod_categories(&self) -> Result<Vec<String>, DownloadError> {
+    /// 类别标签（Modrinth 走 GET /tag/category，CF 走免 Key 的 /categories），供「类别」下拉
+    pub async fn list_mod_categories(&self, source: ModSource) -> Result<Vec<String>, DownloadError> {
+        if source == ModSource::Curseforge {
+            return self.list_curseforge_categories().await;
+        }
         let v = self.get_json(&format!("{MODRINTH_API}/tag/category")).await?;
         let mut out: Vec<String> = Vec::new();
         if let Some(arr) = v.as_array() {

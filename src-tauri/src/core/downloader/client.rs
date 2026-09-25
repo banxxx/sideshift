@@ -54,6 +54,9 @@ pub struct Downloader {
     transfer: Option<Arc<OnTransfer>>,
     /// 下载源档位：只影响「哪些 URL 先试镜像」，不改校验锚点（见 `source` 模块头）
     source: DownloadSource,
+    /// CurseForge 的 `x-api-key`（来自设置）。`None` = 用户没配：那一侧的查询当场报「去配置」，
+    /// 不发请求。它只是被搬运到请求头里，任何日志与错误文案都不许带上它的值
+    cf_key: Option<String>,
 }
 
 impl Downloader {
@@ -69,6 +72,7 @@ impl Downloader {
             concurrency: concurrency.clamp(1, 16),
             transfer: None,
             source: DownloadSource::Official,
+            cf_key: None,
         }
     }
 
@@ -81,6 +85,13 @@ impl Downloader {
     /// 挂上设置里的下载源：未调用即官方源（保持默认行为）
     pub fn with_source(mut self, source: DownloadSource) -> Self {
         self.source = source;
+        self
+    }
+
+    /// 挂上设置里的 CurseForge Key：空串按「没配」处理（与 `AppSettings::normalized` 同一口径，
+    /// 两处都判一次，免得有人绕过设置直接构造）
+    pub fn with_curseforge_key(mut self, key: Option<String>) -> Self {
+        self.cf_key = key.map(|k| k.trim().to_string()).filter(|k| !k.is_empty());
         self
     }
 
@@ -555,6 +566,51 @@ impl Downloader {
                 status: e.status().map(|s| s.as_u16()).unwrap_or(0),
             })?;
         let status = resp.status();
+        if !status.is_success() {
+            return Err(DownloadError::Http {
+                url: url.to_string(),
+                status: status.as_u16(),
+            });
+        }
+        let bytes = resp
+            .bytes()
+            .await
+            .map_err(|e| DownloadError::Http {
+                url: url.to_string(),
+                status: e.status().map(|s| s.as_u16()).unwrap_or(0),
+            })?;
+        Ok(serde_json::from_slice(&bytes)?)
+    }
+
+    /// CurseForge 专用 JSON GET：挂 `x-api-key` 头，**不走镜像候选链**（`source` 模块表里 CF 没有镜像）。
+    /// 缺 Key 与 Key 被拒都归 `Refused`：这两句是要原样显示给用户看的，前者要给「去配置」出口、
+    /// 后者要说清是 Key 的问题而不是网络的问题。错误文案里绝不出现 Key 本身
+    pub(crate) async fn cf_get_json(&self, url: &str) -> Result<Value, DownloadError> {
+        let Some(key) = self.cf_key.as_deref() else {
+            return Err(DownloadError::Refused(
+                "还没有配置 CurseForge API Key：在「设置 · 网络 · CurseForge API Key」填一把，\
+                 或在 CurseForge 官方表单免费申请"
+                    .into(),
+            ));
+        };
+        let resp = self
+            .client
+            .get(url)
+            .header("x-api-key", key)
+            .send()
+            .await
+            .map_err(|e| DownloadError::Http {
+                url: url.to_string(),
+                status: e.status().map(|s| s.as_u16()).unwrap_or(0),
+            })?;
+        let status = resp.status();
+        if status == reqwest::StatusCode::UNAUTHORIZED || status == reqwest::StatusCode::FORBIDDEN
+        {
+            return Err(DownloadError::Refused(format!(
+                "CurseForge 拒绝了这次请求（HTTP {}）：API Key 无效、过期或没有该接口权限",
+                status.as_u16()
+            )));
+        }
         if !status.is_success() {
             return Err(DownloadError::Http {
                 url: url.to_string(),

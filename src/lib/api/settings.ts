@@ -40,6 +40,16 @@ export const AUTO_UPDATE_CHANNEL: UpdateChannel = APP_VERSION.includes("-") ? "b
 /** 项目仓库地址（设置页 GitHub 按钮） */
 export const REPO_URL = "https://github.com/banxxx/sideshift";
 
+/**
+ * CurseForge Core API Key 的申请入口（第三方应用专用，免费，人工审核后把 Key 发到邮箱）。
+ * 官方口径：console.curseforge.com 是「CurseForge for Studios」游戏方控制台，
+ * 第三方模组服务走这张表单（docs.curseforge.com/rest-api 与帮助中心
+ * 「About the CurseForge API and How to Apply for a Key」同一条链接）。
+ * 设置页的「申请 Key」与「从网络添加模组」里的缺 Key 提示共用这一条地址。
+ */
+export const CURSEFORGE_APPLY_FORM =
+    "https://forms.monday.com/forms/dce5ccb7afda9a1c21dab1a1aa1d84eb?r=use1";
+
 /** 读取设置（Rust: get_settings；mock 走 localStorage） */
 export async function getSettings(): Promise<AppSettings> {
     if (!isTauri) return mock.mockLoadSettings();

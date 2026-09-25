@@ -1,12 +1,13 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "Capability for the main window",
+  "description": "Capability for the main window. opener 两条必须配对：allow-open-url 只放开命令，allow-default-urls 才给出 URL 白名单（mailto/tel/http/https）；缺后者 openUrl 一律 ForbiddenUrl",
   "windows": ["main"],
   "permissions": [
     "core:default",
     "dialog:default",
     "opener:allow-open-url",
+    "opener:allow-default-urls",
     "fs:default",
     "fs:allow-read-file",
     "fs:allow-write-file",

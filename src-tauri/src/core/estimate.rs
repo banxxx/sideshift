@@ -66,8 +66,16 @@ pub async fn estimate(
                 row.size_bytes,
             );
             if !dl.is_cached(&spec) {
-                out.download_bytes +=
-                    true_size(dl, row.size_bytes, &p.url, &mut out.complete).await;
+                // CurseForge 的直链带时效，存档里 url 恒空 → 预估阶段没有可 HEAD 的地址：
+                // 只用行上的实测大小，拿不到才记不完整
+                out.download_bytes += if p.url.is_empty() {
+                    if row.size_bytes == 0 {
+                        out.complete = false;
+                    }
+                    row.size_bytes
+                } else {
+                    true_size(dl, row.size_bytes, &p.url, &mut out.complete).await
+                };
             }
             continue;
         }

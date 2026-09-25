@@ -20,6 +20,11 @@ pub enum DownloadError {
     },
     #[error("未找到可用版本：{0}")]
     NotFound(String),
+    /// 平台在门口就把请求拒了（缺 API Key、Key 无效）。这类话必须原样给用户看，
+    /// 不能套进 `Http` 那句「网络请求失败：{url}（HTTP 403）」——那是给日志看的，
+    /// 用户读不出「403」其实等于「你还没填 Key」
+    #[error("{0}")]
+    Refused(String),
 }
 
 /// 文件来源：远程 URL、本地 zip 包内条目（裸 zip 整合包免网络直提）、或本地单文件

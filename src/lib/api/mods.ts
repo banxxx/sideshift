@@ -3,6 +3,7 @@ import type {
     AddedModSide,
     ModSearchPage,
     ModSearchQuery,
+    ModSourceKind,
     ModVersionEntry,
 } from "@/lib/types";
 import * as mock from "@/lib/mock";
@@ -22,16 +23,23 @@ export async function searchMods(query: ModSearchQuery): Promise<ModSearchPage> 
     return invokeOrMock("search_mods", { query }, () => mock.mockSearch(query));
 }
 
-/** 某模组的可用构建版本（Rust: list_mod_versions(modId, mcVersion)） */
+/** 某模组的可用构建版本（Rust: list_mod_versions(source, modId)）：id 在两家不通用，必须带来源 */
 export async function listModVersions(
+    source: ModSourceKind,
     modId: string
 ): Promise<ModVersionEntry[]> {
     if (!isTauri) return mock.mockModVersions;
-    return invokeOrMock("list_mod_versions", { modId }, () => mock.mockModVersions);
+    return invokeOrMock(
+        "list_mod_versions",
+        { source, modId },
+        () => mock.mockModVersions
+    );
 }
 
-/** Modrinth 官方模组类别标签（Rust: list_mod_categories，供网络添加「类别」下拉） */
-export async function listModCategories(): Promise<string[]> {
+/** 模组类别标签（Rust: list_mod_categories(source)）：两家的词表各自一套 */
+export async function listModCategories(source: ModSourceKind): Promise<string[]> {
     if (!isTauri) return mock.mockModCategories;
-    return invokeOrMock("list_mod_categories", {}, () => mock.mockModCategories);
+    return invokeOrMock("list_mod_categories", { source }, () =>
+        mock.mockModCategories
+    );
 }
