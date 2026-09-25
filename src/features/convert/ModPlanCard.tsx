@@ -9,7 +9,7 @@ import { AlertTriangle, File, Globe } from "lucide-react";
 import { useRef } from "react";
 import { AnimatePresence, motion } from "motion/react";
 import type { ModDisposition, PlanMod } from "@/lib/types";
-import { Btn, LinkBtn, Panel, PanelHead, SegTabs } from "@/components/ui";
+import { Btn, Collapse, LinkBtn, Panel, PanelHead, SegTabs } from "@/components/ui";
 import { cn } from "@/lib/utils";
 import { PLAN_LAND, PLAN_LAYOUT } from "@/lib/springs";
 import { badgeFor, PlanModRow } from "./PlanModRow";
@@ -214,44 +214,38 @@ export function ModPlanCard({
                     </motion.div>
                 </AnimatePresence>
 
-                {/* 反向依赖警告：保留/生效新增行依赖了被剔除或被停用的模组，一键恢复即消警 */}
-                <AnimatePresence initial={false}>
-                    {depWarnings.length > 0 && (
-                        <motion.div
-                            key="dep-warn"
-                            initial={{ opacity: 0, y: -8 }}
-                            animate={{ opacity: 1, y: 0 }}
-                            exit={{ opacity: 0, y: -8 }}
-                            transition={{ duration: 0.18, ease: "easeOut" }}
-                            className="flex shrink-0 flex-col gap-1 rounded-lg bg-gold-dim px-3 py-2"
-                        >
-                            {depWarnings.slice(0, 2).map(({ missing, hosts }) => (
-                                <div key={missing.id} className="flex items-center gap-2">
-                                    <AlertTriangle className="size-3.5 shrink-0 text-gold" />
-                                    <span className="min-w-0 flex-1 truncate text-[11px] leading-[16px] text-gold">
-                                        {hosts
-                                            .slice(0, 2)
-                                            .map((h) => h.name)
-                                            .join("、")}
-                                        {hosts.length > 2 ? ` 等 ${hosts.length} 项` : ""} 依赖被
-                                        {missing.disabled ? "停用" : "剔除"}的 {missing.name}
-                                    </span>
-                                    {!readOnly && (
-                                        <LinkBtn size="sm" onClick={() => onRestoreDep?.(missing)}>
-                                            恢复
-                                        </LinkBtn>
-                                    )}
-                                </div>
-                            ))}
-                            {depWarnings.length > 2 && (
-                                <span className="pl-[22px] text-[10px] leading-[14px] text-gold">
-                                    … 另有 {depWarnings.length - 2} 组依赖冲突
-                                    {readOnly ? "（回看只记当时结论，不在此处理）" : "，可逐项恢复处理"}
+                {/* 反向依赖警告：保留/生效新增行依赖了被剔除或被停用的模组，一键恢复即消警。
+                    这块以前只演了 opacity+y、没演高度 ⇒ 出现/消警时下面那排与卡底出口整块当场跳一格。
+                    现在交公共折叠件（父容器是 flex 列 gap-2.5=10）；金底与内边距留在壳内的盒子上，
+                    壳必须是空壳，否则收不到 0。 */}
+                <Collapse when={depWarnings.length > 0} gap={10}>
+                    <div className="flex shrink-0 flex-col gap-1 rounded-lg bg-gold-dim px-3 py-2">
+                        {depWarnings.slice(0, 2).map(({ missing, hosts }) => (
+                            <div key={missing.id} className="flex items-center gap-2">
+                                <AlertTriangle className="size-3.5 shrink-0 text-gold" />
+                                <span className="min-w-0 flex-1 truncate text-[11px] leading-[16px] text-gold">
+                                    {hosts
+                                        .slice(0, 2)
+                                        .map((h) => h.name)
+                                        .join("、")}
+                                    {hosts.length > 2 ? ` 等 ${hosts.length} 项` : ""} 依赖被
+                                    {missing.disabled ? "停用" : "剔除"}的 {missing.name}
                                 </span>
-                            )}
-                        </motion.div>
-                    )}
-                </AnimatePresence>
+                                {!readOnly && (
+                                    <LinkBtn size="sm" onClick={() => onRestoreDep?.(missing)}>
+                                        恢复
+                                    </LinkBtn>
+                                )}
+                            </div>
+                        ))}
+                        {depWarnings.length > 2 && (
+                            <span className="pl-[22px] text-[10px] leading-[14px] text-gold">
+                                … 另有 {depWarnings.length - 2} 组依赖冲突
+                                {readOnly ? "（回看只记当时结论，不在此处理）" : "，可逐项恢复处理"}
+                            </span>
+                        )}
+                    </div>
+                </Collapse>
 
                 {/* 出口区（行区内、钉在卡底）：剔除/保留态取链接自然高（~18），
                     新增态=查看链接居左、两枚 h32 添加按钮居右；上下不虚占固定高 */}

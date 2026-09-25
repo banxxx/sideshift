@@ -9,7 +9,8 @@
  * 所有页面一律用本目录组件拼装，避免各页手写 class 导致跨屏漂移。
  *
  * 分文件按职责走：Panel 骨架 / Chip 色调芯片 / Button 按钮 / Field 控件 /
- * SearchSelect 下拉 / Tabs 分段 / Row 行排版 / Meta 计数与元数据 / Modal 弹窗壳 / Swap 同位换批 / Tip 悬停气泡。
+ * SearchSelect 下拉 / Tabs 分段 / Row 行排版 / Meta 计数与元数据 / Modal 弹窗壳 / Swap 同位换批 /
+ * Collapse 整块条件挂卸 / Tip 悬停气泡。
  * 页面统一从 "@/components/ui" 引，不必知道某个件在哪个文件里。
  *
  * 提示口径：全应用不出现系统原生 title 气泡——Btn/IconBtn/ListRow 已在内部把 title
@@ -30,6 +31,7 @@ export { InlineRow, SectionTitle, SettingRow, NoteRow, ListRow } from "./Row";
 export { Bar, CountRow, ChangeRow, InfoRow, MetaCell, MiniMeta } from "./Meta";
 export { ModalShell } from "./Modal";
 export { Swap } from "./Swap";
+export { Collapse } from "./Collapse";
 export { Tip, TIP_TRIGGER } from "./Tip";
 export { HOVER_FILL, HOVER_PRESS } from "./HoverFill";
 export { Logo } from "./Logo";

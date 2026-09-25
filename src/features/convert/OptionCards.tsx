@@ -16,6 +16,7 @@ import type {
 import { RISE } from "@/lib/springs";
 import {
     Btn,
+    Collapse,
     Divider,
     InlineRow,
     NoteRow,
@@ -23,6 +24,7 @@ import {
     PanelHead,
     SearchSelect,
     Stepper,
+    Swap,
     TextInput,
     Tip,
     TIP_TRIGGER,
@@ -146,7 +148,7 @@ export function RuntimeEnvCard({
                     className="flex-1"
                     // 标签说"本机 Java"而不是"Java 版本"：这一档列的是这台机器上装了的那几枚，
                     // 包要什么那一档是需求线，写在下面那行提示里
-                    label="本机 Java（跑安装器用）"
+                    label="本地 Java 环境"
                     value={javaValue}
                     options={
                         javaLive
@@ -170,7 +172,9 @@ export function RuntimeEnvCard({
                     onChange={(v) => patch({ generateScripts: v })}
                 />
             </InlineRow>
-            {needsInstaller && (
+            {/* 两格都走 Collapse：关了开关时提示行是当场卸载的，卡高硬跳、下面五张卡同帧重排
+                （Panel 是 gap=14 的 flex 列 ⇒ gap={14}，理由见 @/components/ui/Collapse） */}
+            <Collapse when={needsInstaller} gap={14}>
                 <InlineRow label="本机安装 Loader（产物上传即开服）">
                     <Toggle
                         checked={installLoader}
@@ -178,8 +182,8 @@ export function RuntimeEnvCard({
                         onChange={(v) => patch({ installLoaderLocally: v })}
                     />
                 </InlineRow>
-            )}
-            {javaLive && (
+            </Collapse>
+            <Collapse when={javaLive} gap={14}>
                 <NoteRow
                     icon={javaProbe?.status === "fail" ? AlertTriangle : Info}
                     tone={javaProbe?.status === "fail" ? "danger" : undefined}
@@ -217,7 +221,7 @@ export function RuntimeEnvCard({
                         "正在检测本机 Java…"
                     )}
                 </NoteRow>
-            )}
+            </Collapse>
         </Panel>
     );
 }
@@ -256,62 +260,66 @@ export function KeepDirsCard({
                     )
                 }
             />
-            {keepDirs.length === 0 ? (
-                <p className="w-full py-3 text-center text-[11px] text-text-3">
-                    {readOnly
-                        ? "该任务未保留任何包内目录"
-                        : packDirs.length === 0
-                          ? parsed
-                                ? "包内未检测到可保留的目录（mods 之外没有资源文件）"
-                                : "源包已不在原位置 · 该任务未保留任何包内目录"
-                          : "尚未选择目录 · 点击上方「添加目录」从包内勾选"}
-                </p>
-            ) : (
-                <div className="flex w-full flex-col gap-1">
-                    <AnimatePresence initial={false} mode="popLayout">
-                        {keepDirs.map((p) => {
-                            const dir = findDirNode(packDirs, p);
-                            return (
-                                <motion.div
-                                    key={p}
-                                    layout
-                                    initial={{ opacity: 0, y: -6 }}
-                                    animate={{ opacity: 1, y: 0 }}
-                                    exit={{ opacity: 0, y: -6 }}
-                                    transition={RISE}
-                                    className={`flex min-w-0 items-center gap-2.5 rounded-lg px-1.5 py-1 hover:bg-surface-2 ${HOVER_FILL}`}
-                                >
-                                    <Folder className="size-3.5 shrink-0 text-accent" />
-                                    <span className="min-w-0 flex-1 truncate font-mono text-[12px] leading-[18px] font-medium text-text-1">
-                                        {p}/
-                                    </span>
-                                    {dir && (
-                                        <span className="shrink-0 font-mono text-[11px] leading-[16px] tabular-nums text-emerald">
-                                            {dir.fileCount} 文件
+            {/* 空态↔清单是同位换批（不是长出来），走 Swap：旧层当场让位、新层立刻占位，
+                两层的进出场节拍由 Swap 自己带 */}
+            <Swap swapKey={keepDirs.length === 0 ? "empty" : "list"}>
+                {keepDirs.length === 0 ? (
+                    <p className="w-full py-3 text-center text-[11px] text-text-3">
+                        {readOnly
+                            ? "该任务未保留任何包内目录"
+                            : packDirs.length === 0
+                              ? parsed
+                                    ? "包内未检测到可保留的目录（mods 之外没有资源文件）"
+                                    : "源包已不在原位置 · 该任务未保留任何包内目录"
+                              : "尚未选择目录 · 点击上方「添加目录」从包内勾选"}
+                    </p>
+                ) : (
+                    <div className="flex w-full flex-col gap-1">
+                        <AnimatePresence initial={false} mode="popLayout">
+                            {keepDirs.map((p) => {
+                                const dir = findDirNode(packDirs, p);
+                                return (
+                                    <motion.div
+                                        key={p}
+                                        layout
+                                        initial={{ opacity: 0, y: -6 }}
+                                        animate={{ opacity: 1, y: 0 }}
+                                        exit={{ opacity: 0, y: -6 }}
+                                        transition={RISE}
+                                        className={`flex min-w-0 items-center gap-2.5 rounded-lg px-1.5 py-1 hover:bg-surface-2 ${HOVER_FILL}`}
+                                    >
+                                        <Folder className="size-3.5 shrink-0 text-accent" />
+                                        <span className="min-w-0 flex-1 truncate font-mono text-[12px] leading-[18px] font-medium text-text-1">
+                                            {p}/
                                         </span>
-                                    )}
-                                    {!readOnly && (
-                                        <button
-                                            onClick={() => onRemove?.(p)}
-                                            aria-label="移除"
-                                            className={cn(
-                                                TIP_TRIGGER,
-                                                "size-6 rounded-md text-text-3",
-                                                "flex shrink-0 items-center justify-center",
-                                                "hover:bg-redstone-dim hover:text-redstone",
-                                                HOVER_FILL
-                                            )}
-                                        >
-                                            <X className="size-3" />
-                                            <Tip label="移除" />
-                                        </button>
-                                    )}
-                                </motion.div>
-                            );
-                        })}
-                    </AnimatePresence>
-                </div>
-            )}
+                                        {dir && (
+                                            <span className="shrink-0 font-mono text-[11px] leading-[16px] tabular-nums text-emerald">
+                                                {dir.fileCount} 文件
+                                            </span>
+                                        )}
+                                        {!readOnly && (
+                                            <button
+                                                onClick={() => onRemove?.(p)}
+                                                aria-label="移除"
+                                                className={cn(
+                                                    TIP_TRIGGER,
+                                                    "size-6 rounded-md text-text-3",
+                                                    "flex shrink-0 items-center justify-center",
+                                                    "hover:bg-redstone-dim hover:text-redstone",
+                                                    HOVER_FILL
+                                                )}
+                                            >
+                                                <X className="size-3" />
+                                                <Tip label="移除" />
+                                            </button>
+                                        )}
+                                    </motion.div>
+                                );
+                            })}
+                        </AnimatePresence>
+                    </div>
+                )}
+            </Swap>
             <NoteRow icon={Info}>
                 {readOnly
                     ? "这些目录当时按原层级从源包复制进了服务端包（支持子目录）"

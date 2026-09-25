@@ -24,6 +24,7 @@ import type { AppSettings, CacheUsage, CleanReport, UpdateChannel } from "@/lib/
 import { cn } from "@/lib/utils";
 import {
     Btn,
+    Collapse,
     IconBtn,
     ModalShell,
     PageHeader,
@@ -360,8 +361,11 @@ export function SettingsPage() {
                             onChange={(v) => void patch({ installLoaderLocally: v })}
                         />
                     </SettingRow>
-                    {/* 关着「本机安装」时这一行没有对象可复用，留着就是个恒为 0 的噪音（同自检的 keep 项口径） */}
-                    {settings.installLoaderLocally && (
+                    {/* 关着「本机安装」时这一行没有对象可复用，留着就是个恒为 0 的噪音（同自检的 keep 项口径）。
+                        进出走 Collapse：Section 的 Panel 是 gap=0 的 divide-y 卡 ⇒ gap 传 0；
+                        折叠壳不带线也不带内边距（壳带 1px 就收不到 0），线由上一行的 divide 边画，
+                        壳是末子元素时 `.divide-y > :not(:last-child)` 不会给它加边框 */}
+                    <Collapse when={settings.installLoaderLocally} gap={0}>
                         <SettingRow
                             label="复用已装的 Loader"
                             desc="按加载器与版本存进缓存，同版本的第二包起不再重下重装"
@@ -372,7 +376,7 @@ export function SettingsPage() {
                                 onChange={(v) => void patch({ reuseLoaderInstalls: v })}
                             />
                         </SettingRow>
-                    )}
+                    </Collapse>
                 </Section>
 
                 {/* ---- 存储与缓存 ---- */}

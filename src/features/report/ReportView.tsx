@@ -8,7 +8,6 @@
  */
 import { AlertTriangle, Archive, Check, CircleCheck, CircleX, FileText, Minus, Plus } from "lucide-react";
 import { useEffect, useState } from "react";
-import { motion } from "motion/react";
 import * as api from "@/lib/api";
 import { formatDuration, formatSize, formatStamp, loaderLabel, truncateMiddle } from "@/lib/format";
 import type {
@@ -21,6 +20,7 @@ import type {
 import { cn } from "@/lib/utils";
 import {
     ChangeRow,
+    Collapse,
     Divider,
     InfoRow,
     ListRow,
@@ -246,15 +246,18 @@ export function ReportView({
                     )}
                     {o.motd.trim() !== "" && <InfoRow label="MOTD" value={o.motd.trim()} />}
                 </div>
-                {o.extraJvmArgs.trim() !== "" && (
+                {/* 这三行是卡内 flex 列（Panel gap=12）的整块挂卸 ⇒ 走 Collapse，gap 传 14 那张卡的 12。
+                    上面 世界种子/MOTD 两格不在此列：它们在网格里，「补掉自己那一格」这件事在网格里不成立
+                    （同排有没有兄弟决定那一格存不存在），硬演要么差 6px 要么多 6px */}
+                <Collapse when={o.extraJvmArgs.trim() !== ""} gap={12}>
                     <InfoRow label="附加 JVM 参数" value={o.extraJvmArgs.trim()} />
-                )}
-                {o.keepDirs.length > 0 && (
+                </Collapse>
+                <Collapse when={o.keepDirs.length > 0} gap={12}>
                     <InfoRow label="随包保留目录" value={o.keepDirs.join("、")} />
-                )}
+                </Collapse>
                 {/* 包根文件来自 builder 实写清单：勾了脚本才会有 start.*，别按开关猜。
                     名字串会长，单独给一行可换行的展示位，不进右对齐的 InfoRow */}
-                {report.generatedFiles.length > 0 && (
+                <Collapse when={report.generatedFiles.length > 0} gap={12}>
                     <div className="flex w-full flex-col gap-1">
                         <span className="text-[11px] leading-[16px] font-normal text-text-3">
                             包根生成
@@ -263,12 +266,14 @@ export function ReportView({
                             {report.generatedFiles.join("、")}
                         </span>
                     </div>
-                )}
+                </Collapse>
             </Panel>
 
             {/* 构建自检：逐项对账真实落盘产物。措辞口径——它证明的是「包齐不齐」，
-                不是「开服能跑」，所以底部保留那句限定，别让绿勾被读成实机验证 */}
-            {report.checks.length > 0 && (
+                不是「开服能跑」，所以底部保留那句限定，别让绿勾被读成实机验证。
+                整张卡的进出也走 Collapse：关掉自检时下面那张「下一步」不该当场蹿上来
+                （本报告根容器是任务详情那个 flex 列，格距 gap-4=16） */}
+            <Collapse when={report.checks.length > 0} gap={16}>
                 <Panel gap={12}>
                     <PanelHead
                         title="构建自检"
@@ -297,7 +302,7 @@ export function ReportView({
                         离线核对产物完整性，未实机启动服务端
                     </span>
                 </Panel>
-            )}
+            </Collapse>
 
             <Panel gap={12}>
                 <PanelHead title="下一步" />
@@ -346,7 +351,8 @@ export function buildPlanSummary(
 }
 
 /**
- * 变更清单展开面板：只在展开时挂载，收起即卸载，不留隐藏 DOM。
+ * 变更清单展开面板：展开与收起都走 Collapse（以前只有展开演了 height、收起是 `return null`
+ * 当场卸载，等于半个折叠件）。
  * 快照还没读到时给三行骨架（点了没反应 = 用户以为这行不能点；先撑住高度，
  * 真实清单落地时行位不动，不会看着像跳）。
  */
@@ -359,49 +365,45 @@ function ChangeList({
     open: boolean;
     loading: boolean;
 }) {
-    if (!open) return null;
-    if (!loading && rows.length === 0) return null;
     /** 骨架期不铺真实行：rows 空是因为快照还没读到，不是「真的没有」，那时长度交给骨架占 */
     const shown = loading ? [] : rows.slice(0, LIST_CAP);
     return (
-        <motion.div
-            initial={{ opacity: 0, height: 0 }}
-            animate={{ opacity: 1, height: "auto" }}
-            className="log-scroll -mx-1 max-h-[220px] min-w-0 overflow-auto rounded-md bg-surface-2/40 px-1 py-1"
-        >
-            {loading &&
-                [0, 1, 2].map((i) => (
-                    <div key={i} className="flex h-[46px] items-center gap-3 px-1">
-                        <span className="h-[13px] flex-1 animate-pulse rounded bg-stroke" />
-                        <span className="h-[11px] w-14 shrink-0 animate-pulse rounded bg-stroke-soft" />
-                    </div>
-                ))}
-            {shown.map((m) => (
-                <ListRow key={m.id} className="py-1.5">
-                    <span className="flex min-w-0 flex-1 flex-col">
-                        <span className="truncate font-mono text-[12px] leading-[18px] font-medium text-text-1">
-                            {m.name} {m.version}
+        <Collapse when={open && (loading || rows.length > 0)} gap={12}>
+            <div className="log-scroll -mx-1 max-h-[220px] min-w-0 overflow-auto rounded-md bg-surface-2/40 px-1 py-1">
+                {loading &&
+                    [0, 1, 2].map((i) => (
+                        <div key={i} className="flex h-[46px] items-center gap-3 px-1">
+                            <span className="h-[13px] flex-1 animate-pulse rounded bg-stroke" />
+                            <span className="h-[11px] w-14 shrink-0 animate-pulse rounded bg-stroke-soft" />
+                        </div>
+                    ))}
+                {shown.map((m) => (
+                    <ListRow key={m.id} className="py-1.5">
+                        <span className="flex min-w-0 flex-1 flex-col">
+                            <span className="truncate font-mono text-[12px] leading-[18px] font-medium text-text-1">
+                                {m.name} {m.version}
+                            </span>
+                            {m.needsReview && (
+                                <span className="text-[10px] leading-[14px] text-gold">
+                                    未判定出两端 · 请核对服务端是否需要
+                                </span>
+                            )}
                         </span>
-                        {m.needsReview && (
-                            <span className="text-[10px] leading-[14px] text-gold">
-                                未判定出两端 · 请核对服务端是否需要
+                        {m.autoSupplement && <TagChip tone="accent">自动补齐</TagChip>}
+                        {!!m.sizeBytes && (
+                            <span className="shrink-0 font-mono text-[11px] leading-[16px] text-text-3">
+                                {formatSize(m.sizeBytes)}
                             </span>
                         )}
-                    </span>
-                    {m.autoSupplement && <TagChip tone="accent">自动补齐</TagChip>}
-                    {!!m.sizeBytes && (
-                        <span className="shrink-0 font-mono text-[11px] leading-[16px] text-text-3">
-                            {formatSize(m.sizeBytes)}
-                        </span>
-                    )}
-                </ListRow>
-            ))}
-            {rows.length > shown.length && (
-                <p className="px-1 py-1.5 text-[10px] leading-[14px] text-text-3">
-                    另有 {rows.length - shown.length} 项未列出
-                </p>
-            )}
-        </motion.div>
+                    </ListRow>
+                ))}
+                {rows.length > shown.length && (
+                    <p className="px-1 py-1.5 text-[10px] leading-[14px] text-text-3">
+                        另有 {rows.length - shown.length} 项未列出
+                    </p>
+                )}
+            </div>
+        </Collapse>
     );
 }
 

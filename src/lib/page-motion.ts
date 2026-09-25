@@ -69,3 +69,17 @@ export const SWAP: Variants = {
     show: { opacity: 1, y: 0, transition: SWAP_IN },
     exit: { opacity: 0, y: -4, transition: SWAP_OUT },
 };
+
+/**
+ * 卡内「整块条件挂卸」的进出场（见 @/components/ui/Collapse）。
+ *
+ * 300ms 进=出、同一条对称曲线、淡入淡出走满全程、内容不位移——这四个值是他在
+ * `.scratch/collapse-proto.html` 里拧出来的（快照原文：`durIn=300 durOut=300
+ * ease=cubic-bezier(.2,.8,.2,1) fade=100% phase=sync y=0`），要改手感只改这一行。
+ *
+ * 为什么和上面三档节拍都不同：换页与换批是「指尖已经点了下一处」的语义，要短；
+ * 折叠是**同一条内容自己长出来**，读的是「这块地方有了/没了」，短到 180ms 就退化成硬跳。
+ * 三条属性（height / marginTop / opacity）共用这一条 transition，所以淡入淡出天然走满全程。
+ */
+export const COLLAPSE: Transition = { duration: 0.3, ease: [0.2, 0.8, 0.2, 1] };
+

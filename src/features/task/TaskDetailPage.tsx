@@ -58,6 +58,7 @@ import { buildPlanSummary, ReportView } from "@/features/report/ReportView";
 import {
     Bar,
     Btn,
+    Collapse,
     Divider,
     InfoRow,
     PageHeader,
@@ -367,39 +368,44 @@ export function TaskDetailPage() {
                         >
                             {active === "overview" && (
                                 <>
-                                    {task.error && (
-                                        <TaskErrorCard
-                                            error={task.error}
-                                            fileName={
-                                                task.error.stage === "parser"
-                                                    ? task.pack.fileName
-                                                    : undefined
-                                            }
-                                            onRetry={() => void retry()}
-                                            onFix={
-                                                task.error.stage === "parser"
-                                                    ? () => switchPrimary("home")
-                                                    : task.error.stage === "detector"
-                                                      ? () => changeTab("plan")
-                                                      : undefined
-                                            }
-                                            onShowLog={
-                                                task.error.stage === "parser"
-                                                    ? () =>
-                                                          logRef.current?.scrollIntoView({
-                                                              behavior: "smooth",
-                                                              block: "end",
-                                                          })
-                                                    : undefined
-                                            }
-                                            onCopyDiagnostics={
-                                                task.error.stage === "builder"
-                                                    ? () => void copyDiagnostics()
-                                                    : undefined
-                                            }
-                                            copied={copied}
-                                        />
-                                    )}
+                                    {/* 失败卡是整块挂卸（这一列是 flex flex-col gap-4）⇒ Collapse，gap 传 16。
+                                        壳里仍写 `task.error &&`：一来保住类型收窄不用 `!`，
+                                        二来关着时壳本来不挂载，AnimatePresence 会把退场那一拍的内容留住 */}
+                                    <Collapse when={!!task.error} gap={16}>
+                                        {task.error && (
+                                            <TaskErrorCard
+                                                error={task.error}
+                                                fileName={
+                                                    task.error.stage === "parser"
+                                                        ? task.pack.fileName
+                                                        : undefined
+                                                }
+                                                onRetry={() => void retry()}
+                                                onFix={
+                                                    task.error.stage === "parser"
+                                                        ? () => switchPrimary("home")
+                                                        : task.error.stage === "detector"
+                                                          ? () => changeTab("plan")
+                                                          : undefined
+                                                }
+                                                onShowLog={
+                                                    task.error.stage === "parser"
+                                                        ? () =>
+                                                              logRef.current?.scrollIntoView({
+                                                                  behavior: "smooth",
+                                                                  block: "end",
+                                                              })
+                                                        : undefined
+                                                }
+                                                onCopyDiagnostics={
+                                                    task.error.stage === "builder"
+                                                        ? () => void copyDiagnostics()
+                                                        : undefined
+                                                }
+                                                copied={copied}
+                                            />
+                                        )}
+                                    </Collapse>
 
                                     {/* ---- 转换进度 ---- */}
                                     <Panel gap={12}>
@@ -554,19 +560,28 @@ export function TaskDetailPage() {
                                 </>
                             )}
 
-                            {active === "result" &&
-                                (report ? (
-                                    <ReportView
-                                        taskId={task.id}
-                                        report={report}
-                                        task={task}
-                                        outPath={outPath}
-                                    />
-                                ) : (
-                                    <Panel className="items-center py-16">
-                                        <span className="h-4 w-40 animate-pulse rounded bg-stroke" />
-                                    </Panel>
-                                ))}
+                            {/* 报告未到先占位骨架，到了再换真内容：这是同位换批 ⇒ Swap。
+                                className 把间距压回这一列的 16px（Swap 默认 10px 是给按钮组的），
+                                否则换成报告那一刻六张卡的行距会自己变一档 */}
+                            {active === "result" && (
+                                <Swap
+                                    swapKey={report ? "report" : "skeleton"}
+                                    className="gap-4"
+                                >
+                                    {report ? (
+                                        <ReportView
+                                            taskId={task.id}
+                                            report={report}
+                                            task={task}
+                                            outPath={outPath}
+                                        />
+                                    ) : (
+                                        <Panel className="items-center py-16">
+                                            <span className="h-4 w-40 animate-pulse rounded bg-stroke" />
+                                        </Panel>
+                                    )}
+                                </Swap>
+                            )}
 
                             {active === "plan" && (
                                 <PlanReviewView taskId={task.id} manifest={task.pack} />
