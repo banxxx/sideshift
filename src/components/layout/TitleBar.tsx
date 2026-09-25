@@ -7,10 +7,9 @@
  * 处于二级页面时（canGoBack），最小化左侧出现 undo-2 返回按钮，
  * 并用 1×14 短竖线（$stroke）与最小化隔开。窗口控制逻辑见 @/lib/window-controls。
  */
-import { AnimatePresence, motion } from "motion/react";
 import { Minus, Square, X, Copy, Undo2 } from "lucide-react";
-import { Tip, HOVER_PRESS, Logo } from "@/components/ui";
-import { SWAP } from "@/lib/page-motion";
+import { Collapse, Tip, HOVER_PRESS, Logo } from "@/components/ui";
+import { SWAP_IN } from "@/lib/page-motion";
 import { cn } from "@/lib/utils";
 import { useNavigation } from "@/lib/navigation";
 import { useWindowControls } from "@/lib/window-controls";
@@ -40,30 +39,25 @@ export function TitleBar() {
             />
 
             {/* 右侧：窗口控件（gap 2px；二级页多出一个返回按钮 + 分隔竖线）。
-                `relative` 必需：返回件走 popLayout 退场时被抽成绝对定位，坐标按最近定位祖先算。
-                返回件用 Fragment 包不进 AnimatePresence（它要一个带 key 的 motion 子节点），
-                所以合成一层 flex 壳，壳内的 gap 与外壳一致，间距逐像素等价于改动前。 */}
-            <div className="relative flex items-center gap-0.5 h-full">
-                <AnimatePresence mode="popLayout" initial={false}>
-                    {canGoBack && (
-                        <motion.div
-                            key="back"
-                            variants={SWAP}
-                            initial="hidden"
-                            animate="show"
-                            exit="exit"
-                            className="flex items-center gap-0.5"
-                        >
-                            <WindowButton onClick={back} title="返回上一页">
-                                <Undo2 className="size-[13px]" />
-                            </WindowButton>
-                            <span
-                                aria-hidden
-                                className="h-3.5 w-px bg-stroke self-center"
-                            />
-                        </motion.div>
-                    )}
-                </AnimatePresence>
+                返回件走 `Collapse axis="x"`（横向收放一格），**不走 `popLayout`**：popLayout 把退场层
+                按 `offsetParent` 的 left 钉住（motion 13.4 `PopChild.mjs`：`position:absolute !important` +
+                `left: offsetLeft`），而这一组是右对齐的——抽走一格让容器自身左边缘当场右移 39px，
+                钉在"容器内 left:0"上的返回件就跟着平移 39px，正好压在「最小化」上淡出 ⇒ 他报的「闪一下 +
+                位置不对」。而且那三个控件是原生 button，popLayout 只带 motion 节点的位移动画，它们当场硬跳。
+                改成在流内收自己的宽度：整组一起滑，谁也不跳。`gap={2}` 收掉自己占的那格格距（Collapse 第 2 条）。 */}
+            <div className="flex items-center gap-0.5 h-full">
+                <Collapse
+                    when={canGoBack}
+                    gap={2}
+                    axis="x"
+                    transition={SWAP_IN}
+                    className="flex items-center gap-0.5"
+                >
+                    <WindowButton onClick={back} title="返回上一页">
+                        <Undo2 className="size-[13px]" />
+                    </WindowButton>
+                    <span aria-hidden className="h-3.5 w-px shrink-0 self-center bg-stroke" />
+                </Collapse>
                 <WindowButton onClick={win.minimize} title="最小化">
                     <Minus className="size-[13px]" />
                 </WindowButton>
@@ -97,7 +91,8 @@ interface WindowButtonProps {
 }
 
 /**
- * 单个窗口控件：34×26 r6 ghost；关闭按钮 hover 红石色（设计稿规范）
+ * 单个窗口控件：34×26 r6 ghost；关闭按钮 hover 红石色（设计稿规范）。
+ * `shrink-0`：返回件那格横向收放时，壳里的控件不能被 flex 压扁，得保持 34px 让壳去裁（Collapse 第 3 条）。
  * title 不落 DOM（系统灰泡不受样式管）：补 aria-label 保住无障碍名，气泡交给 Tip
  */
 function WindowButton({
@@ -111,7 +106,7 @@ function WindowButton({
             onClick={onClick}
             aria-label={title}
             className={cn(
-                "group/tip relative h-[26px] w-[34px] rounded-md flex items-center justify-center",
+                "group/tip relative flex h-[26px] w-[34px] shrink-0 items-center justify-center rounded-md",
                 "text-text-2 hover:bg-surface-2 hover:text-text-1",
                 HOVER_PRESS,
                 variant === "close" &&

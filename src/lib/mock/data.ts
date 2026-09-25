@@ -207,6 +207,27 @@ export function mockJavaProbe(requiredVersion: string | null, javaPath: string |
     };
 }
 
+/**
+ * MC 版本 → Java 需求线（浏览器 dev）。表抄 `core::java::required_for_mc`（1.20.5+ = 21、
+ * 1.18+ = 17、1.17 = 16、更早 8，认不出 `x.y` 的按 1.20 兜底），两边改了要记得同步。
+ * 段末带杂字的（"1.20.6-fabric"）按缺 patch 处理 = 需求线 17：Rust 那边是整段严格转整数，
+ * 这里也照整段判定，别用 `parseInt` 的前缀读法，否则两边会挑出不同的线。
+ */
+export function mockJavaForMc(mc: string): string {
+    const parts = mc.split(".");
+    /** `re` 与 Rust 的解析口径一一对上：minor 只认纯数字，patch 允许剥掉开头的非数字 */
+    const num = (s: string | undefined, re: RegExp, fallback: number) => {
+        const m = s?.match(re);
+        return m ? Number(m[1] ?? m[0]) : fallback;
+    };
+    const minor = num(parts[1], /^(\d+)$/, 20);
+    const patch = num(parts[2], /^\D*(\d+)$/, 0);
+    if (minor > 20 || (minor === 20 && patch >= 5)) return "21";
+    if (minor >= 18) return "17";
+    if (minor === 17) return "16";
+    return "8";
+}
+
 /** Online Add 搜索结果（四页数据，与设计稿行对齐；两侧支持度按 Modrinth 实测值） */
 const searchPool = [
     { id: "krypton", name: "Krypton", description: "轻量级协议层优化，显著降低服务端网络开销", author: "modmuss50", downloads: 12_040_000, clientSide: "unsupported", serverSide: "required" },

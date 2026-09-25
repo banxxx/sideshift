@@ -24,6 +24,7 @@ pub fn run() {
             commands::list_mc_versions,
             commands::list_loader_versions,
             commands::probe_java,
+            commands::java_requirement,
             commands::default_options,
             commands::list_pack_dirs,
             commands::get_plan,

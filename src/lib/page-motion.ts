@@ -53,8 +53,12 @@ export const TAB_SWEEP: Variants = {
     exit: (dir: number) => ({ opacity: 0, x: dir * -18, transition: TAB_OUT }),
 };
 
-/** 局部换一批入场：比页签再小一档——指尖没离开这块区域，不该读出「换了一屏」 */
-const SWAP_IN: Transition = { duration: 0.18, ease: [0.2, 0.8, 0.2, 1] };
+/**
+ * 局部换一批入场：比页签再小一档——指尖没离开这块区域，不该读出「换了一屏」。
+ * 也导出来给「收放一格」那类用（`Collapse axis="x"`，如标题栏返回件）：那里一条 transition 管三条属性
+ * （见 Collapse 文件头），进=出、不分轨，所以取这一档而不是 COLLAPSE 的 300ms。
+ */
+export const SWAP_IN: Transition = { duration: 0.18, ease: [0.2, 0.8, 0.2, 1] };
 /** 局部换一批退场：让位给新内容，旧的那一批只是消失，不等它 */
 const SWAP_OUT: Transition = { duration: 0.09, ease: "easeOut" };
 

@@ -83,6 +83,19 @@ export async function probeJava(
     );
 }
 
+/**
+ * 某 MC 版本的 Java 需求线（Rust: `java_requirement`，表在 `core::java::required_for_mc`）。
+ * 转换页换 MC 版本时要拿它改写方案里的 `javaVersion`：那张表只有后端一份，前端复刻一份
+ * 就会跟实跑的那把筛子走偏。`javaVersion` 是快照字段（回看/重试读当时那一档），
+ * 所以必须在方案落地时改写，而不是到了报告或实跑里再现算。
+ */
+export async function javaRequirement(mcVersion: string): Promise<string> {
+    if (!isTauri) return mock.mockJavaForMc(mcVersion);
+    return invokeOrMock("java_requirement", { mcVersion }, () =>
+        mock.mockJavaForMc(mcVersion)
+    );
+}
+
 /** 默认转换选项（Rust: default_options(manifest)） */
 export async function defaultOptions(
     manifest: PackManifest

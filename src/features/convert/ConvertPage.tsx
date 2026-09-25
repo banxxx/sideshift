@@ -37,6 +37,7 @@ import type {
     PackManifest,
     PlanMod,
 } from "@/lib/types";
+import { SERVER_PORT_RANGE, inRange } from "@/lib/types";
 import {
     Btn,
     CountRow,
@@ -197,6 +198,13 @@ export function ConvertPage() {
      */
     const javaBlocked = javaInstallOn && javaProbe?.status === "fail";
 
+    /**
+     * 端口填歪了：越界或干脆清空（空串在 `NumField` 里按 0 提交，落在区间外）。
+     * 判据与那一格的红字**同源**——两边读的都是 `options.serverPort` 与同一个 `SERVER_PORT_RANGE`，
+     * 所以不会出现「染了红却还能按」或「按不动却不知为什么」。默认值 25565 永不触发。
+     */
+    const portBlocked = !!options && !inRange(options.serverPort, SERVER_PORT_RANGE);
+
     // 离开页面时把这一套方案交给 store（下次进来第一帧就是它）：值走 ref 传，
     // 免得每次勾选都惊动 App 级 context 让整棵页面树跟着重渲染。
     const liveDraftRef = useRef<PlanDraft | null>(null);
@@ -243,6 +251,25 @@ export function ConvertPage() {
     useEffect(() => {
         if (!mcVersion) return;
         void api.listLoaderVersions(mcVersion).then((l) => setLoaderOptions(l.map(toOption)));
+    }, [mcVersion]);
+
+    // 需求线也跟着 MC 版本走：不重取的话，提示里那句「本次需要 Java N 及以上」、「自动选择」挑哪一枚、
+    // 实跑那把筛子用的都还是**源包**那一档（1.20.1 的包切到 1.21 仍然按 17 去跑 installer）。
+    // 表只有后端一份（core::java::required_for_mc），前端不复刻；改写的是方案字段，
+    // 因为 `javaVersion` 是快照的一部分，回看与重试读的都是当时那一档，不能到报告/实跑里现算。
+    // 首帧 `defaultOptions` 已经算过一次 ⇒ 值相同不 patch，也就不会白重探一趟 Java。
+    useEffect(() => {
+        if (!mcVersion) return;
+        let alive = true;
+        void api.javaRequirement(mcVersion).then((line) => {
+            if (alive && line)
+                setOptions((o) =>
+                    o && o.javaVersion !== line ? { ...o, javaVersion: line } : o
+                );
+        });
+        return () => {
+            alive = false;
+        };
     }, [mcVersion]);
 
     // 裸 zip 无 dependencies 段 → loaderVersion 为空；列表到位后回落推荐项（无推荐取首项），用户可再改
@@ -723,6 +750,7 @@ export function ConvertPage() {
                                 starting ||
                                 classifying ||
                                 javaBlocked ||
+                                portBlocked ||
                                 !options.loaderVersion.trim()
                             }
                             onClick={() => void start()}
@@ -735,16 +763,18 @@ export function ConvertPage() {
                         </Btn>
                         <p
                             className={`w-full text-center text-[10px] leading-[14px] font-normal ${
-                                javaBlocked ? "text-redstone" : "text-text-3"
+                                javaBlocked || portBlocked ? "text-redstone" : "text-text-3"
                             }`}
                         >
                             {classifying
                                 ? "自动分类进行中，方案落定后方可开始构建"
                                 : javaBlocked
                                   ? "请先在「运行环境」里处理好 Java，本次装不了 Loader"
-                                  : options && !options.loaderVersion.trim()
-                                    ? "正在获取 Loader 版本列表，选定后方可开始转换"
-                                    : "转换过程可随时取消，已下载依赖自动缓存复用"}
+                                  : portBlocked
+                                    ? "请先在「服务端设置」里填一个 1–65535 的端口"
+                                    : options && !options.loaderVersion.trim()
+                                      ? "正在获取 Loader 版本列表，选定后方可开始转换"
+                                      : "转换过程可随时取消，已下载依赖自动缓存复用"}
                         </p>
                     </Panel>
                 </motion.aside>

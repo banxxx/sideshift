@@ -79,3 +79,14 @@ export interface JavaInstall {
     path: string;
     major: number;
 }
+
+/**
+ * 服务器端口的合法区间（TCP 全量可用端口；0 保留给「系统分配」，这里不给填）。
+ * 单源：转换页那一格的红字与「开始转换」的禁用读的是同一个常量，
+ * 分成两处写就会看到一个染红、另一个不拦。
+ */
+export const SERVER_PORT_RANGE = { min: 1, max: 65535 } as const;
+
+/** 数字落在闭区间内（含端点）。非整数/NaN 一律算不合法 */
+export const inRange = (v: number, r: { min: number; max: number }) =>
+    Number.isFinite(v) && v >= r.min && v <= r.max;

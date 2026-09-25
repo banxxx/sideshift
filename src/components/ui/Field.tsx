@@ -180,8 +180,9 @@ export function TextInput({
     plain,
     className,
     readOnly,
+    invalid,
     ...rest
-}: React.ComponentProps<"input"> & { icon?: LucideIcon; plain?: boolean }) {
+}: React.ComponentProps<"input"> & { icon?: LucideIcon; plain?: boolean; invalid?: boolean }) {
     return (
         <div
             className={cn(
@@ -201,6 +202,8 @@ export function TextInput({
                         ? "font-mono text-[11px] leading-[16px] text-text-2"
                         : "text-[13px] leading-[20px]",
                     !plain && (readOnly ? "text-text-2" : "text-text-1"),
+                    // 越界只染这一格的值：框子亮起来是「焦点在这里」的意思，跟对错无关
+                    invalid && "text-redstone",
                     readOnly && "cursor-not-allowed"
                 )}
                 {...rest}

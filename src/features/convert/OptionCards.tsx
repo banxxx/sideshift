@@ -13,6 +13,7 @@ import type {
     PackDirNode,
     PackManifest,
 } from "@/lib/types";
+import { SERVER_PORT_RANGE, inRange } from "@/lib/types";
 import { RISE } from "@/lib/springs";
 import {
     Btn,
@@ -105,6 +106,12 @@ export function RuntimeEnvCard({
     /** 手选那枚已经不在本机了（卸载/换机）⇒ 界面如实显示「自动选择」，因为正在用的就是它 */
     const selectedMissing = !!javaProbe?.selectedMissing;
     /**
+     * 本机一枚 JDK 都没扫到。这一态和"有 Java 但不够格"是两句不同的话：
+     * 后者答得出"本次用哪一枚"（那枚就在列表里，只是低了），前者连问题都不成立 ⇒
+     * 「本次使用 自动选择」会指着一个不存在的东西，必须换成"这里压根没有"。
+     */
+    const noJava = javaProbe?.installed.length === 0;
+    /**
      * 点不动的那一态（Fabric、关了开关、回看）一律显示「自动选择」：这一档没有读者，
      * 摆一个需求线数字上去看着像"这次用的是 17"，而那串其实是包的要求、不是这台机器的答案。
      * 需求线该露面的地方是那行提示与报告，不是一颗灰掉的下拉。
@@ -189,34 +196,41 @@ export function RuntimeEnvCard({
                     tone={javaProbe?.status === "fail" ? "danger" : undefined}
                 >
                     {javaProbe ? (
-                        <>
-                            本次使用{" "}
-                            <span
-                                className={cn(
-                                    TIP_TRIGGER,
-                                    // 走色跟整行一致（红态压一枚蓝上去，读起来是两处不同的坏消息），
-                                    // 可悬的凭据换成同色的一层薄纱实线：这个字号的点线读着像碎屑，满色实线又太重
-                                    javaProbe?.status === "fail"
-                                        ? "text-redstone decoration-redstone/40"
-                                        : "text-accent decoration-accent/40",
-                                    "underline decoration-1 underline-offset-2"
-                                )}
-                                // 气泡是纯 hover 的，读屏与键盘要有一条同等信息的出口
-                                aria-label={javaProbe.javaPath ?? "本机没有可用的 Java"}
-                            >
-                                {pickedWord}
-                                {/* 手选那枚靠 `(1)/(2)` 分得开，但"到底用的哪一份"只有路径答得出：
-                                    悬浮给全路径，长路径交给 wide 那档等宽断行 */}
-                                <Tip
-                                    label={javaProbe.javaPath ?? "本机没有可用的 Java"}
-                                    wide
-                                    align="start"
-                                    side="top"
-                                />
-                            </span>
-                            {required ? `（本次需要 Java ${required} 及以上）` : ""}
-                            {selectedMissing ? " · 方案里指定的那枚已不在本机" : ""}
-                        </>
+                        noJava ? (
+                            <>
+                                本机没有检测到 Java
+                                {required ? `（本次需要 Java ${required} 及以上）` : ""}
+                            </>
+                        ) : (
+                            <>
+                                本次使用{" "}
+                                <span
+                                    className={cn(
+                                        TIP_TRIGGER,
+                                        // 走色跟整行一致（红态压一枚蓝上去，读起来是两处不同的坏消息），
+                                        // 可悬的凭据换成同色的一层薄纱实线：这个字号的点线读着像碎屑，满色实线又太重
+                                        javaProbe?.status === "fail"
+                                            ? "text-redstone decoration-redstone/40"
+                                            : "text-accent decoration-accent/40",
+                                        "underline decoration-1 underline-offset-2"
+                                    )}
+                                    // 气泡是纯 hover 的，读屏与键盘要有一条同等信息的出口
+                                    aria-label={javaProbe.javaPath ?? "本机没有可用的 Java"}
+                                >
+                                    {pickedWord}
+                                    {/* 手选那枚靠 `(1)/(2)` 分得开，但"到底用的哪一份"只有路径答得出：
+                                        悬浮给全路径，长路径交给 wide 那档等宽断行 */}
+                                    <Tip
+                                        label={javaProbe.javaPath ?? "本机没有可用的 Java"}
+                                        wide
+                                        align="start"
+                                        side="top"
+                                    />
+                                </span>
+                                {required ? `（本次需要 Java ${required} 及以上）` : ""}
+                                {selectedMissing ? " · 方案里指定的那枚已不在本机" : ""}
+                            </>
+                        )
                     ) : (
                         "正在检测本机 Java…"
                     )}
@@ -426,8 +440,9 @@ export function ServerSettingsCard({
                 <Field label="服务器端口">
                     <NumField
                         value={options?.serverPort ?? 25565}
-                        min={1}
-                        max={65535}
+                        min={SERVER_PORT_RANGE.min}
+                        max={SERVER_PORT_RANGE.max}
+                        clamp={false}
                         readOnly={readOnly}
                         onCommit={(v) => patch({ serverPort: v })}
                     />
@@ -488,32 +503,50 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
     );
 }
 
-/** 数字输入：本地草稿允许瞬时空串/半成品，失焦时 clamp 提交回 options */
+/**
+ * 数字输入：本地草稿允许瞬时空串/半成品。
+ * 默认失焦时 clamp 提交（越界自己吸回边界，界面无感）。`clamp={false}` 那格改成**逐字实时提交、不吸边**：
+ * 越界的数照实存进方案，红字与「开始转换」的禁用读的都是方案里那个数（一个真源，不会出现染红却不拦、
+ * 或拦了却看不出错在哪）。空串按 0 提交 ⇒ 0 落在任何 `min ≥ 1` 的区间外，"还没填"与"填错"共用一条出口。
+ */
 function NumField({
     value,
     min,
     max,
     readOnly,
     onCommit,
+    clamp = true,
 }: {
     value: number;
     min: number;
     max: number;
     readOnly?: boolean;
     onCommit: (v: number) => void;
+    clamp?: boolean;
 }) {
     const [draft, setDraft] = useState(String(value));
-    useEffect(() => setDraft(String(value)), [value]);
+    // 只在外部换值时同步草稿（默认值到达 / 清空我的修改 / 回看）；自己打字绕回来的一圈别把 "07" 改成 "7"
+    useEffect(() => setDraft((d) => (parseInt(d, 10) === value ? d : String(value))), [value]);
+    const digits = (raw: string) => {
+        const n = parseInt(raw, 10);
+        return Number.isFinite(n) ? n : null;
+    };
     return (
         <TextInput
             className="w-full"
             inputMode="numeric"
             value={draft}
             readOnly={readOnly}
-            onChange={(e) => setDraft(e.target.value.replace(/\D/g, "").slice(0, 6))}
+            invalid={!clamp && !inRange(value, { min, max })}
+            onChange={(e) => {
+                const d = e.target.value.replace(/\D/g, "").slice(0, 6);
+                setDraft(d);
+                if (!clamp) onCommit(digits(d) ?? 0);
+            }}
             onBlur={() => {
-                const n = parseInt(draft, 10);
-                const c = Number.isFinite(n) ? Math.min(max, Math.max(min, n)) : value;
+                const n = digits(draft);
+                // 不吸边那格：空串也已经有 0 存着了（onChange 实时提交过），这里只把草稿对齐回去
+                const c = clamp ? (n === null ? value : Math.min(max, Math.max(min, n))) : (n ?? 0);
                 setDraft(String(c));
                 onCommit(c);
             }}

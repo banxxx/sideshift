@@ -227,6 +227,34 @@ fn required_major(raw: &Option<String>) -> Option<u32> {
         .and_then(|p| p.parse().ok())
 }
 
+/// Mojang 对某个 MC 版本要求的 **Java 需求线**（只要主版本号）。
+/// 边界就是官方公告那几档：1.20.5 起 21、1.18 起 17、1.17 起 16、更早 8。
+/// 它是「这次至少要哪档」的那把尺，不是「必须正好这档」——见模块头第二条。
+///
+/// 认不出 `x.y[.z]` 形状的（快照 `24w14a` 那一类）按 1.20 兜底 ⇒ 取 17。
+/// 这条兜底是既有行为、原样搬过来的，没有在这里改判（快照那档要不要直接要 21 另说）。
+pub fn required_for_mc(mc: &str) -> &'static str {
+    let minor: i32 = mc
+        .split('.')
+        .nth(1)
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(20);
+    let patch: i32 = mc
+        .split('.')
+        .nth(2)
+        .and_then(|s| s.trim_start_matches(|c: char| !c.is_ascii_digit()).parse().ok())
+        .unwrap_or(0);
+    if (minor, patch) >= (20, 5) {
+        "21"
+    } else if minor >= 18 {
+        "17"
+    } else if minor >= 17 {
+        "16"
+    } else {
+        "8"
+    }
+}
+
 pub fn probe(required_version: &Option<String>, selected_path: &Option<String>) -> JavaProbe {
     let required = required_major(required_version);
     let found = installed();
@@ -341,6 +369,37 @@ OpenJDK 64-Bit Server VM ..."#, 25),
         // 认不出格式的必须是 None，不能瞎猜一个 1 出来把用户吓住
         assert_eq!(parse_major("A Java Exception has occurred."), None);
         assert_eq!(parse_major(""), None);
+    }
+
+    /// 需求线那张表逐档钉住边界（`commands::java_requirement` 与 `default_options` 共用它）
+    #[test]
+    fn required_for_mc_reads_every_official_boundary() {
+        let want = |mc: &str| required_for_mc(mc);
+        assert_eq!(want("1.20.5"), "21");
+        assert_eq!(want("1.20.4"), "17"); // 差一个 patch 就换档，边界在 1.20.5 不是 1.20
+        assert_eq!(want("1.21.1"), "21");
+        assert_eq!(want("1.19.4"), "17");
+        assert_eq!(want("1.18.2"), "17");
+        assert_eq!(want("1.17.1"), "16");
+        assert_eq!(want("1.16.5"), "8");
+        assert_eq!(want("1.12.2"), "8");
+        assert_eq!(want("1.0"), "8");
+        assert_eq!(want("b1.7.3"), "8");
+        assert_eq!(want("1.20"), "17");
+        assert_eq!(want("1"), "17");
+        assert_eq!(want("1.20.10"), "21");
+        assert_eq!(want("1.120.1"), "21");
+        assert_eq!(want("1.021"), "21");
+        assert_eq!(want("1.20.6"), "21");
+        // patch 段认不出「剥掉开头杂字后的纯数字」⇒ 按缺 patch 处理，(20,0) 掉回 17 那一档。
+        // 下面这批刁钻输入与 TS 侧 mockJavaForMc 逐条同结论（前端那份只是浏览器 dev 的镜像）
+        assert_eq!(want("1.20.6-fabric"), "17");
+        assert_eq!(want("1.20.x"), "17");
+        assert_eq!(want("1.a0.5"), "21");
+        assert_eq!(want("1.a21"), "17");
+        // 认不出 x.y[.z] 的（快照命名）按 1.20 兜底 = 既有行为，别以为它算出了 21
+        assert_eq!(want("24w14a"), "17");
+        assert_eq!(want(""), "17");
     }
 
     #[test]

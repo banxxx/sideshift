@@ -127,28 +127,13 @@ pub async fn probe_java(
         .map_err(|e| e.to_string())
 }
 
-/// 由 MC 版本推本次的 **Java 需求线**（Mojang 官方要求线）。它只做筛子与文案，不再是用户选项：
-/// 跑 installer 用哪一枚由 `javaPath` 定（空 = 在本机列表里按这条线自动挑）。
-fn java_for_mc(mc: &str) -> &'static str {
-    let minor: i32 = mc
-        .split('.')
-        .nth(1)
-        .and_then(|s| s.parse().ok())
-        .unwrap_or(20);
-    let patch: i32 = mc
-        .split('.')
-        .nth(2)
-        .and_then(|s| s.trim_start_matches(|c: char| !c.is_ascii_digit()).parse().ok())
-        .unwrap_or(0);
-    if (minor, patch) >= (20, 5) {
-        "21"
-    } else if minor >= 18 {
-        "17"
-    } else if minor >= 17 {
-        "16"
-    } else {
-        "8"
-    }
+/// 某 MC 版本的 Java 需求线（Rust: `java_requirement`）。给转换页换版本时改写方案用：
+/// 这张表只在 `core::java` 里有一份，前端复刻一份就会跟实跑的那把筛子走偏。
+/// 为什么由前端改写而不是消费方现算：`options.java_version` 是**快照字段**，回看与重试读的都是
+/// 当时那一档；在报告或实跑里现算会让旧任务被新表改写。
+#[tauri::command]
+pub fn java_requirement(mc_version: String) -> String {
+    java::required_for_mc(&mc_version).to_string()
 }
 
 #[tauri::command]
@@ -167,7 +152,7 @@ pub fn default_options(state: S<'_>, manifest: PackManifest) -> ConversionOption
     ConversionOptions {
         mc_version: manifest.mc_version.clone(),
         loader_version,
-        java_version: java_for_mc(&manifest.mc_version).to_string(),
+        java_version: java::required_for_mc(&manifest.mc_version).to_string(),
         memory_mb: 4096,
         generate_scripts: true,
         nogui: true,
