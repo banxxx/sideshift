@@ -124,7 +124,6 @@ export function PlanReviewView({
                 loader={loader}
                 mcOptions={emptySelects}
                 loaderOptions={emptySelects}
-                javaOptions={emptySelects}
                 readOnly
             />
             <ModPlanCard

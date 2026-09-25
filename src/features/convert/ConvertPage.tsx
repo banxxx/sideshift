@@ -73,7 +73,6 @@ export function ConvertPage() {
     const [tab, setTab] = useState<ModDisposition>("remove");
     const [mcOptions, setMcOptions] = useState<SelectOption[]>([]);
     const [loaderOptions, setLoaderOptions] = useState<SelectOption[]>([]);
-    const [javaOptions, setJavaOptions] = useState<SelectOption[]>([]);
     // 处置清单弹窗：null=关；remove/keep 决定壳的视角（剔除/保留共用一壳）
     /** 「全部清单」弹窗：视角与开关分两个状态。
      *  关闭只翻 listOpen——视角一旦跟着清空，退场那 200ms（base-ui 在 data-[ending-style] 期间仍挂着
@@ -158,29 +157,45 @@ export function ConvertPage() {
         );
         if (!draft || draft.onlinePending) void runClassify(false);
         void api.listMcVersions().then((l) => setMcOptions(l.map(toOption)));
-        void api.listJavaVersions().then((l) => setJavaOptions(l.map(toOption)));
         void api.getSettings().then(setSettings);
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [manifest]);
 
-    // JDK 探测只在开关打开时跑：一次 `java -version` 是一个几十毫秒的子进程，
-    // 没人开着这一页时不该白付，开关关着时这条判定也没有读者。
-    // 每次换 Java 档位都重探一遍、不看缓存：可预见的失败要在点转换**之前**说出来，
+    // Fabric 没有 installer 可跑 ⇒ 这一档对本包是空开关，探测也就没有读者（那颗下拉同时灰下来）
+    const needsInstaller = !!manifest && manifest.loader !== "fabric";
+    /** 「本机安装 Loader」开着时才需要探：一次 `java -version` 是一个几十毫秒的子进程 */
+    const javaInstallOn = needsInstaller && !!options?.installLoaderLocally;
+    // 探测的读者判据与那颗下拉的启用态是同一颗 `javaInstallOn`：列表候选就是这个回包给的，
+    // 一边探一边不探就会看到"提示说没有 Java、下拉里却列着三枚"。
+    // 需求线或手选那枚一变就重探、不看缓存：可预见的失败要在点转换**之前**说出来，
     // 而"本机现在到底有没有够格的 JDK"是会变的（用户装完回来就该变绿）。
     useEffect(() => {
-        if (!options?.installLoaderLocally || !options.javaVersion) {
+        if (!javaInstallOn || !options?.javaVersion) {
             setJavaProbe(null);
             return;
         }
         // 每轮 effect 各持一个 alive：换档时上一轮的迟到回包会被丢掉，不会盖成新结论的假数据
         let alive = true;
-        void api.probeJava(options.javaVersion).then((p) => {
+        void api.probeJava(options.javaVersion, options.javaPath).then((p) => {
             if (alive) setJavaProbe(p);
         });
         return () => {
             alive = false;
         };
-    }, [options?.installLoaderLocally, options?.javaVersion]);
+    }, [javaInstallOn, options?.javaVersion, options?.javaPath]);
+
+    /** 点开下拉重探一次（卡片透传上来）：候选是本机实探出来的，装完 JDK 不改档位不会自己触发 */
+    const reprobeJava = () => {
+        if (!javaInstallOn || !options?.javaVersion) return;
+        void api.probeJava(options.javaVersion, options.javaPath).then(setJavaProbe);
+    };
+
+    /**
+     * Java 这一档拦下来的转换：只在"真的会去本机跑 installer"那一格分支里成立，且
+     * **探测还在飞时不拦**（`javaProbe` 为 null）——结论没落地就把人挡住，等于让一个还不存在的判定
+     * 决定按钮能不能按。拦的是两种：一枚都不够格、以及手选了枚低于需求线的。
+     */
+    const javaBlocked = javaInstallOn && javaProbe?.status === "fail";
 
     // 离开页面时把这一套方案交给 store（下次进来第一帧就是它）：值走 ref 传，
     // 免得每次勾选都惊动 App 级 context 让整棵页面树跟着重渲染。
@@ -612,8 +627,8 @@ export function ConvertPage() {
                             loader={loader}
                             mcOptions={mcOptions}
                             loaderOptions={loaderOptions}
-                            javaOptions={javaOptions}
                             javaProbe={javaProbe}
+                            onJavaProbe={reprobeJava}
                         />
                     </motion.div>
 
@@ -704,7 +719,11 @@ export function ConvertPage() {
                             variant="primary"
                             full
                             disabled={
-                                !options || starting || classifying || !options.loaderVersion.trim()
+                                !options ||
+                                starting ||
+                                classifying ||
+                                javaBlocked ||
+                                !options.loaderVersion.trim()
                             }
                             onClick={() => void start()}
                         >
@@ -714,12 +733,18 @@ export function ConvertPage() {
                         <Btn size="sm" full className="font-medium" onClick={() => switchPrimary("home")}>
                             返回首页
                         </Btn>
-                        <p className="w-full text-center text-[10px] leading-[14px] font-normal text-text-3">
+                        <p
+                            className={`w-full text-center text-[10px] leading-[14px] font-normal ${
+                                javaBlocked ? "text-redstone" : "text-text-3"
+                            }`}
+                        >
                             {classifying
                                 ? "自动分类进行中，方案落定后方可开始构建"
-                                : options && !options.loaderVersion.trim()
-                                  ? "正在获取 Loader 版本列表，选定后方可开始转换"
-                                  : "转换过程可随时取消，已下载依赖自动缓存复用"}
+                                : javaBlocked
+                                  ? "请先在「运行环境」里处理好 Java，本次装不了 Loader"
+                                  : options && !options.loaderVersion.trim()
+                                    ? "正在获取 Loader 版本列表，选定后方可开始转换"
+                                    : "转换过程可随时取消，已下载依赖自动缓存复用"}
                         </p>
                     </Panel>
                 </motion.aside>

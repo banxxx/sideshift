@@ -54,6 +54,9 @@ pub struct BuildReport {
     /// 启动脚本指向的 jar 名（报告页据此写出真实的手动启动命令）。
     /// 已装的新式布局为 None：它靠 `libraries/` 下的参数文件启动，没有单一 jar 可指
     pub start_jar: Option<String>,
+    /// 新式已装布局的两份参数文件（包内相对路径，POSIX 分隔）。`start_jar` 为 None 时"启动指向"对账的就是它们——
+    /// 自检不能只信 builder 自己算的结论，所以这里把事实交出去，让 `verify` 对着 staging 再查一遍落盘没有
+    pub args_files: Vec<String>,
     /// 本次把本机装好的 loader 树并进了产物（目标机不需要再联网首装）
     pub installed: bool,
 }
@@ -155,6 +158,10 @@ pub fn build(
                 .server_jar_name
                 .clone()
                 .or_else(|| input.installer_jar_name.clone()),
+        },
+        args_files: match &shape {
+            RunShape::ArgsFiles { win, unix } => vec![win.clone(), unix.clone()],
+            _ => Vec::new(),
         },
         installed: input.installed.is_some(),
     })

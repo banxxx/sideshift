@@ -440,17 +440,26 @@ function buildSteps(a: {
                 ? "解压后直接运行包内 start.bat / start.sh：加载器与依赖已在本机装好并打进包，目标机不需要再联网安装"
                 : isForge
                   ? "首次运行包内 start.bat / start.sh：会先自动执行 installer --installServer，之后同样用该脚本启动"
-                  : "运行包内 start.bat（Windows）或 start.sh（Linux/macOS），JVM 参数与 --nogui 已按本次配置写好"
+                  : "首次运行包内 start.bat / start.sh：Fabric 那枚服务端 jar 会先联网装出加载器与前置库（需本机 Java 与网络），之后同样用该脚本启动"
         );
     } else if (report.installed && !report.startJar) {
         // 已装好又没生成脚本：起跳靠打进包的那两份参数文件（老 Forge 那态有 startJar，走下面那句 -jar）
         steps.push(
             "本次未生成启动脚本：在解压目录执行 java <JVM 参数> @libraries/…/win_args.txt（Linux 用 unix_args.txt），参数文件随依赖树一起打进包"
         );
+    } else if (!report.installed && isForge) {
+        // 未装又没脚本：包根那枚是安装器，`java -jar` 它不会开服 —— 先 --installServer 装出服务端
+        const jar = report.startJar ?? "installer.jar";
+        steps.push(
+            `本次未生成启动脚本：在解压目录执行 java -jar ${jar} --installServer 联网装出服务端，再用它生成的 run.bat / run.sh 启动`
+        );
     } else {
         const jar = report.startJar ?? "服务端 jar";
         steps.push(
-            `在解压目录执行 java -Xmx${o.memoryMb}M -jar ${jar}${o.nogui ? " nogui" : ""}${o.useAikarFlags ? "（Aikar 的 G1GC 参数需自行补在 -Xmx 之后）" : ""}`
+            `在解压目录执行 java -Xmx${o.memoryMb}M -jar ${jar}${o.nogui ? " nogui" : ""}${
+                // Fabric 未装那态指的是官方服务端 jar：它首启会自装，别让人以为卡住了
+                !report.installed && !isForge ? "（Fabric 服务端 jar 首次运行会联网装出加载器）" : ""
+            }${o.useAikarFlags ? "（Aikar 的 G1GC 参数需自行补在 -Xmx 之后）" : ""}`
         );
     }
 

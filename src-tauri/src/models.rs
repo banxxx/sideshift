@@ -258,7 +258,12 @@ pub struct DownloadEstimate {
 pub struct ConversionOptions {
     pub mc_version: String,
     pub loader_version: String,
+    /// 本次的 **Java 需求线**（由 MC 版本推的那档，"17"）：只当筛子用，不是"要装哪版"。
+    /// 跑 installer 用哪一枚由 `java_path` 决定；这一档进报告与回看，语义始终是"包要什么"。
     pub java_version: String,
+    /// 手选跑 installer 的那枚 JDK 绝对路径；空 = 自动（本机第一枚够格的）。
+    /// 换机/卸掉之后这一枚可能不在本机了：`core::java::probe` 认不到就退回自动，不会把转换钉死。
+    pub java_path: String,
     pub memory_mb: u32,
     pub generate_scripts: bool,
     pub nogui: bool,
@@ -289,7 +294,7 @@ pub struct ConversionOptions {
     ///
     /// **显式 bool，不引入 `Option`/第三态**：建包时 `default_options()` 从全局取初值，用户改过就存自己那份。
     /// 于是重试与任务快照永远按快照走——不存在"跟随全局"那种会随设置漂移的语义（同一份方案隔几天
-    /// 重跑做出不一样的包，比包本身有问题更难查）。老存档缺这个字段走容器级 `serde(default)` = false。
+    /// 重跑做出不一样的包，比包本身有问题更难查）。老存档缺这个字段走容器级 `serde(default)` = `Default::default()`。
     pub install_loader_locally: bool,
 }
 
@@ -299,6 +304,7 @@ impl Default for ConversionOptions {
             mc_version: String::new(),
             loader_version: String::new(),
             java_version: String::new(),
+            java_path: String::new(),
             memory_mb: 4096,
             generate_scripts: true,
             nogui: true,
@@ -314,7 +320,7 @@ impl Default for ConversionOptions {
             extra_jvm_args: String::new(),
             output_override: String::new(),
             keep_dirs: Vec::new(),
-            install_loader_locally: false,
+            install_loader_locally: true,
         }
     }
 }
@@ -513,14 +519,27 @@ pub struct VersionOption {
 #[serde(rename_all = "camelCase")]
 pub struct JavaProbe {
     pub status: CheckStatus,
-    /// 选中那枚 java 的绝对路径；None = 本机压根没找到
+    /// 本次**会用上**的那枚 java 的绝对路径（手选命中 = 手选那枚，否则 = 自动挑的）；None = 本机压根没找到
     pub java_path: Option<String>,
     /// 解析出的主版本（8/17/21/25…）；`java -version` 认不出格式时为 None
     pub major: Option<u32>,
     /// 本次转换的最低需求线（由 MC 版本推的那档）；没传需求时 None = 只报有什么、不判够不够
     pub required_major: Option<u32>,
-    /// 一句话结论（带真实数字与落点），转换页那行外显直接显示
+    /// 本机扫到的全部 JDK，按 `JAVA_HOME` → PATH 的顺序：转换页那颗下拉的候选就是它
+    pub installed: Vec<JavaInstall>,
+    /// 传进来的「手选那枚」已经不在本机了（卸载、换盘符、换机），本次改用自动挑的那一枚
+    pub selected_missing: bool,
+    /// 一句话结论（带真实数字与落点），失败卡那一路直接显示
     pub detail: String,
+}
+
+/// 本机一枚可用（`java -version` 认得出来）的 JDK。转换页的下拉按它列候选，
+/// `path` 是标识、`major` 是显示名 —— 同版本两枚时路径不同，只按版本号选不出唯一一枚。
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct JavaInstall {
+    pub path: String,
+    pub major: u32,
 }
 
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
@@ -673,9 +692,10 @@ pub struct AppSettings {
     pub curseforge_api_key: Option<String>,
     /// 本机执行 loader installer（Forge / NeoForge 想要「上传即跑」的前提：装出 `libraries/` 与服务端本体）。
     ///
-    /// **默认关**：关掉时打包链路与关掉后的旧产物逐字节一致，一行分支都不进。
-    /// 代价是产物要在服务器首次联网自装，老 Forge 那条连 `run.bat` 都不生成。
-    #[serde(default)]
+    /// **默认开**：这一档存在的目的就是「解压即开服」，默认关等于把主路径藏起来。
+    /// 代价是转换时多跑一次安装器（磁盘 + 时间），且本机没有合适 JDK 时任务直接失败、不降级。
+    /// 关掉时打包链路与旧产物逐字节一致，一行分支都不进。
+    #[serde(default = "default_install_loader")]
     pub install_loader_locally: bool,
     /// 装出来的 loader 留在 `{cache_dir}/installs/{loader}/{mc}-{ver}/` 供后续任务复用（默认开）。
     /// 关掉 = 每次现装现丢，装在任务的临时目录里、打完包即删：省磁盘但每次都吃一遍下载。
@@ -724,6 +744,12 @@ fn default_online_classify() -> bool {
 
 /// 复用安装缓存默认开：一次装好的 Forge 服务端 100–160 MB，重装的下载代价没人该反复付
 fn default_reuse_installs() -> bool {
+    true
+}
+
+/// 与 `AppSettings::default()` 里的初值同一颗布尔：旧 settings.json 没写过这一档时也算开，
+/// 不然「默认为开」只对全新安装成立，老用户的默认值会静停在关
+fn default_install_loader() -> bool {
     true
 }
 
@@ -801,7 +827,7 @@ impl Default for AppSettings {
             auto_classify_online: true,
             update_channel: None,
             curseforge_api_key: None,
-            install_loader_locally: false,
+            install_loader_locally: true,
             reuse_loader_installs: true,
         }
     }
@@ -894,22 +920,22 @@ mod tests {
         assert_eq!(s.curseforge_api_key, None);
     }
 
-    /// 旧 settings.json / 旧任务存档都没有装 Loader 那三颗开关：
-    /// 必须加载成功，且默认值不能反过来——本机安装默认**关**（关掉才是旧产物那份逐字节一致的行为），
-    /// 复用默认**开**（一次装好的服务端 100–160 MB，不该让老用户从此每次重下重装）。
+    /// 旧 settings.json / 旧任务存档都没有装 Loader 那三颗开关：必须加载成功，且默认值不能反过来——
+    /// 本机安装与复用都默认**开**（一次装好的服务端 100–160 MB，不该让老用户从此每次重下重装；
+    /// 而「产物上传即开服」这条主路径也不该对老用户隐身）。关掉才等价于旧产物那份行为。
     #[test]
     fn loader_switch_defaults_hold_for_legacy_payloads() {
         let legacy = r#"{"outputDir":"o","cacheDir":"c","stripClientOnly":true,"verifyAfterBuild":false,
             "downloadSource":"official","concurrency":6,"autoClassifyOnline":true}"#;
         let s: AppSettings = serde_json::from_str(legacy).expect("旧设置应能加载");
-        assert!(!s.install_loader_locally, "本机安装默认必须关");
+        assert!(s.install_loader_locally, "本机安装默认必须开");
         assert!(s.reuse_loader_installs, "复用默认必须开");
 
-        // 任务快照里的方案同理：老存档缺字段 = 没开，不能跟着全局设置的当前值漂移
+        // 任务快照里的方案同理：缺字段 = 没表过态，跟默认档一起开，但不会跟着全局设置的当前值漂移
         let opts: ConversionOptions =
             serde_json::from_str(r#"{"mcVersion":"1.20.1","loaderVersion":"47.4.10"}"#)
                 .expect("旧方案存档应能加载");
-        assert!(!opts.install_loader_locally);
+        assert!(opts.install_loader_locally);
         assert_eq!(opts.memory_mb, 4096, "其余字段走 Default，别悄悄改了老任务的档位");
     }
 

@@ -477,14 +477,21 @@ export function mockReport(taskId: string): ConversionReport | undefined {
                         id: "start",
                         label: "启动指向",
                         status: "pass",
-                        detail: "fabric-server-launch.jar 就位 · start 脚本直接可跑",
+                        detail: "fabric-server-launch.jar 就位 · 首次运行会联网装出 loader（需本机 Java 与网络）",
                     }
                   : {
                         id: "start",
                         label: "启动指向",
                         status: "warn",
-                        detail: "fabric-server-launch.jar 就位；本次未生成启动脚本，需自行启动",
+                        detail: "fabric-server-launch.jar 就位；本次未生成启动脚本，需自行按包内文件启动",
                     },
+              // 假数据走的是「没本机安装」那一档：加载器要首启现装，所以这一行是提示档而非通过档
+              {
+                  id: "loader",
+                  label: "Loader 就位",
+                  status: "warn",
+                  detail: "只有 fabric-server-launch.jar·首次运行才联网装出加载器",
+              },
               { id: "root", label: "包根文件", status: "pass", detail: `包根 ${generated.length} 个文件全部就位` },
               ...(o.keepDirs.length
                   ? [

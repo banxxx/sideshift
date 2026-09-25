@@ -81,11 +81,16 @@ const PRIMARY_LABEL: Record<TaskStatus, string> = {
     cancelled: "查看详情",
 };
 
+/** 快照按创建时间倒序一份：首帧（缓存初值）与每趟轮询回来走同一条排序，别两处各写一遍 */
+const byNewest = (list: ConversionTask[]) => [...list].sort((a, b) => b.createdAt - a.createdAt);
+
 export function TasksPage() {
-    const [tasks, setTasks] = useState<ConversionTask[]>([]);
+    // 首帧直接吃上一趟读数（`api.peekTasks`，理由写在那儿）：换页会重挂载，
+    // 空着挂载就是「占位层叠在列表上换一次」，正压在整页淡入的途中
+    const [tasks, setTasks] = useState<ConversionTask[]>(() => byNewest(api.peekTasks() ?? []));
     /** 第一轮读数到手前不许宣布「没有任务」：`listTasks()` 是异步的，空态与列表都由它把关，
      *  否则每次进这一页都会先闪一张空壳、再蹦出列表（换页那 260ms 入场正好把它放大）。 */
-    const [loaded, setLoaded] = useState(false);
+    const [loaded, setLoaded] = useState(() => api.peekTasks() !== null);
     const [filter, setFilter] = useState<Filter>("all");
     /** 飞行中：卡片本体隐身但**保住槽位**（视觉交给 overlay 里的克隆） */
     const [flying, setFlying] = useState<Set<string>>(new Set());
@@ -100,7 +105,7 @@ export function TasksPage() {
         const load = () =>
             api
                 .listTasks()
-                .then((list) => setTasks([...list].sort((a, b) => b.createdAt - a.createdAt)))
+                .then((list) => setTasks(byNewest(list)))
                 // 读失败按空列表处理，但照样算"读到了"：闸门一直压着会让页面卡在占位上，
                 // 比报一次空更糟。1s 轮询会在下一趟把真实数据换回来。
                 .catch(() => setTasks([]))

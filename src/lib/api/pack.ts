@@ -65,22 +65,21 @@ export async function listLoaderVersions(
     );
 }
 
-/** 可用 Java 版本列表（Rust: list_java_versions） */
-export async function listJavaVersions(): Promise<VersionOption[]> {
-    if (!isTauri) return mock.mockJavaVersions;
-    return invokeOrMock("list_java_versions", undefined, () => mock.mockJavaVersions);
-}
-
 /**
  * 本机 JDK 探测（Rust: probe_java）。开了「本机安装 Loader」才需要：那条路要就地跑 installer，
  * 缺 JDK 或版本不够属于**可预见的失败**，要在点转换之前看得见。
- * `requiredVersion` 传当前方案那档（"17"）；null 只报本机有什么，不判够不够。
- * 后端每次真跑一趟 `java -version`、不落缓存，所以装完 JDK 回到页面就该变绿。
+ * 回包里的 `installed` 就是转换页那颗下拉的候选 —— 事前检查与候选同源，不存在两份事实。
+ * `requiredVersion` 传当前方案那档需求线（"17"）；`javaPath` 传用户手选的那枚（空=自动）。
+ * 后端每次真跑一趟 `java -version`、不落缓存，所以装完 JDK 回到页面就该变绿、列表就该多出一枚。
  */
-export async function probeJava(requiredVersion: string | null): Promise<JavaProbe> {
-    if (!isTauri) return mock.mockJavaProbe(requiredVersion);
-    return invokeOrMock("probe_java", { requiredVersion }, () =>
-        mock.mockJavaProbe(requiredVersion)
+export async function probeJava(
+    requiredVersion: string | null,
+    javaPath?: string
+): Promise<JavaProbe> {
+    const path = javaPath?.trim() || null;
+    if (!isTauri) return mock.mockJavaProbe(requiredVersion, path);
+    return invokeOrMock("probe_java", { requiredVersion, javaPath: path }, () =>
+        mock.mockJavaProbe(requiredVersion, path)
     );
 }
 

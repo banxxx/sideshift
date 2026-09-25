@@ -833,7 +833,7 @@ mod tests {
     /// 报错行进了失败信息、本次建的目录被删干净。成功那条路见下面 `#[ignore]` 的真装测试。
     #[test]
     fn install_reports_failure_and_cleans_up_when_the_jar_is_missing() {
-        let probe = crate::core::java::probe(&None);
+        let probe = crate::core::java::probe(&None, &None);
         let Some(found) = probe.java_path else {
             eprintln!("本机没有 java，跳过");
             return;
@@ -916,7 +916,7 @@ mod tests {
             "fabric" => LoaderKind::Fabric,
             _ => LoaderKind::Forge,
         };
-        let probe = crate::core::java::probe(&None);
+        let probe = crate::core::java::probe(&None, &None);
         let java = PathBuf::from(probe.java_path.expect("本机没有 java"));
         let cache = temp("e2e");
         let scratch = temp("e2e-scratch");

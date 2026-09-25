@@ -1,4 +1,4 @@
-//! 构建后静态自检：打包完成、staging 还没回收之前，对着**真实落盘的产物**核对六件事。
+//! 构建后静态自检：打包完成、staging 还没回收之前，对着**真实落盘的产物**核对七件事。
 //!
 //! 全程离线、零子进程。这里回答的是「这份 zip 少没少东西、有没有半截 jar」，
 //! 不是「服务端能不能起来」——后者要 Java、要同意 EULA，未开本机安装那一档的 Forge 还要首次
@@ -25,6 +25,9 @@ pub struct Input<'a> {
     pub plan: &'a [PlanMod],
     /// 启动脚本指向的 jar 名
     pub start_jar: Option<&'a str>,
+    /// 新式已装布局的两份参数文件（包内相对路径）。非空时"启动指向"对账的就是它们，
+    /// 因为那一态没有单一 jar 可指（`start_jar` 会是 None）
+    pub args_files: &'a [String],
     /// 本次把本机装好的 loader 树并进了 staging：启动不再指向某一枚 jar，对账维度换成依赖树
     pub installed: bool,
     /// builder 报的本次包根生成文件
@@ -35,13 +38,14 @@ pub struct Input<'a> {
     pub expected_keep_dirs: &'a HashMap<String, usize>,
 }
 
-/// 六项自检（未勾选保留目录时不出第 6 项：空对空的「通过」是噪音）
+/// 七项自检（未勾选保留目录时不出最后一项：空对空的「通过」是噪音）
 pub fn run(input: &Input) -> Vec<CheckResult> {
     let mut out = vec![
         fetch_check(input),
         jar_check(input),
         deps_check(input),
         start_check(input),
+        loader_check(input),
         root_check(input),
     ];
     if !input.options.keep_dirs.is_empty() {
@@ -139,92 +143,142 @@ fn deps_check(input: &Input) -> CheckResult {
     check("deps", "依赖闭合", status, detail, broken)
 }
 
-/// 4 · 启动指向：start 脚本认的那个 jar 真的在包根；本机装好的包走 installed_check 那套对账
+/// 4 · 启动指向：start 脚本引用的那个目标真的在包里。
+/// 三态各查各的（实测三种布局）：新式已装查 `libraries/` 下那两份参数文件，老 Forge 与未装态查那一枚 jar。
+/// builder 已经认过一次形状，这里仍对着 staging 复查明落盘没有——并树、写脚本、打包是三步，
+/// 中间任何一步漏了文件，报告不能跟着 builder 的结论说"就位"。
 fn start_check(input: &Input) -> CheckResult {
-    if input.installed {
-        return installed_check(input);
-    }
-    let Some(jar) = input.start_jar else {
+    let targets: Vec<&str> = if !input.args_files.is_empty() {
+        input.args_files.iter().map(String::as_str).collect()
+    } else if let Some(jar) = input.start_jar {
+        vec![jar]
+    } else {
         return check(
             "start",
             "启动指向",
             CheckStatus::Warn,
-            "未确定启动 jar，需自行指定".to_string(),
+            "未确定启动目标，需自行指定".to_string(),
             Vec::new(),
         );
     };
-    if !input.staging.join(jar).is_file() {
+    let missing: Vec<String> = targets
+        .iter()
+        .filter(|t| !input.staging.join(t).is_file())
+        .map(|t| t.to_string())
+        .collect();
+    if !missing.is_empty() {
         return check(
             "start",
             "启动指向",
             CheckStatus::Fail,
-            format!("启动脚本指向的 {jar} 不在包里"),
-            vec![jar.to_string()],
+            format!("启动脚本指向的 {} 个文件不在包里", missing.len()),
+            missing,
         );
     }
+    let head = if targets.len() > 1 {
+        "两份参数文件都在包内".to_string()
+    } else {
+        format!("{} 就位", targets[0])
+    };
     if !input.options.generate_scripts {
         return check(
             "start",
             "启动指向",
             CheckStatus::Warn,
-            format!("{jar} 就位；本次未生成启动脚本，需自行启动"),
+            format!("{head}；本次未生成启动脚本，需自行按包内文件启动"),
             Vec::new(),
         );
     }
-    let tail = match input.loader {
-        LoaderKind::Fabric => "start 脚本直接可跑",
-        // installer 不是服务端本体：首次运行才会装出 run 脚本，这句必须说，
+    let tail = match (input.installed, input.loader) {
+        // 本机装好的那一态没有联网这一步
+        (true, _) => "加载器与依赖已打进包，解压后可直接跑",
+        // Fabric 与"没本机安装"的 Forge 都要在首启现装：这句必须说，
         // 否则用户以为「自检通过 = 双击就能开服」而把联网等待当成卡死
-        LoaderKind::Forge | LoaderKind::NeoForge => "首次运行会自动安装服务端（需本机 Java 与网络）",
-    };
-    check("start", "启动指向", CheckStatus::Pass, format!("{jar} 就位 · {tail}"), Vec::new())
-}
-
-/// 已装好的包的第四项：起跳不指向某一枚 jar，而是 `libraries/` 下那两份参数文件
-/// ⇒ 对账维度换成「依赖树真的并进了 staging」；老 Forge（装完没有 run 脚本）仍指着一枚
-/// 顶层 universal jar，那种情况顺带验它在不在
-fn installed_check(input: &Input) -> CheckResult {
-    let libs = input.staging.join("libraries");
-    if !fs::read_dir(&libs)
-        .map(|mut d| d.next().is_some())
-        .unwrap_or(false)
-    {
-        return check(
-            "start",
-            "启动指向",
-            CheckStatus::Fail,
-            "本机装好的依赖树没有并进包（libraries/ 缺失或为空）".to_string(),
-            vec!["libraries".to_string()],
-        );
-    }
-    let head = match input.start_jar {
-        Some(jar) if !input.staging.join(jar).is_file() => {
-            return check(
-                "start",
-                "启动指向",
-                CheckStatus::Fail,
-                format!("启动脚本指向的 {jar} 不在包里"),
-                vec![jar.to_string()],
-            )
+        (false, LoaderKind::Fabric) => "首次运行会联网装出 loader（需本机 Java 与网络）",
+        (false, LoaderKind::Forge | LoaderKind::NeoForge) => {
+            "首次运行会自动安装服务端（需本机 Java 与网络）"
         }
-        Some(jar) => format!("{jar} 与依赖树都在包内"),
-        None => "依赖树已并入包内".to_string(),
     };
-    let tail = if input.options.generate_scripts {
-        "start 脚本直接可跑"
-    } else {
-        "本次未生成启动脚本，需自行按包内参数文件启动"
-    };
-    check(
-        "start",
-        "启动指向",
-        if input.options.generate_scripts { CheckStatus::Pass } else { CheckStatus::Warn },
-        format!("{head} · {tail}"),
-        Vec::new(),
-    )
+    check("start", "启动指向", CheckStatus::Pass, format!("{head} · {tail}"), Vec::new())
 }
 
-/// 5 · 包根文件：builder 报的生成件真的落盘了，且必需件一个不少
+/// 各家 loader 本体的文件名前缀（实测三种布局都认这一条，比猜 Maven 目录稳）：
+/// 新式 = `libraries/net/minecraftforge/forge/<ver>/forge-<ver>-universal.jar`，
+/// 老 Forge = 包根 `forge-1.16.5-36.2.39.jar`，NeoForge 同 Forge 的新式布局换了组名
+fn loader_prefix(loader: LoaderKind) -> &'static str {
+    match loader {
+        LoaderKind::Fabric => "fabric-loader-",
+        LoaderKind::Forge => "forge-",
+        LoaderKind::NeoForge => "neoforge-",
+    }
+}
+
+/// 包内（含 `libraries/` 整棵依赖树）那枚 loader 本体
+fn loader_jar(input: &Input) -> Option<String> {
+    let prefix = loader_prefix(input.loader);
+    let mut names: Vec<PathBuf> = files_under(input.staging)
+        .into_iter()
+        .filter(|p| p.parent() == Some(input.staging))
+        .collect();
+    names.extend(files_under(&input.staging.join("libraries")));
+    names
+        .iter()
+        .filter_map(|p| p.file_name().map(|s| s.to_string_lossy().to_ascii_lowercase()))
+        .find(|n| n.starts_with(prefix) && n.ends_with(".jar") && !n.contains("installer"))
+        // 名字带 .jar 读着最顺，所以内部留后缀、出去时再摘（detail 与 items 都写成 `xxx.jar`）
+        .map(|n| n.trim_end_matches(".jar").to_string())
+}
+
+/// 5 · Loader 就位：这一包的加载器到底是「已经装好在包里」还是「首启才装」。
+/// 与第 4 项分开是因为它们查的是两件事——脚本指得对不对，和被指的那个东西齐不齐。
+fn loader_check(input: &Input) -> CheckResult {
+    let found = loader_jar(input);
+    if input.installed {
+        return match found {
+            Some(name) => check(
+                "loader",
+                "Loader 就位",
+                CheckStatus::Pass,
+                format!("本机装好的加载器已打进包（{name}.jar）· 目标机无需联网安装"),
+                Vec::new(),
+            ),
+            None => check(
+                "loader",
+                "Loader 就位",
+                CheckStatus::Fail,
+                "本机装好了加载器，但依赖树里没有它的本体（并树这一步没跑成）".to_string(),
+                vec![format!("{}*.jar", loader_prefix(input.loader))],
+            ),
+        };
+    }
+    // 没开本机安装：包里的加载器还是「待安装」状态，那一枚 installer / Fabric 服务端 jar 就是全部依据。
+    // 齐了也只是"能装"，所以走提示档而不是通过档
+    match (input.start_jar, found) {
+        (_, Some(name)) => check(
+            "loader",
+            "Loader 就位",
+            CheckStatus::Pass,
+            format!("包内已有加载器本体（{name}.jar）"),
+            Vec::new(),
+        ),
+        (Some(jar), None) => check(
+            "loader",
+            "Loader 就位",
+            CheckStatus::Warn,
+            format!("只有 {jar}·首次运行才联网装出加载器"),
+            Vec::new(),
+        ),
+        (None, None) => check(
+            "loader",
+            "Loader 就位",
+            CheckStatus::Fail,
+            "包内既没有加载器本体也没有安装器".to_string(),
+            Vec::new(),
+        ),
+    }
+}
+
+/// 6 · 包根文件：builder 报的生成件真的落盘了，且必需件一个不少
 fn root_check(input: &Input) -> CheckResult {
     let missing: Vec<String> = input
         .generated
@@ -270,7 +324,7 @@ fn root_check(input: &Input) -> CheckResult {
     )
 }
 
-/// 6 · 保留目录：勾选的目录按取件阶段的账本再数一遍实际落位数
+/// 7 · 保留目录：勾选的目录按取件阶段的账本再数一遍实际落位数
 fn keep_check(input: &Input) -> CheckResult {
     let mut short: Vec<String> = Vec::new();
     let mut total = 0usize;
@@ -380,7 +434,7 @@ mod tests {
         dir
     }
 
-    /// 跑六项时不关心的字段给空表即可
+    /// 跑这几项时不关心的字段给空表即可
     fn report(dir: &Path, plan: &[PlanMod], expected: &[&str], generated: &[&str]) -> Vec<CheckResult> {
         let expected: Vec<String> = expected.iter().map(|s| s.to_string()).collect();
         let generated: Vec<String> = generated.iter().map(|s| s.to_string()).collect();
@@ -390,6 +444,7 @@ mod tests {
             loader: LoaderKind::Fabric,
             plan,
             start_jar: Some("fabric-server.jar"),
+            args_files: &[],
             installed: false,
             generated: &generated,
             expected_mod_files: &expected,
@@ -416,10 +471,15 @@ mod tests {
         let plan = vec![row("a", "A", ModDisposition::Keep, &["b"])];
         let checks = report(&dir, &plan, &["a.jar", "b.jar"], &["start.bat", "eula.txt"]);
         assert!(
-            checks.iter().all(|c| c.status == CheckStatus::Pass),
+            checks
+                .iter()
+                .all(|c| c.status == CheckStatus::Pass || c.id == "loader"),
             "{:?}",
             checks.iter().map(|c| (&c.id, &c.detail)).collect::<Vec<_>>()
         );
+        // 这一份是「没本机安装」的 Fabric 包：包里只有官方服务端 jar，加载器要首启现装。
+        // 「Loader 就位」因此恒在提示档——它不是产物缺件，但也不该被读成"上传即跑"
+        assert_eq!(status_of(&checks, "loader"), CheckStatus::Warn);
         let _ = fs::remove_dir_all(&dir);
     }
 
@@ -471,6 +531,7 @@ mod tests {
             loader: LoaderKind::Fabric,
             plan: &[],
             start_jar: Some("fabric-server.jar"),
+            args_files: &[],
             installed: false,
             generated: &generated,
             expected_mod_files: &["keep.jar".to_string()],
@@ -483,42 +544,139 @@ mod tests {
         let _ = fs::remove_dir_all(&dir);
     }
 
-    /// 本机装好的包：起跳不指向某一枚 jar（新式布局靠 libraries/ 下的参数文件），
-    /// 所以这一项改成对账依赖树进没并进 staging
+    /// 本机装好的新式布局：第四项查脚本引用的两份参数文件，第五项查依赖树里的加载器本体。
+    /// 两条判据分开才有意义——树并进来了但本体没在里面，起跳照样是死的
     #[test]
-    fn installed_pack_reconciles_the_dependency_tree() {
-        let with_tree = temp_staging(
-            &[("mods/a.jar", b""), ("libraries/net/x/win_args.txt", b"-cp")],
+    fn installed_pack_checks_args_files_and_loader_jar() {
+        let args = "libraries/net/minecraftforge/forge/1.20.1-47.4.10";
+        let full = temp_staging(
+            &[
+                ("mods/a.jar", b""),
+                (&format!("{args}/win_args.txt"), b"-cp".as_slice()),
+                (&format!("{args}/unix_args.txt"), b"-cp".as_slice()),
+                (
+                    &format!("{args}/forge-1.20.1-47.4.10-universal.jar"),
+                    b"PK\x03\x04".as_slice(),
+                ),
+            ],
             &[("start.bat", b"@echo off".as_slice())],
         );
-        let without = temp_staging(&[("mods/a.jar", b"")], &[("start.bat", b"@echo off".as_slice())]);
-        let start_of = |dir: &Path| -> CheckResult {
+        // 参数文件在、加载器本体不在：树看着茂，其实是空的
+        let no_loader = temp_staging(
+            &[
+                ("mods/a.jar", b""),
+                (&format!("{args}/win_args.txt"), b"-cp".as_slice()),
+                (&format!("{args}/unix_args.txt"), b"-cp".as_slice()),
+            ],
+            &[("start.bat", b"@echo off".as_slice())],
+        );
+        // 本体在、脚本指的第二份参数文件没打进包：起跳目标缺件
+        let no_args = temp_staging(
+            &[
+                ("mods/a.jar", b""),
+                (&format!("{args}/win_args.txt"), b"-cp".as_slice()),
+                (
+                    &format!("{args}/forge-1.20.1-47.4.10-universal.jar"),
+                    b"PK\x03\x04".as_slice(),
+                ),
+            ],
+            &[("start.bat", b"@echo off".as_slice())],
+        );
+        let args_files: Vec<String> = vec![format!("{args}/win_args.txt"), format!("{args}/unix_args.txt")];
+        let of = |dir: &Path, id: &str, args: &[String]| -> CheckResult {
             let generated = vec!["start.bat".to_string()];
-            let opts = ConversionOptions::default();
-            let expected: Vec<String> = vec!["a.jar".to_string()];
+            let expected = vec!["a.jar".to_string()];
             run(&Input {
                 staging: dir,
-                options: &opts,
+                options: &ConversionOptions::default(),
                 loader: LoaderKind::Forge,
                 plan: &[],
                 start_jar: None,
+                args_files: args,
                 installed: true,
                 generated: &generated,
                 expected_mod_files: &expected,
                 expected_keep_dirs: &HashMap::new(),
             })
             .into_iter()
-            .find(|c| c.id == "start")
+            .find(|c| c.id == id)
             .unwrap()
         };
 
-        let hit = start_of(&with_tree);
-        assert_eq!(hit.status, CheckStatus::Pass, "{}", hit.detail);
-        assert!(hit.detail.contains("依赖树"), "{}", hit.detail);
-        // 树没并进来看不见：本机装好了却没打进包，比缺一枚 jar 更该红
-        let miss = start_of(&without);
+        assert_eq!(of(&full, "start", &args_files).status, CheckStatus::Pass);
+        let loader = of(&full, "loader", &args_files);
+        assert_eq!(loader.status, CheckStatus::Pass, "{}", loader.detail);
+        assert!(loader.detail.contains("无需联网"), "{}", loader.detail);
+        // 并树没跑成的那一种要红：本机装好了却没打进包，比缺一枚 jar 更该拦
+        assert_eq!(of(&no_loader, "loader", &args_files).status, CheckStatus::Fail);
+        // 脚本声明的两份参数文件少一份就是死的：报的得是缺的那一份，不是"树空"
+        let miss = of(&no_args, "start", &args_files);
         assert_eq!(miss.status, CheckStatus::Fail, "{}", miss.detail);
-        let _ = fs::remove_dir_all(&with_tree);
-        let _ = fs::remove_dir_all(&without);
+        assert!(miss.items[0].ends_with("unix_args.txt"), "{:?}", miss.items);
+        for dir in [&full, &no_loader, &no_args] {
+            let _ = fs::remove_dir_all(dir);
+        }
+    }
+
+    /// 老 Forge（实测 1.16.5）：装完没有参数文件，包根那枚 universal jar 就是加载器本体。
+    /// 两项都要认这同一枚文件，但判据不同——脚本指得对不对 / 本体在不在
+    #[test]
+    fn installed_old_forge_reconciles_the_universal_jar() {
+        let dir = temp_staging(
+            &[("mods/a.jar", b"")],
+            &[
+                ("forge-1.16.5-36.2.39.jar", b"PK\x03\x04".as_slice()),
+                ("start.bat", b"@echo off".as_slice()),
+            ],
+        );
+        let generated = vec!["start.bat".to_string()];
+        let expected = vec!["a.jar".to_string()];
+        let checks = run(&Input {
+            staging: &dir,
+            options: &ConversionOptions::default(),
+            loader: LoaderKind::Forge,
+            plan: &[],
+            start_jar: Some("forge-1.16.5-36.2.39.jar"),
+            args_files: &[],
+            installed: true,
+            generated: &generated,
+            expected_mod_files: &expected,
+            expected_keep_dirs: &HashMap::new(),
+        });
+        assert_eq!(status_of(&checks, "start"), CheckStatus::Pass);
+        assert_eq!(status_of(&checks, "loader"), CheckStatus::Pass);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// 关着本机安装：包里只有安装器，首启才装出加载器。这不是缺陷，所以「Loader 就位」走提示档，
+    /// 但话要说清——「自检通过」不等于「上传即跑」
+    #[test]
+    fn not_installed_pack_marks_loader_pending() {
+        let dir = temp_staging(
+            &[("mods/a.jar", b"")],
+            &[
+                ("forge-1.20.1-47.4.10-installer.jar", b"PK\x03\x04".as_slice()),
+                ("start.bat", b"@echo off".as_slice()),
+            ],
+        );
+        let generated = vec!["start.bat".to_string()];
+        let expected = vec!["a.jar".to_string()];
+        let checks = run(&Input {
+            staging: &dir,
+            options: &ConversionOptions::default(),
+            loader: LoaderKind::Forge,
+            plan: &[],
+            start_jar: Some("forge-1.20.1-47.4.10-installer.jar"),
+            args_files: &[],
+            installed: false,
+            generated: &generated,
+            expected_mod_files: &expected,
+            expected_keep_dirs: &HashMap::new(),
+        });
+        assert_eq!(status_of(&checks, "start"), CheckStatus::Pass);
+        let loader = checks.iter().find(|c| c.id == "loader").unwrap();
+        assert_eq!(loader.status, CheckStatus::Warn, "{}", loader.detail);
+        assert!(loader.detail.contains("联网"), "{}", loader.detail);
+        let _ = fs::remove_dir_all(&dir);
     }
 }

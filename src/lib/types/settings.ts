@@ -35,7 +35,7 @@ export interface AppSettings {
     curseforgeApiKey?: string | null;
     /**
      * 本机执行 loader installer（Forge / NeoForge 产物「上传即跑」的前提：装出 `libraries/` 与服务端本体）。
-     * 默认关：关掉时打包链路与旧产物逐字节一致。代价是产物要在服务器首次联网自装。
+     * 默认开：这一档就是主路径。代价是多跑一次安装器（磁盘 + 时间），且本机没有合适 JDK 时任务直接失败。
      */
     installLoaderLocally: boolean;
     /** 装出来的 loader 留在 `{cacheDir}/installs/` 供后续任务复用（默认开）；关 = 每次现装现丢 */

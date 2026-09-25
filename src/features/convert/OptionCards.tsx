@@ -8,6 +8,7 @@ import { useEffect, useState } from "react";
 import { AnimatePresence, motion } from "motion/react";
 import type {
     ConversionOptions,
+    JavaInstall,
     JavaProbe,
     PackDirNode,
     PackManifest,
@@ -41,6 +42,27 @@ type Patch = (p: Partial<ConversionOptions>) => void;
    （下拉与输入框压成凹底、开关与勾选框整件压一档、步进器只留值区），卡片不换排版——
    回看要核对的就是「当时那套配置长什么样」，所以压的是容器，数值与颜色保持读得清。 */
 
+/** 「自动选择」在下拉里的 value。它不是路径 ⇒ 落盘时压成空串，后端按"没指定"走自动挑 */
+const JAVA_AUTO = "auto";
+
+/**
+ * 本机候选打上显示名：只有一枚 17 就叫 `Java 17`，两枚以上才编号 `Java 17(1)/(2)`——
+ * 单 JDK 机器上那个 `(1)` 是没来由的噪音。
+ *
+ * 序号是**渲染期算出来的显示别名**，不进快照：顺序跟着 `JAVA_HOME` → PATH 走，装或卸一枚就整体重排，
+ * 拿它当标识会指错 JDK。真正的标识只有路径，所以序号会变、选中的那枚不会。
+ */
+function labelInstalls(installed: JavaInstall[]) {
+    const total = new Map<number, number>();
+    for (const j of installed) total.set(j.major, (total.get(j.major) ?? 0) + 1);
+    const seen = new Map<number, number>();
+    return installed.map((j) => {
+        const nth = (seen.get(j.major) ?? 0) + 1;
+        seen.set(j.major, nth);
+        return { ...j, label: `Java ${j.major}${(total.get(j.major) ?? 1) > 1 ? `(${nth})` : ""}` };
+    });
+}
+
 export function RuntimeEnvCard({
     options,
     patch,
@@ -48,8 +70,8 @@ export function RuntimeEnvCard({
     loader,
     mcOptions,
     loaderOptions,
-    javaOptions,
     javaProbe,
+    onJavaProbe,
     readOnly,
 }: {
     options: ConversionOptions | null;
@@ -59,17 +81,43 @@ export function RuntimeEnvCard({
     loader: string;
     mcOptions: SelectOption[];
     loaderOptions: SelectOption[];
-    javaOptions: SelectOption[];
     /** 本机 JDK 探测结果（只在开了「本机安装 Loader」时才有值；null = 还在探）。
+     *  它同时是那颗下拉的候选来源：事前检查与候选必须是同一份事实，不然提示说的和列表给的对不上。
      *  回看态（`readOnly`）不传：那一态要核对的是「当时那套配置」，本机现在有没有 Java 与它无关。 */
     javaProbe?: JavaProbe | null;
+    /** 点开 Java 下拉时重探一次：候选是本机实探出来的，用户中途装了 JDK 不会自己触发重探 */
+    onJavaProbe?: () => void;
     readOnly?: boolean;
 }) {
-    const installLoader = options?.installLoaderLocally ?? false;
+    const installLoader = options?.installLoaderLocally ?? true;
     // Fabric 没有 installer 可跑：它的 loader jar 与 launcher 直接从版本表取，这一档对本包是空开关
     // （实测：meta 给的 server/jar 是「首启自装」的启动器，不是一份装好的树）。
-    // 后端整档跳过 ⇒ 这里连开关也不显示：留一个拨了没反应的控件，比留一句解释更糟。
     const needsInstaller = manifest.loader !== "fabric";
+    /**
+     * 这一档此刻有没有读者：只有"真的会在本机跑 installer"那一格分支有。
+     * Fabric、关掉开关、回看态三处统一灰化（灰化而不是藏掉：这一格在报告和回看里都要露面，
+     * 值得看得见，只是点不动）。
+     */
+    const javaLive = needsInstaller && installLoader && !readOnly;
+    const installs = labelInstalls(javaProbe?.installed ?? []);
+    /** 手选那枚已经不在本机了（卸载/换机）⇒ 界面如实显示「自动选择」，因为正在用的就是它 */
+    const selectedMissing = !!javaProbe?.selectedMissing;
+    /**
+     * 点不动的那一态（Fabric、关了开关、回看）一律显示「自动选择」：这一档没有读者，
+     * 摆一个需求线数字上去看着像"这次用的是 17"，而那串其实是包的要求、不是这台机器的答案。
+     * 需求线该露面的地方是那行提示与报告，不是一颗灰掉的下拉。
+     */
+    const javaValue =
+        !javaLive || !options?.javaPath || selectedMissing
+            ? JAVA_AUTO
+            : options.javaPath;
+    /** note 里那个带颜色的词：自动态说"自动选择"，手选态说那枚的显示名（序号现算，不进快照） */
+    const pickedWord =
+        javaValue === JAVA_AUTO
+            ? "自动选择"
+            : (installs.find((j) => j.path === javaValue)?.label ?? "自动选择");
+    const required = javaProbe?.requiredMajor ?? null;
+
     return (
         <Panel gap={14}>
             <PanelHead title="运行环境" />
@@ -96,11 +144,22 @@ export function RuntimeEnvCard({
                 />
                 <SearchSelect
                     className="flex-1"
-                    label="Java 版本"
-                    value={options?.javaVersion ?? ""}
-                    options={javaOptions}
-                    readOnly={readOnly}
-                    onChange={(v) => patch({ javaVersion: v })}
+                    // 标签说"本机 Java"而不是"Java 版本"：这一档列的是这台机器上装了的那几枚，
+                    // 包要什么那一档是需求线，写在下面那行提示里
+                    label="本机 Java（跑安装器用）"
+                    value={javaValue}
+                    options={
+                        javaLive
+                            ? [
+                                  { value: JAVA_AUTO, label: "自动选择" },
+                                  ...installs.map((j) => ({ value: j.path, label: j.label })),
+                              ]
+                            : // 灰化那一态既不探测也没得选，只把「自动选择」这一项摆着
+                              [{ value: JAVA_AUTO, label: "自动选择" }]
+                    }
+                    readOnly={!javaLive}
+                    onOpen={onJavaProbe}
+                    onChange={(v) => patch({ javaPath: v === JAVA_AUTO ? "" : v })}
                 />
             </div>
             <Divider />
@@ -120,9 +179,43 @@ export function RuntimeEnvCard({
                     />
                 </InlineRow>
             )}
-            {needsInstaller && installLoader && !readOnly && (
-                <NoteRow icon={javaProbe?.status === "fail" ? AlertTriangle : Info}>
-                    {javaProbe?.detail ?? "正在检测本机 Java…"}
+            {javaLive && (
+                <NoteRow
+                    icon={javaProbe?.status === "fail" ? AlertTriangle : Info}
+                    tone={javaProbe?.status === "fail" ? "danger" : undefined}
+                >
+                    {javaProbe ? (
+                        <>
+                            本次使用{" "}
+                            <span
+                                className={cn(
+                                    TIP_TRIGGER,
+                                    // 走色跟整行一致（红态压一枚蓝上去，读起来是两处不同的坏消息），
+                                    // 可悬的凭据换成同色的一层薄纱实线：这个字号的点线读着像碎屑，满色实线又太重
+                                    javaProbe?.status === "fail"
+                                        ? "text-redstone decoration-redstone/40"
+                                        : "text-accent decoration-accent/40",
+                                    "underline decoration-1 underline-offset-2"
+                                )}
+                                // 气泡是纯 hover 的，读屏与键盘要有一条同等信息的出口
+                                aria-label={javaProbe.javaPath ?? "本机没有可用的 Java"}
+                            >
+                                {pickedWord}
+                                {/* 手选那枚靠 `(1)/(2)` 分得开，但"到底用的哪一份"只有路径答得出：
+                                    悬浮给全路径，长路径交给 wide 那档等宽断行 */}
+                                <Tip
+                                    label={javaProbe.javaPath ?? "本机没有可用的 Java"}
+                                    wide
+                                    align="start"
+                                    side="top"
+                                />
+                            </span>
+                            {required ? `（本次需要 Java ${required} 及以上）` : ""}
+                            {selectedMissing ? " · 方案里指定的那枚已不在本机" : ""}
+                        </>
+                    ) : (
+                        "正在检测本机 Java…"
+                    )}
                 </NoteRow>
             )}
         </Panel>

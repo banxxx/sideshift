@@ -3,9 +3,9 @@
  *
  * 四个分组，每组 = 等宽小标题（11/600，字距 1.2）+ 一张无内边距卡片，
  * 行与行之间用 1px $stroke-soft 分隔（divide-y），行标尺 padding[14,20]。
- *  - 转换选项：服务端输出目录 / 剔除客户端专属资源
- *  - 存储与缓存：工作缓存目录 / 下载缓存 / 无用文件（占用数字来自后端真实扫描）
- *  - 网络：下载源 / CurseForge API Key / 构建后自检 / 联网反查端信息 / 并发下载数
+ *  - 转换选项：服务端输出目录 / 剔除客户端专属资源 / 构建后自检 / 本机安装 Loader（含复用已装）
+ *  - 存储与缓存：工作缓存目录 / 下载缓存 / 无用文件（占用数字来自后端真实扫描，一个目录一个进程只扫一次）
+ *  - 网络：下载源 / CurseForge API Key / 联网反查端信息 / 并发下载数
  *  - 外观与关于：主题（三态分段）/ 更新渠道（正式版·Beta 两档，切 Beta 要确认）/ 版本（检查更新）
  * 读写走 @/lib/api 门面；主题走 @/lib/theme 单一真源（侧栏按钮同步）。
  * 设置是「改一处即持久化」，所以写盘失败必须外显（否则界面显示已生效、重启又回退），
@@ -108,10 +108,30 @@ function cleanNotice(kind: CleanKind, r: CleanReport): { text: string; kind: Not
         : { text, kind: "success" };
 }
 
+/** 下载源候选的上一份：这一档的列表整个进程不会变，重挂载再读一次必然同一份，
+ *  但首帧空数组会让那一行的下拉先空一下再落回当前档 ⇒ 缓存留着当首帧初值 */
+let cachedSources: SelectOption[] | null = null;
+
+/**
+ * 上一次占用扫描的结果，连同**它测的是哪个目录**（模块级，跨页面挂载存续）。
+ *
+ * 为什么不像设置/任务列表那样收进 `@/lib/api`：这份数字的有效性挂在目录上，
+ * 而目录只有这一页在用；换一个目录，上一份立刻是假的，所以 key 必须跟着存。
+ *
+ * 为什么换页回来不必再扫：磁盘不会因为换页而变，真扫一次可能几千条目，换来换去必是同一份，
+ * 重扫只换来一帧「占用统计中…」加刷新图标空转。要新数字有手动刷新那条路。
+ */
+let lastUsage: { dir: string; usage: CacheUsage } | null = null;
+
 export function SettingsPage() {
-    const [settings, setSettings] = useState<AppSettings | null>(null);
-    const [sources, setSources] = useState<SelectOption[]>([]);
-    const [usage, setUsage] = useState<CacheUsage | null>(null);
+    // 首帧吃上一份设置（`api.peekSettings`）：换页会把整页重挂载，没有它就得先画一屏骨架、
+    // 再在整页淡入的半途中把每一行换成真内容——那一下读起来像两层不同数据的页面叠在一起
+    const [settings, setSettings] = useState<AppSettings | null>(() => api.peekSettings());
+    const [sources, setSources] = useState<SelectOption[]>(() => cachedSources ?? []);
+    // 首帧吃上次扫描的结果（目录对得上才吃）：这样「占用统计中…」只在真的没扫过时出现一次
+    const [usage, setUsage] = useState<CacheUsage | null>(() =>
+        settings && lastUsage && lastUsage.dir === settings.cacheDir ? lastUsage.usage : null
+    );
     /** 扫描占用进行中：只喂给刷新图标的转圈动效和它的禁用态 */
     const [refreshing, setRefreshing] = useState(false);
     const [cleaning, setCleaning] = useState<CleanKind | null>(null);
@@ -134,11 +154,16 @@ export function SettingsPage() {
             .catch((e) => notify(`读取设置失败：${errOf(e)}`, "error"));
         void api
             .listDownloadSources()
-            .then((list) => setSources(list.map(({ value, label, recommended }) => ({ value, label, recommended }))))
+            .then((list) => {
+                const next = list.map(({ value, label, recommended }) => ({ value, label, recommended }));
+                cachedSources = next;
+                setSources(next);
+            })
             .catch((e) => notify(`读取下载源失败：${errOf(e)}`, "error"));
     }, []);
 
-    /** 占用数字读的是磁盘：只在进页、换缓存目录、清理完这三件事之后各扫一遍，不轮询。
+    /** 占用数字读的是磁盘：只在「这个进程还没扫过」、换缓存目录、手动刷新、清理完这四件事
+     * 之后各扫一遍，不轮询、也不跟换页重挂载走。
      * `refreshing` 是这一趟的在飞标记——刷新键是纯图标按钮，没有「统计中…」的文字可挂，
      * 只能靠它让图标转起来。收尾跟着 promise 走（自己掐表准不了真实耗时），
      * 但补一个最短时长：小缓存十几毫秒就回来，true→false 挤进同一次绘制等于一帧没画。 */
@@ -147,7 +172,13 @@ export function SettingsPage() {
         setRefreshing(true);
         void api
             .getCacheUsage()
-            .then(setUsage)
+            .then((u) => {
+                setUsage(u);
+                // 只在成功那一路记账：扫失败时留下的必须是上一份真数字（它测的还是同一个目录），
+                // 而不是让下一次进页又白扫一遍
+                const dir = api.peekSettings()?.cacheDir;
+                if (dir) lastUsage = { dir, usage: u };
+            })
             .catch((e) => notify(`读取缓存占用失败：${errOf(e)}`, "error"))
             .finally(() => {
                 const left = SPIN_MIN_MS - (performance.now() - startedAt);
@@ -156,9 +187,11 @@ export function SettingsPage() {
             });
     }, []);
 
-    // 等设置到手再扫：cacheDir 一改统计对象就换了个目录，旧数字立刻是假的，所以跟着它重读
+    // 目录一改统计对象就换了，旧数字立刻是假的 ⇒ 跟着它重扫。
+    // 这一句同时兼作冷启动那一趟（`lastUsage` 还是 null）；换页回来目录没变就直接跳过，
+    // 首帧的数字由上面那份 `lastUsage` 初值给出，不会再转一圈空圈。
     useEffect(() => {
-        if (settings) readUsage();
+        if (settings && lastUsage?.dir !== settings.cacheDir) readUsage();
     }, [settings?.cacheDir, readUsage]);
 
     /** 局部更新 + 立即持久化。副作用不能写在 setState 的 updater 里（那个函数按契约是纯函数，
@@ -268,7 +301,8 @@ export function SettingsPage() {
         }
     };
 
-    // 后端读设置是异步的：直接 return null 会让整页闪一下白，给一组等高占位行
+    // 只有这个进程还没读过设置时才占位（冷启动那一趟；换页回来首帧就有 `peekSettings()`）：
+    // 直接 return null 会让整页闪一下白，所以给一组等高占位行
     if (!settings) return <SettingsSkeleton />;
 
     return (
@@ -306,6 +340,39 @@ export function SettingsPage() {
                             onChange={(v) => void patch({ stripClientOnly: v })}
                         />
                     </SettingRow>
+                    <SettingRow
+                        label="构建后自检"
+                        desc="打包完成后离线对账产物：模组是否齐、jar 是否完整、依赖是否被误剔"
+                    >
+                        <Toggle
+                            size="md"
+                            checked={settings.verifyAfterBuild}
+                            onChange={(v) => void patch({ verifyAfterBuild: v })}
+                        />
+                    </SettingRow>
+                    <SettingRow
+                        label="本机安装 Loader"
+                        desc="Forge / NeoForge 转换时在本机跑 installer，产物上传即可开服（需本机 Java）"
+                    >
+                        <Toggle
+                            size="md"
+                            checked={settings.installLoaderLocally}
+                            onChange={(v) => void patch({ installLoaderLocally: v })}
+                        />
+                    </SettingRow>
+                    {/* 关着「本机安装」时这一行没有对象可复用，留着就是个恒为 0 的噪音（同自检的 keep 项口径） */}
+                    {settings.installLoaderLocally && (
+                        <SettingRow
+                            label="复用已装的 Loader"
+                            desc="按加载器与版本存进缓存，同版本的第二包起不再重下重装"
+                        >
+                            <Toggle
+                                size="md"
+                                checked={settings.reuseLoaderInstalls}
+                                onChange={(v) => void patch({ reuseLoaderInstalls: v })}
+                            />
+                        </SettingRow>
+                    )}
                 </Section>
 
                 {/* ---- 存储与缓存 ---- */}
@@ -429,39 +496,6 @@ export function SettingsPage() {
                             获取
                         </Btn>
                     </SettingRow>
-                    <SettingRow
-                        label="构建后自检"
-                        desc="打包完成后离线对账产物：模组是否齐、jar 是否完整、依赖是否被误剔"
-                    >
-                        <Toggle
-                            size="md"
-                            checked={settings.verifyAfterBuild}
-                            onChange={(v) => void patch({ verifyAfterBuild: v })}
-                        />
-                    </SettingRow>
-                    <SettingRow
-                        label="本机安装 Loader"
-                        desc="Forge / NeoForge 转换时在本机跑 installer，产物上传即可开服（需本机 Java）"
-                    >
-                        <Toggle
-                            size="md"
-                            checked={settings.installLoaderLocally}
-                            onChange={(v) => void patch({ installLoaderLocally: v })}
-                        />
-                    </SettingRow>
-                    {/* 关着「本机安装」时这一行没有对象可复用，留着就是个恒为 0 的噪音（同自检的 keep 项口径） */}
-                    {settings.installLoaderLocally && (
-                        <SettingRow
-                            label="复用已装的 Loader"
-                            desc="按加载器与版本存进缓存，同版本的第二包起不再重下重装"
-                        >
-                            <Toggle
-                                size="md"
-                                checked={settings.reuseLoaderInstalls}
-                                onChange={(v) => void patch({ reuseLoaderInstalls: v })}
-                            />
-                        </SettingRow>
-                    )}
                     <SettingRow
                         label="联网反查端信息"
                         desc="包内证据不足时，按 sha1 向 Modrinth 查该构建的端支持度并本地缓存"

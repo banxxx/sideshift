@@ -71,18 +71,29 @@ export function SettingRow({
     );
 }
 
-/** 提示行：gap 6 + 12px 图标 + 等宽 11 $text-3（Convert 摘要卡 i-row） */
+/**
+ * 提示行：gap 6 + 12px 图标 + 等宽 11 $text-3（Convert 摘要卡 i-row）。
+ * `tone="danger"` 是"这条不满足，去做点什么"那一档：整行换 $redstone，图标跟着换色——
+ * 只把图标换成三角形而文字还是一片灰，读起来像说明而不像拦阻。
+ */
 export function NoteRow({
     icon: Icon,
+    tone,
     children,
 }: {
     icon: LucideIcon;
+    tone?: "danger";
     children: ReactNode;
 }) {
     return (
         <div className="flex items-center gap-1.5">
-            <Icon className="size-3 shrink-0 text-text-3" />
-            <span className="font-mono text-[11px] leading-[16px] font-normal text-text-3">
+            <Icon className={cn("size-3 shrink-0", tone === "danger" ? "text-redstone" : "text-text-3")} />
+            <span
+                className={cn(
+                    "font-mono text-[11px] leading-[16px] font-normal",
+                    tone === "danger" ? "text-redstone" : "text-text-3"
+                )}
+            >
                 {children}
             </span>
         </div>

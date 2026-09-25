@@ -23,7 +23,6 @@ pub fn run() {
             commands::ensure_parsed,
             commands::list_mc_versions,
             commands::list_loader_versions,
-            commands::list_java_versions,
             commands::probe_java,
             commands::default_options,
             commands::list_pack_dirs,

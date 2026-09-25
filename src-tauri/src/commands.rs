@@ -109,33 +109,26 @@ pub async fn list_loader_versions(
         .map_err(|e| e.to_string())
 }
 
-#[tauri::command]
-pub fn list_java_versions() -> Vec<VersionOption> {
-    ["8", "16", "17", "21"]
-        .iter()
-        .map(|v| VersionOption {
-            value: v.to_string(),
-            label: format!("Java {v}"),
-            recommended: Some(*v == "17"),
-            group: None,
-        })
-        .collect()
-}
-
 /// 本机 JDK 探测（Rust: `probe_java`）。开关打开时这条要在**点转换之前**就在转换页上看得见：
 /// 跑不成即失败，可预见的失败不该排到几十秒下载后面才爆出来。
 ///
 /// `requiredVersion` 传当前方案那档 `javaVersion`（"17"）；传 null 只报「本机有什么」，不判够不够。
+/// `javaPath` 传用户在手选框里指定的那一枚（空/null = 自动）。回包里带 `installed` 全列表，
+/// 转换页那颗下拉的候选就是它 —— 所以这一条既是事前检查，也是候选来源，两处必是同一份事实。
 /// 每次调用都重跑一趟、不落缓存：用户装完 JDK 回到页面就该变绿，缓存一个会随环境漂移的判定
 /// 正是端判定那条链上被修掉过的病（见 `core::java` 模块头）。
 #[tauri::command]
-pub async fn probe_java(required_version: Option<String>) -> Result<JavaProbe, String> {
-    tauri::async_runtime::spawn_blocking(move || java::probe(&required_version))
+pub async fn probe_java(
+    required_version: Option<String>,
+    java_path: Option<String>,
+) -> Result<JavaProbe, String> {
+    tauri::async_runtime::spawn_blocking(move || java::probe(&required_version, &java_path))
         .await
         .map_err(|e| e.to_string())
 }
 
-/// 由 MC 版本推默认 Java（Mojang 官方要求线）
+/// 由 MC 版本推本次的 **Java 需求线**（Mojang 官方要求线）。它只做筛子与文案，不再是用户选项：
+/// 跑 installer 用哪一枚由 `javaPath` 定（空 = 在本机列表里按这条线自动挑）。
 fn java_for_mc(mc: &str) -> &'static str {
     let minor: i32 = mc
         .split('.')

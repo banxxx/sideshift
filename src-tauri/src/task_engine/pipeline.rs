@@ -504,6 +504,7 @@ async fn run_pipeline(app: AppHandle, state: Arc<AppState>, id: String) {
                     mc_version: &options.mc_version,
                     loader_version: &options.loader_version,
                     java_required: &options.java_version,
+                    java_selected: &options.java_path,
                     reuse: settings.reuse_loader_installs,
                     cache_dir: Path::new(&settings.cache_dir),
                     installer_jar: &jar,
@@ -841,6 +842,7 @@ async fn run_pipeline(app: AppHandle, state: Arc<AppState>, id: String) {
                 // 认 builder 的结论而不是取件时那个 jar 名：已装的包里 installer jar 根本不进包，
                 // 拿旧名字对账会把「装好了」报成「启动脚本指向的 jar 不在包里」
                 start_jar: built.start_jar.as_deref(),
+                args_files: &built.args_files,
                 installed: build_installed.is_some(),
                 generated: &built.generated,
                 expected_mod_files: &expected_mod_files,
@@ -1093,8 +1095,10 @@ struct InstallStage<'a> {
     loader: LoaderKind,
     mc_version: &'a str,
     loader_version: &'a str,
-    /// 本次转换要求的 Java 主版本线（`options.java_version`）——第一次真正被后端消费
+    /// 本次转换的 Java 需求线（`options.java_version`）：只当筛子，决定"够不够"，不决定用哪一枚
     java_required: &'a str,
+    /// 用户在转换页手选的那枚 JDK 绝对路径（`options.java_path`）；空串 = 自动挑"够格且最低"的那一枚
+    java_selected: &'a str,
     /// 设置里那颗「复用已装的 Loader」
     reuse: bool,
     cache_dir: &'a Path,
@@ -1134,6 +1138,7 @@ async fn run_installer_stage(
         mc_version,
         loader_version,
         java_required,
+        java_selected,
         reuse,
         cache_dir,
         installer_jar,
@@ -1141,14 +1146,19 @@ async fn run_installer_stage(
         cancel,
     } = stage;
     let (a, s, i) = (app.clone(), state.clone(), id.to_string());
-    let (mc, ver, java_req) = (mc_version.to_string(), loader_version.to_string(), java_required.to_string());
+    let (mc, ver, java_req, java_sel) = (
+        mc_version.to_string(),
+        loader_version.to_string(),
+        java_required.to_string(),
+        java_selected.trim().to_string(),
+    );
     let (cache, jar, scratch_dir) = (cache_dir.to_path_buf(), installer_jar.to_path_buf(), scratch.to_path_buf());
     let cancel_flag = cancel.clone();
     // 实时条与日志都认这一个名字：安装器没有「正在第几个包」的接口，主体只能说到这一档为止
     let subject = format!("{} {}-{}", loader.as_label(), mc, ver);
 
     let joined = tokio::task::spawn_blocking(move || -> Result<Installed, InstallStop> {
-        let probe = java::probe(&Some(java_req));
+        let probe = java::probe(&Some(java_req), &Some(java_sel));
         let Some(found) = probe.java_path else {
             return Err(InstallStop::Failed(TaskError {
                 stage: PipelineStage::Installer,
@@ -1161,6 +1171,18 @@ async fn run_installer_stage(
             }));
         };
         let java = PathBuf::from(&found);
+        // 快照里那枚已经不在这台机器上了（卸载、换盘符、换机）：退回自动那一枚继续跑，
+        // 但要把换过说在日志里 —— 不然报告写着 Java 21、日志用的却是另一枚，查起来两头对不上
+        if probe.selected_missing {
+            push_log(
+                &a,
+                &s,
+                &i,
+                PipelineStage::Installer,
+                LogLevel::Warn,
+                "方案里指定的那枚 Java 已不在本机，改用自动挑到的那一枚",
+            );
+        }
         push_log(
             &a,
             &s,
@@ -1374,7 +1396,11 @@ fn build_readme(
         (LoaderKind::Forge | LoaderKind::NeoForge, true) => {
             "Forge/NeoForge：加载器与依赖已在本机装好并打进包，解压后直接运行 start.bat / start.sh，无需联网安装".to_string()
         }
-        (LoaderKind::Fabric, _) => "Fabric 服务端：直接运行 start.bat / start.sh".to_string(),
+        (LoaderKind::Fabric, _) => {
+            // Fabric 没有 installer 可提前跑：包里那枚官方服务端 jar 自己是启动器，首启现拉 loader 与前置库
+            // （实测见 `.scratch/installer-probe`）。写"直接运行"会让人把那段联网等待当成卡死
+            "Fabric 服务端：start 脚本首次运行会联网装出加载器与前置库（需要本机 Java 与网络），之后同样以该脚本启动".to_string()
+        }
     };
     let mut lines = vec![
         "SideShift 转换报告".to_string(),

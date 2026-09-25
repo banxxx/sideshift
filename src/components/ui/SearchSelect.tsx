@@ -53,6 +53,7 @@ export function SearchSelect({
     searchPlaceholder = "搜索…",
     className,
     readOnly,
+    onOpen,
 }: {
     label?: string;
     /** chip 皮肤的前缀（"版本"/"加载器"/"类别"），field 皮肤用 label 走上方 */
@@ -67,6 +68,12 @@ export function SearchSelect({
     className?: string;
     /** 回看态：值照显示，chevron 与浮层一起收掉——留着箭头就是「能点却不能点」的假出口 */
     readOnly?: boolean;
+    /**
+     * 点开浮层那一刻回调一次。给候选会过期的那一档用（Java 下拉的候选是本机实探出来的，
+     * 用户装完一枚 JDK 回到页面时列表不会自己变）：点开就是"我要看现在有什么"，
+     * 这一趟重探花几十毫秒，省掉的是拿一份假列表让人挑。
+     */
+    onOpen?: () => void;
 }) {
     const [open, setOpen] = useState(false);
     const [query, setQuery] = useState("");
@@ -119,7 +126,13 @@ export function SearchSelect({
             )}
             <button
                 disabled={readOnly}
-                onClick={() => (open ? close() : setOpen(true))}
+                onClick={() => {
+                    if (open) close();
+                    else {
+                        onOpen?.();
+                        setOpen(true);
+                    }
+                }}
                 className={cn(
                     "flex items-center justify-between gap-2 border",
                     HOVER_FILL,

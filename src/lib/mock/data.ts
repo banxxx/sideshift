@@ -4,6 +4,7 @@
  */
 import type {
     ConversionOptions,
+    JavaInstall,
     JavaProbe,
     ModSearchPage,
     ModSearchQuery,
@@ -172,28 +173,37 @@ export const mockLoaderVersions: VersionOption[] = [
     { value: "0.14.22", label: "0.14.22" },
 ];
 
-/** Java 版本下拉 */
-export const mockJavaVersions: VersionOption[] = [
-    { value: "21", label: "Java 21", recommended: true },
-    { value: "17", label: "Java 17" },
+/**
+ * 这台"假机器"上躺着的三枚 JDK：两枚同版本的 21 是给下拉的 `(1)/(2)` 编号看的，
+ * 一枚 17 用来演「手选了一枚低于需求线」那一档的红字与拦截。顺序即候选顺序（JAVA_HOME → PATH）。
+ */
+const mockInstalls: JavaInstall[] = [
+    { major: 21, path: "C:\\Program Files\\Java\\jdk-21\\bin\\java.exe" },
+    { major: 21, path: "C:\\Users\\Ban\\scoop\\apps\\openjdk21\\current\\bin\\java.exe" },
+    { major: 17, path: "C:\\Program Files\\Eclipse Adoptium\\jdk-17\\bin\\java.exe" },
 ];
 
-/** 本机 JDK 探测（浏览器 dev）：这台"假机器"装着 Java 21，够 17 与 21 两档需求，选 8 才出 fail 那一行 */
-export function mockJavaProbe(requiredVersion: string | null): JavaProbe {
-    const major = 21;
+/** 本机 JDK 探测（浏览器 dev）：判据与文案都照 `core::java::probe` 那份写，别让两套环境各说一套 */
+export function mockJavaProbe(requiredVersion: string | null, javaPath: string | null): JavaProbe {
     const required = requiredVersion
         ? Number.parseInt(requiredVersion.replace(/\D/g, ""), 10)
         : Number.NaN;
     const need = Number.isNaN(required) ? null : required;
-    const ok = need === null || major >= need;
+    const wanted = javaPath?.trim() || null;
+    const hit = wanted ? mockInstalls.find((j) => j.path === wanted) : undefined;
+    const chosen =
+        hit ?? mockInstalls.find((j) => need === null || j.major >= need) ?? mockInstalls[0];
+    const enough = need === null || chosen.major >= need;
     return {
-        status: ok ? "pass" : "fail",
-        javaPath: "C:\\Program Files\\Java\\jdk-21\\bin\\java.exe",
-        major,
+        status: enough ? "pass" : "fail",
+        javaPath: chosen.path,
+        major: chosen.major,
         requiredMajor: need,
-        detail: ok
-            ? `已检测到 Java ${major}${need ? `（本次需要 Java ${need} 及以上）` : ""}`
-            : `本机 Java ${major} 低于本次需要的 Java ${need}，转换会在这里失败`,
+        installed: mockInstalls,
+        selectedMissing: !!wanted && !hit,
+        detail: enough
+            ? `已检测到 Java ${chosen.major}${need ? `（本次需要 Java ${need} 及以上）` : ""}`
+            : `本机 Java ${chosen.major} 低于本次需要的 Java ${need}，转换会在这里失败`,
     };
 }
 
@@ -252,6 +262,7 @@ export const mockDefaultOptions: ConversionOptions = {
     mcVersion: "1.20.1",
     loaderVersion: "0.15.3",
     javaVersion: "21",
+    javaPath: "",
     memoryMb: 6144,
     generateScripts: true,
     nogui: false,
@@ -267,7 +278,7 @@ export const mockDefaultOptions: ConversionOptions = {
     extraJvmArgs: "",
     outputOverride: "",
     keepDirs: [],
-    installLoaderLocally: false,
+    installLoaderLocally: true,
 };
 
 /** 包内可保留目录树（客户端保留目录弹窗演示数据；fileCount 递归统计） */

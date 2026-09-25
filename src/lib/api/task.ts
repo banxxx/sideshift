@@ -29,10 +29,30 @@ export async function startConversion(
     );
 }
 
+/**
+ * 最近一次 `listTasks()` 的结论（模块级，跨页面挂载存续）。
+ *
+ * 侧栏换页会把整页重挂载，而这份数据后端就在内存里，重读一遍必是同一份 ⇒ 页面却先画一帧
+ * 「正在读取任务…」再换掉它：那一换走的是 `Swap`（popLayout），退场的占位层被抽离文档流、
+ * **直接叠在新列表上面**，加上整页自己在淡入上浮，看着就是两层不同数据的页面糊在一起。
+ * 首帧拿它当初值就没这一拍了；真正的冷启动（还没读过）照旧走占位。
+ */
+let lastTaskList: ConversionTask[] | null = null;
+
+/** 上一趟读数；null = 这个进程还没成功读过一次（此时「没有任务」还不能宣布） */
+export function peekTasks(): ConversionTask[] | null {
+    return lastTaskList;
+}
+
 /** 任务列表（Rust: list_tasks） */
 export async function listTasks(): Promise<ConversionTask[]> {
-    if (!isTauri) return mock.mockListTasks();
-    return invokeOrMock("list_tasks", undefined, () => mock.mockListTasks());
+    // 只在成功那一路写缓存：读失败留下上一次的值，页面顶一帧旧数据后由 1s 轮询换回来，
+    // 比把「刚刚还有三条任务」当场抹成空列表好
+    const list = isTauri
+        ? await invokeOrMock<ConversionTask[]>("list_tasks", undefined, () => mock.mockListTasks())
+        : await mock.mockListTasks();
+    lastTaskList = list;
+    return list;
 }
 
 /** 单任务（Rust: get_task(id)） */
