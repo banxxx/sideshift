@@ -3,11 +3,12 @@
  * 四张卡都只是 options 的分段视图，统一走 patch 覆写单包参数（离开页面即丢弃）。
  * 卡高与行距按设计稿定死，改动前先确认不会让卡片随内容抖动。
  */
-import { Folder, Info, Plus, X } from "lucide-react";
+import { AlertTriangle, Folder, Info, Plus, X } from "lucide-react";
 import { useEffect, useState } from "react";
 import { AnimatePresence, motion } from "motion/react";
 import type {
     ConversionOptions,
+    JavaProbe,
     PackDirNode,
     PackManifest,
 } from "@/lib/types";
@@ -48,6 +49,7 @@ export function RuntimeEnvCard({
     mcOptions,
     loaderOptions,
     javaOptions,
+    javaProbe,
     readOnly,
 }: {
     options: ConversionOptions | null;
@@ -58,8 +60,15 @@ export function RuntimeEnvCard({
     mcOptions: SelectOption[];
     loaderOptions: SelectOption[];
     javaOptions: SelectOption[];
+    /** 本机 JDK 探测结果（只在开了「本机安装 Loader」时才有值；null = 还在探）。
+     *  回看态（`readOnly`）不传：那一态要核对的是「当时那套配置」，本机现在有没有 Java 与它无关。 */
+    javaProbe?: JavaProbe | null;
     readOnly?: boolean;
 }) {
+    const installLoader = options?.installLoaderLocally ?? false;
+    // Fabric 没有 installer 可跑（loader jar 与 launcher 直接从版本表取），这一档对本包是空开关。
+    // 与其让它静默无效，就地说一句：用户在全局设置里开着，回到这儿得知道为什么没反应。
+    const needsInstaller = manifest.loader !== "fabric";
     return (
         <Panel gap={14}>
             <PanelHead title="运行环境" />
@@ -101,6 +110,20 @@ export function RuntimeEnvCard({
                     onChange={(v) => patch({ generateScripts: v })}
                 />
             </InlineRow>
+            <InlineRow label="本机安装 Loader（产物上传即开服）">
+                <Toggle
+                    checked={installLoader}
+                    readOnly={readOnly}
+                    onChange={(v) => patch({ installLoaderLocally: v })}
+                />
+            </InlineRow>
+            {installLoader && !readOnly && (
+                <NoteRow icon={needsInstaller && javaProbe?.status === "fail" ? AlertTriangle : Info}>
+                    {!needsInstaller
+                        ? "Fabric 没有 installer 可跑，这一档对本包不生效"
+                        : (javaProbe?.detail ?? "正在检测本机 Java…")}
+                </NoteRow>
+            )}
         </Panel>
     );
 }

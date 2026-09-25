@@ -1,6 +1,7 @@
 /** 解析与运行环境选项（包选择 / 解析 / 版本列表 / 默认选项 / 包内目录树） */
 import type {
     ConversionOptions,
+    JavaProbe,
     PackDirNode,
     PackManifest,
     VersionOption,
@@ -68,6 +69,19 @@ export async function listLoaderVersions(
 export async function listJavaVersions(): Promise<VersionOption[]> {
     if (!isTauri) return mock.mockJavaVersions;
     return invokeOrMock("list_java_versions", undefined, () => mock.mockJavaVersions);
+}
+
+/**
+ * 本机 JDK 探测（Rust: probe_java）。开了「本机安装 Loader」才需要：那条路要就地跑 installer，
+ * 缺 JDK 或版本不够属于**可预见的失败**，要在点转换之前看得见。
+ * `requiredVersion` 传当前方案那档（"17"）；null 只报本机有什么，不判够不够。
+ * 后端每次真跑一趟 `java -version`、不落缓存，所以装完 JDK 回到页面就该变绿。
+ */
+export async function probeJava(requiredVersion: string | null): Promise<JavaProbe> {
+    if (!isTauri) return mock.mockJavaProbe(requiredVersion);
+    return invokeOrMock("probe_java", { requiredVersion }, () =>
+        mock.mockJavaProbe(requiredVersion)
+    );
 }
 
 /** 默认转换选项（Rust: default_options(manifest)） */

@@ -415,6 +415,29 @@ export function SettingsPage() {
                         />
                     </SettingRow>
                     <SettingRow
+                        label="本机安装 Loader"
+                        desc="Forge / NeoForge 转换时在本机跑 installer，产物上传即可开服（需本机 Java）"
+                    >
+                        <Toggle
+                            size="md"
+                            checked={settings.installLoaderLocally}
+                            onChange={(v) => void patch({ installLoaderLocally: v })}
+                        />
+                    </SettingRow>
+                    {/* 关着「本机安装」时这一行没有对象可复用，留着就是个恒为 0 的噪音（同自检的 keep 项口径） */}
+                    {settings.installLoaderLocally && (
+                        <SettingRow
+                            label="复用已装的 Loader"
+                            desc="按加载器与版本存进缓存，同版本的第二包起不再重下重装"
+                        >
+                            <Toggle
+                                size="md"
+                                checked={settings.reuseLoaderInstalls}
+                                onChange={(v) => void patch({ reuseLoaderInstalls: v })}
+                            />
+                        </SettingRow>
+                    )}
+                    <SettingRow
                         label="联网反查端信息"
                         desc="包内证据不足时，按 sha1 向 Modrinth 查该构建的端支持度并本地缓存"
                     >

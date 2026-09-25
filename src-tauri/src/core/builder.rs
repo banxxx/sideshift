@@ -436,6 +436,8 @@ mod tests {
             extra_jvm_args: String::new(),
             output_override: String::new(),
             keep_dirs: vec![],
+            // 其余字段铺 Default：把这份夹具写成全字段枚举，加一个 option 就得跟着补一处
+            ..Default::default()
         }
     }
 

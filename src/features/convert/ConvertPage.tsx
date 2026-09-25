@@ -29,6 +29,7 @@ import type {
     ConversionOptions,
     DownloadEstimate,
     EnvSource,
+    JavaProbe,
     ModDisposition,
     ModSearchResult,
     ModVersionEntry,
@@ -97,6 +98,8 @@ export function ConvertPage() {
     const [reclassifying, setReclassifying] = useState(false);
     /** 「清空我的修改」两段式确认（弹窗纪律：不用遮罩/确认框，第二次点击才执行） */
     const [confirmClear, setConfirmClear] = useState(false);
+    /** 本机 JDK 探测结论（只在开了「本机安装 Loader」时探；null = 还没探或不需要） */
+    const [javaProbe, setJavaProbe] = useState<JavaProbe | null>(null);
 
     /** 自动分类主入口：进页默认执行，「重新自动分类」手动再跑一次。
      *  手动处置存在 overrides，方案整体替换也不会覆盖用户改动。
@@ -159,6 +162,25 @@ export function ConvertPage() {
         void api.getSettings().then(setSettings);
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [manifest]);
+
+    // JDK 探测只在开关打开时跑：一次 `java -version` 是一个几十毫秒的子进程，
+    // 没人开着这一页时不该白付，开关关着时这条判定也没有读者。
+    // 每次换 Java 档位都重探一遍、不看缓存：可预见的失败要在点转换**之前**说出来，
+    // 而"本机现在到底有没有够格的 JDK"是会变的（用户装完回来就该变绿）。
+    useEffect(() => {
+        if (!options?.installLoaderLocally || !options.javaVersion) {
+            setJavaProbe(null);
+            return;
+        }
+        // 每轮 effect 各持一个 alive：换档时上一轮的迟到回包会被丢掉，不会盖成新结论的假数据
+        let alive = true;
+        void api.probeJava(options.javaVersion).then((p) => {
+            if (alive) setJavaProbe(p);
+        });
+        return () => {
+            alive = false;
+        };
+    }, [options?.installLoaderLocally, options?.javaVersion]);
 
     // 离开页面时把这一套方案交给 store（下次进来第一帧就是它）：值走 ref 传，
     // 免得每次勾选都惊动 App 级 context 让整棵页面树跟着重渲染。
@@ -591,6 +613,7 @@ export function ConvertPage() {
                             mcOptions={mcOptions}
                             loaderOptions={loaderOptions}
                             javaOptions={javaOptions}
+                            javaProbe={javaProbe}
                         />
                     </motion.div>
 

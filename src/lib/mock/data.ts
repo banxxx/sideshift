@@ -4,6 +4,7 @@
  */
 import type {
     ConversionOptions,
+    JavaProbe,
     ModSearchPage,
     ModSearchQuery,
     ModVersionEntry,
@@ -177,6 +178,25 @@ export const mockJavaVersions: VersionOption[] = [
     { value: "17", label: "Java 17" },
 ];
 
+/** 本机 JDK 探测（浏览器 dev）：这台"假机器"装着 Java 21，够 17 与 21 两档需求，选 8 才出 fail 那一行 */
+export function mockJavaProbe(requiredVersion: string | null): JavaProbe {
+    const major = 21;
+    const required = requiredVersion
+        ? Number.parseInt(requiredVersion.replace(/\D/g, ""), 10)
+        : Number.NaN;
+    const need = Number.isNaN(required) ? null : required;
+    const ok = need === null || major >= need;
+    return {
+        status: ok ? "pass" : "fail",
+        javaPath: "C:\\Program Files\\Java\\jdk-21\\bin\\java.exe",
+        major,
+        requiredMajor: need,
+        detail: ok
+            ? `已检测到 Java ${major}${need ? `（本次需要 Java ${need} 及以上）` : ""}`
+            : `本机 Java ${major} 低于本次需要的 Java ${need}，转换会在这里失败`,
+    };
+}
+
 /** Online Add 搜索结果（四页数据，与设计稿行对齐；两侧支持度按 Modrinth 实测值） */
 const searchPool = [
     { id: "krypton", name: "Krypton", description: "轻量级协议层优化，显著降低服务端网络开销", author: "modmuss50", downloads: 12_040_000, clientSide: "unsupported", serverSide: "required" },
@@ -247,6 +267,7 @@ export const mockDefaultOptions: ConversionOptions = {
     extraJvmArgs: "",
     outputOverride: "",
     keepDirs: [],
+    installLoaderLocally: false,
 };
 
 /** 包内可保留目录树（客户端保留目录弹窗演示数据；fileCount 递归统计） */

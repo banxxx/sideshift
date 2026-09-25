@@ -33,6 +33,13 @@ export interface AppSettings {
      * 时给出去申请的出口，而不是让用户对着一条 403 猜原因。只存本机 settings.json，不进日志。
      */
     curseforgeApiKey?: string | null;
+    /**
+     * 本机执行 loader installer（Forge / NeoForge 产物「上传即跑」的前提：装出 `libraries/` 与服务端本体）。
+     * 默认关：关掉时打包链路与旧产物逐字节一致。代价是产物要在服务器首次联网自装。
+     */
+    installLoaderLocally: boolean;
+    /** 装出来的 loader 留在 `{cacheDir}/installs/` 供后续任务复用（默认开）；关 = 每次现装现丢 */
+    reuseLoaderInstalls: boolean;
 }
 
 /**

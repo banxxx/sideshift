@@ -11,6 +11,7 @@ use crate::core::cleanup;
 use crate::core::detector;
 use crate::core::downloader::Downloader;
 use crate::core::env;
+use crate::core::java;
 use crate::core::parser;
 use crate::core::parser::ParsedPack;
 use crate::models::*;
@@ -121,6 +122,19 @@ pub fn list_java_versions() -> Vec<VersionOption> {
         .collect()
 }
 
+/// 本机 JDK 探测（Rust: `probe_java`）。开关打开时这条要在**点转换之前**就在转换页上看得见：
+/// 跑不成即失败，可预见的失败不该排到几十秒下载后面才爆出来。
+///
+/// `requiredVersion` 传当前方案那档 `javaVersion`（"17"）；传 null 只报「本机有什么」，不判够不够。
+/// 每次调用都重跑一趟、不落缓存：用户装完 JDK 回到页面就该变绿，缓存一个会随环境漂移的判定
+/// 正是端判定那条链上被修掉过的病（见 `core::java` 模块头）。
+#[tauri::command]
+pub async fn probe_java(required_version: Option<String>) -> Result<JavaProbe, String> {
+    tauri::async_runtime::spawn_blocking(move || java::probe(&required_version))
+        .await
+        .map_err(|e| e.to_string())
+}
+
 /// 由 MC 版本推默认 Java（Mojang 官方要求线）
 fn java_for_mc(mc: &str) -> &'static str {
     let minor: i32 = mc
@@ -146,11 +160,17 @@ fn java_for_mc(mc: &str) -> &'static str {
 
 #[tauri::command]
 pub fn default_options(state: S<'_>, manifest: PackManifest) -> ConversionOptions {
-    let loader_version = lock(&state)
-        .parsed_by_name
-        .get(&manifest.file_name)
-        .and_then(|p| p.loader_version.clone())
-        .unwrap_or_default();
+    let (loader_version, install_loader_locally) = {
+        let inner = lock(&state);
+        (
+            inner
+                .parsed_by_name
+                .get(&manifest.file_name)
+                .and_then(|p| p.loader_version.clone())
+                .unwrap_or_default(),
+            inner.settings.install_loader_locally,
+        )
+    };
     ConversionOptions {
         mc_version: manifest.mc_version.clone(),
         loader_version,
@@ -159,6 +179,9 @@ pub fn default_options(state: S<'_>, manifest: PackManifest) -> ConversionOption
         generate_scripts: true,
         nogui: true,
         agree_eula: false,
+        // 全局值只在这里当**初值**用一次：用户在本包改过就存进自己那份，之后重试与回看都读快照，
+        // 不再回头看全局（否则同一份方案隔几天重跑会做出不同的包）
+        install_loader_locally,
         ..Default::default()
     }
 }

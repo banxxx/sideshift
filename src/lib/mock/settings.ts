@@ -28,6 +28,9 @@ export const mockDefaultSettings: AppSettings = {
     updateChannel: null,
     // dev 里默认没配 Key：这样「切到 CurseForge 给出去申请的出口」这条路径在浏览器里也能演
     curseforgeApiKey: null,
+    // 本机装 Loader 默认关（与 Rust 一致）：开着才出 JDK 判定那一行
+    installLoaderLocally: false,
+    reuseLoaderInstalls: true,
 };
 
 /**

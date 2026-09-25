@@ -282,6 +282,13 @@ pub struct ConversionOptions {
     /* ---- 客户端保留目录 ---- */
     /// 需要原样带入服务端的包内目录：相对路径（任意层级，如 kubejs/client_scripts），按前缀匹配
     pub keep_dirs: Vec<String>,
+    /* ---- 本机安装 Loader ---- */
+    /// 本次转换是否在本机跑 loader installer（Forge / NeoForge 产物「上传即跑」的前提）。
+    ///
+    /// **显式 bool，不引入 `Option`/第三态**：建包时 `default_options()` 从全局取初值，用户改过就存自己那份。
+    /// 于是重试与任务快照永远按快照走——不存在"跟随全局"那种会随设置漂移的语义（同一份方案隔几天
+    /// 重跑做出不一样的包，比包本身有问题更难查）。老存档缺这个字段走容器级 `serde(default)` = false。
+    pub install_loader_locally: bool,
 }
 
 impl Default for ConversionOptions {
@@ -305,6 +312,7 @@ impl Default for ConversionOptions {
             extra_jvm_args: String::new(),
             output_override: String::new(),
             keep_dirs: Vec::new(),
+            install_loader_locally: false,
         }
     }
 }
@@ -489,6 +497,23 @@ pub struct VersionOption {
     pub group: Option<String>,
 }
 
+/// JDK 探测结果（Rust: probe_java）。转换页在点「开始转换」**之前**就把「本机跑 installer 跑不跑得起来」
+/// 显示出来：可预见的失败不该等 30 秒下载走完才说。状态口径沿用 [`CheckStatus`]，
+/// 前端那套 Pass/Warn/Fail 的配色与图标不用再分叉一份。
+#[derive(Serialize, Deserialize, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct JavaProbe {
+    pub status: CheckStatus,
+    /// 选中那枚 java 的绝对路径；None = 本机压根没找到
+    pub java_path: Option<String>,
+    /// 解析出的主版本（8/17/21/25…）；`java -version` 认不出格式时为 None
+    pub major: Option<u32>,
+    /// 本次转换的最低需求线（由 MC 版本推的那档）；没传需求时 None = 只报有什么、不判够不够
+    pub required_major: Option<u32>,
+    /// 一句话结论（带真实数字与落点），转换页那行外显直接显示
+    pub detail: String,
+}
+
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub enum ModSource {
@@ -637,6 +662,16 @@ pub struct AppSettings {
     /// 这是用户自己的凭据：只写在 settings.json（他本机数据根），不进日志、不进仓库。
     #[serde(default)]
     pub curseforge_api_key: Option<String>,
+    /// 本机执行 loader installer（Forge / NeoForge 想要「上传即跑」的前提：装出 `libraries/` 与服务端本体）。
+    ///
+    /// **默认关**：关掉时打包链路与关掉后的旧产物逐字节一致，一行分支都不进。
+    /// 代价是产物要在服务器首次联网自装，老 Forge 那条连 `run.bat` 都不生成。
+    #[serde(default)]
+    pub install_loader_locally: bool,
+    /// 装出来的 loader 留在 `{cache_dir}/installs/{loader}/{mc}-{ver}/` 供后续任务复用（默认开）。
+    /// 关掉 = 每次现装现丢，装在任务的临时目录里、打完包即删：省磁盘但每次都吃一遍下载。
+    #[serde(default = "default_reuse_installs")]
+    pub reuse_loader_installs: bool,
 }
 
 /// 更新渠道（Settings · 外观与关于）：正式版 / Beta，对应 GitHub release 的 prerelease 标志
@@ -675,6 +710,11 @@ pub struct UpdateInfo {
 }
 
 fn default_online_classify() -> bool {
+    true
+}
+
+/// 复用安装缓存默认开：一次装好的 Forge 服务端 100–160 MB，重装的下载代价没人该反复付
+fn default_reuse_installs() -> bool {
     true
 }
 
@@ -752,6 +792,8 @@ impl Default for AppSettings {
             auto_classify_online: true,
             update_channel: None,
             curseforge_api_key: None,
+            install_loader_locally: false,
+            reuse_loader_installs: true,
         }
     }
 }
@@ -764,16 +806,11 @@ impl AppSettings {
         // 一段一段 join：写成 join("SideShift/output") 在 Windows 上会得到
         // `C:\Users\you\SideShift/output` 这种混合分隔符，见 native_path 的说明
         let (output, cache) = crate::core::data_root::layout_in(root);
+        // 其余字段直接铺 `Default::default()`：两份字面量各写一遍，加设置时漏一份是迟早的事
         Self {
             output_dir: native_path(&output.display().to_string()),
             cache_dir: native_path(&cache.display().to_string()),
-            strip_client_only: true,
-            verify_after_build: false,
-            download_source: DownloadSource::Official,
-            concurrency: 6,
-            auto_classify_online: true,
-            update_channel: None,
-            curseforge_api_key: None,
+            ..Self::default()
         }
     }
 
@@ -846,6 +883,25 @@ mod tests {
             "downloadSource":"official","concurrency":6,"autoClassifyOnline":true}"#;
         let s: AppSettings = serde_json::from_str(legacy).expect("旧设置应能加载");
         assert_eq!(s.curseforge_api_key, None);
+    }
+
+    /// 旧 settings.json / 旧任务存档都没有装 Loader 那三颗开关：
+    /// 必须加载成功，且默认值不能反过来——本机安装默认**关**（关掉才是旧产物那份逐字节一致的行为），
+    /// 复用默认**开**（一次装好的服务端 100–160 MB，不该让老用户从此每次重下重装）。
+    #[test]
+    fn loader_switch_defaults_hold_for_legacy_payloads() {
+        let legacy = r#"{"outputDir":"o","cacheDir":"c","stripClientOnly":true,"verifyAfterBuild":false,
+            "downloadSource":"official","concurrency":6,"autoClassifyOnline":true}"#;
+        let s: AppSettings = serde_json::from_str(legacy).expect("旧设置应能加载");
+        assert!(!s.install_loader_locally, "本机安装默认必须关");
+        assert!(s.reuse_loader_installs, "复用默认必须开");
+
+        // 任务快照里的方案同理：老存档缺字段 = 没开，不能跟着全局设置的当前值漂移
+        let opts: ConversionOptions =
+            serde_json::from_str(r#"{"mcVersion":"1.20.1","loaderVersion":"47.4.10"}"#)
+                .expect("旧方案存档应能加载");
+        assert!(!opts.install_loader_locally);
+        assert_eq!(opts.memory_mb, 4096, "其余字段走 Default，别悄悄改了老任务的档位");
     }
 
     /// 粘贴进来的 Key 常带空白：带着空格发出去只会收到一条读不懂的 403，所以读写两端都归位；
