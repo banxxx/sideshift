@@ -21,6 +21,7 @@ import { CARD_RISE, PAGE_RISE } from "@/lib/page-motion";
 import { usePackStore } from "@/lib/pack-store";
 import { switchTheme, useTheme, type Theme } from "@/lib/theme";
 import type { AppSettings, CacheUsage, CleanReport, UpdateChannel } from "@/lib/types";
+import { cn } from "@/lib/utils";
 import {
     Btn,
     IconBtn,
@@ -74,6 +75,15 @@ const CLEAN_LABEL: Record<CleanKind, string> = {
 /** 灰掉也要能悬出原因：Btn/IconBtn 给禁用态关了 pointer-events，不放开就永远弹不出 Tip */
 const STILL_HOVERABLE = "disabled:pointer-events-auto disabled:cursor-not-allowed";
 
+/** 刷新图标转圈的最短时长，同时也是**一圈的周期**（下面那条 `animate-[spin_…]` 里同一个数）。
+ *  要的是"看得见跑了一趟"，不是精确耗时：扫描常在半秒内回来，兜住这一档才不会读成"按了没反应"。
+ *  周期没有沿用 Tailwind 的 `animate-spin`（1s 一圈）——600ms 的窗口只够转半圈，
+ *  停在倒过来的姿势上，看着像图标歪了一下又弹回去。 */
+const SPIN_MIN_MS = 600;
+/** 周期写在字面量里，不是拼出来的：Tailwind 只扫源码字面，插值进类名的工具类不会生成 CSS。
+ *  所以这个 600ms 必须与上面那个数手动同步。 */
+const SPIN_CLASS = "[&>svg]:animate-[spin_600ms_linear_infinite]";
+
 /** 无用文件的三项合计：一个孤儿暂存目录算一项，与后端报账口径一致 */
 const junkCount = (u: CacheUsage) => u.partsCount + u.orphanCount + u.emptyDirs;
 const junkBytes = (u: CacheUsage) => u.partsBytes + u.orphanBytes;
@@ -102,6 +112,8 @@ export function SettingsPage() {
     const [settings, setSettings] = useState<AppSettings | null>(null);
     const [sources, setSources] = useState<SelectOption[]>([]);
     const [usage, setUsage] = useState<CacheUsage | null>(null);
+    /** 扫描占用进行中：只喂给刷新图标的转圈动效和它的禁用态 */
+    const [refreshing, setRefreshing] = useState(false);
     const [cleaning, setCleaning] = useState<CleanKind | null>(null);
     /** 改到影响判定口径的全局开关时，作废转换页那份跨页草稿（见 pack-store） */
     const { clearDraft } = usePackStore();
@@ -126,12 +138,22 @@ export function SettingsPage() {
             .catch((e) => notify(`读取下载源失败：${errOf(e)}`, "error"));
     }, []);
 
-    /** 占用数字读的是磁盘：只在进页、换缓存目录、清理完这三件事之后各扫一遍，不轮询 */
+    /** 占用数字读的是磁盘：只在进页、换缓存目录、清理完这三件事之后各扫一遍，不轮询。
+     * `refreshing` 是这一趟的在飞标记——刷新键是纯图标按钮，没有「统计中…」的文字可挂，
+     * 只能靠它让图标转起来。收尾跟着 promise 走（自己掐表准不了真实耗时），
+     * 但补一个最短时长：小缓存十几毫秒就回来，true→false 挤进同一次绘制等于一帧没画。 */
     const readUsage = useCallback(() => {
+        const startedAt = performance.now();
+        setRefreshing(true);
         void api
             .getCacheUsage()
             .then(setUsage)
-            .catch((e) => notify(`读取缓存占用失败：${errOf(e)}`, "error"));
+            .catch((e) => notify(`读取缓存占用失败：${errOf(e)}`, "error"))
+            .finally(() => {
+                const left = SPIN_MIN_MS - (performance.now() - startedAt);
+                if (left > 0) window.setTimeout(() => setRefreshing(false), left);
+                else setRefreshing(false);
+            });
     }, []);
 
     // 等设置到手再扫：cacheDir 一改统计对象就换了个目录，旧数字立刻是假的，所以跟着它重读
@@ -319,8 +341,11 @@ export function SettingsPage() {
                         <IconBtn
                             icon={RefreshCw}
                             title="重新统计占用"
-                            className={STILL_HOVERABLE}
-                            disabled={!!cleaning}
+                            /* 转圈只给图标本体（`[&>svg]`），不给按钮：整块转会把悬停底色和
+                             * 按压缩放一起带歪。禁用态照 `cleaning` 那一档的规矩灰下来，
+                             * 顺带挡住连点——两趟扫描并发回话会是后发先至的假数字。 */
+                            className={cn(STILL_HOVERABLE, refreshing && SPIN_CLASS)}
+                            disabled={!!cleaning || refreshing}
                             onClick={() => readUsage()}
                         />
                         <Btn

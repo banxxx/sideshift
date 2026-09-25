@@ -304,7 +304,7 @@ export function ConvertPage() {
             if (m.needsDownload) downloadBytes += m.sizeBytes ?? 0;
             else fromPackBytes += m.sizeBytes ?? 0;
         }
-        // 加载器本体：Fabric 一体化 server jar 约 25MB，Forge/NeoForge installer 约 12MB
+        // 加载器本体：Fabric 官方 server jar 约 25MB，Forge/NeoForge installer 约 12MB
         downloadBytes += manifest?.loader === "fabric" ? 25_000_000 : 12_000_000;
         return { downloadBytes, fromPackBytes, complete: false };
     }, [activeMods, manifest]);

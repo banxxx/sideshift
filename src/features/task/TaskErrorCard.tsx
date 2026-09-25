@@ -8,9 +8,10 @@
  *  - parser     解析失败    redstone X + 文件名 + 重新选择 / 查看解析日志
  *  - detector   依赖冲突    gold refresh-cw + 警告芯片 + 查看处置建议
  *  - downloader 下载失败    redstone download + 已重试 N 次 + 重试（accent）
+ *  - installer  本机安装失败 redstone package-open + 重试（安装器没有退出码块，原因全在 detail 里）
  *  - builder    构建失败    redstone X + exit code + 日志尾块 + 复制诊断信息 / 重试构建
  */
-import { Download, RefreshCw, X, type LucideIcon } from "lucide-react";
+import { Download, PackageOpen, RefreshCw, X, type LucideIcon } from "lucide-react";
 import type { TaskError } from "@/lib/types";
 import { truncateMiddle } from "@/lib/format";
 import { Btn, LinkBtn, ToneChip } from "@/components/ui";
@@ -36,6 +37,7 @@ const STAGE_STYLE: Record<TaskError["stage"], { icon: LucideIcon; gold?: boolean
     parser: { icon: X },
     detector: { icon: RefreshCw, gold: true },
     downloader: { icon: Download },
+    installer: { icon: PackageOpen },
     builder: { icon: X },
 };
 

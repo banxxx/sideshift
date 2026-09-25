@@ -1,10 +1,12 @@
-//! 四阶段流水线：parser ≤15 · detector ≤30 · downloader ≤82 · builder ≤100。
-//! 阶段进度口径与前端 mock 引擎一致。
+//! 流水线：parser ≤15 · detector ≤30 ·（可选）本机装加载器 ≤42 · 取件 ≤82 · builder ≤100。
+//! 阶段进度口径与前端 mock 引擎一致。本机安装排在模组取件**之前**（跑不成越早停越好），
+//! 它从下载档头部切走 30→42 这一格；开关关着时主轮仍从 30 起，整条链路的写值逐字节相同。
 
 use std::collections::{HashMap, HashSet};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
+use std::time::Instant;
 
 use tauri::AppHandle;
 
@@ -13,12 +15,15 @@ use crate::core::detector;
 use crate::core::downloader::{
     DownloadError, Downloader, Fetch, FetchSource, ItemSpec, TransferProgress,
 };
+use crate::core::installer::{self, InstallEvent, Installed};
+use crate::core::java;
 use crate::core::parser::{self, ParsedPack};
 use crate::core::verify;
 use crate::models::*;
 use super::activity::{
     apply_fetch_counts, build_progress, fetch_group_label, flush_groups, group_line,
-    group_plan_of, reports_per_line, FetchGroups, NetActivity, ZipActivity,
+    group_plan_of, install_progress, reports_per_line, FetchGroups, NetActivity, ZipActivity,
+    FETCH_FROM, INSTALL_FROM, INSTALL_TO, LOADER_JAR_TO,
 };
 use super::events::{
     emit_progress, fail, log_line, log_update, notify_done, push_line, push_log, update,
@@ -212,7 +217,7 @@ async fn run_pipeline(app: AppHandle, state: Arc<AppState>, id: String) {
         .join("staging");
     let _ = std::fs::remove_dir_all(&staging);
     let mods_dir = staging.join("mods");
-    let dl = Downloader::new(
+    let mut dl = Downloader::new(
         PathBuf::from(&settings.cache_dir),
         settings.concurrency as usize,
     )
@@ -231,6 +236,9 @@ async fn run_pipeline(app: AppHandle, state: Arc<AppState>, id: String) {
     let mut used_names: HashSet<String> = HashSet::new();
     let mut server_jar_name: Option<String> = None;
     let mut installer_jar_name: Option<String> = None;
+    // 开了本机安装时，官方安装器 jar 被提前到「阶段 2.5」单独取，不进主轮计划：
+    // 跑不成要越早停越好，不能让用户等完几 GB 模组才发现任务要重跑
+    let mut loader_first: Option<ItemSpec> = None;
 
     // 3.1 保留 + 新增的模组
     for row in plan.iter().filter(|m| m.disposition != ModDisposition::Remove) {
@@ -421,14 +429,14 @@ async fn run_pipeline(app: AppHandle, state: Arc<AppState>, id: String) {
             dl.attach_side_sha1(&mut spec).await;
             installer_jar_name = Some(spec.file_name.clone());
             spec.dest = staging.join(&spec.file_name);
-            items.push(spec);
+            push_loader_item(options.install_loader_locally, &mut items, &mut loader_first, spec);
         }
         LoaderKind::NeoForge => {
             let mut spec = dl.neoforge_installer(&options.loader_version);
             dl.attach_side_sha1(&mut spec).await;
             installer_jar_name = Some(spec.file_name.clone());
             spec.dest = staging.join(&spec.file_name);
-            items.push(spec);
+            push_loader_item(options.install_loader_locally, &mut items, &mut loader_first, spec);
         }
     }
 
@@ -447,6 +455,87 @@ async fn run_pipeline(app: AppHandle, state: Arc<AppState>, id: String) {
             ),
         );
     }
+
+    /* ---- 阶段 2.5 · 加载器就位（本机执行官方安装器，排在模组取件之前） ---- */
+    // 排在这里的理由只有一条：本机装不出来是这条链路上最贵的失败（整条任务要重跑），
+    // 放在几十 MB～几 GB 的模组下载之后，等于让用户等完才发现。
+    // Fabric 走不到这里 —— 它没有安装器 jar 可提前（见 3.3 只在 Forge/NeoForge 分支落 loader_first）
+    let cancel = state
+        .inner
+        .lock()
+        .unwrap()
+        .cancel
+        .get(&id)
+        .cloned()
+        .unwrap_or_else(|| Arc::new(AtomicBool::new(false)));
+    // 装好的 loader 树：打包阶段并进 staging（并进去之后 staging 就等于产物内容）
+    let mut installed: Option<Installed> = None;
+    // 主轮取件的起脚：没走这一档仍是 30→82，写值与没有安装档时逐字节相同
+    let fetch_from = match loader_first {
+        Some(spec) => {
+            let jar = spec.dest.clone();
+            if let Err(e) = prefetch_loader_jar(&app, &state, &id, &mut dl, &cancel, spec).await {
+                map_download_error(&app, &state, &id, &e);
+                return;
+            }
+            if !is_active(&state, &id) {
+                push_log(
+                    &app,
+                    &state,
+                    &id,
+                    PipelineStage::Downloader,
+                    LogLevel::Warn,
+                    "任务已取消，取件中止",
+                );
+                return;
+            }
+            // 复用关时装进任务私有目录：remove_task_staging 收的是 cache/tasks/{id} 整个目录，
+            // 「用完即弃」不用再另起一条回收路径
+            let scratch = staging
+                .parent()
+                .map(|p| p.join("install-scratch"))
+                .unwrap_or_else(|| staging.join("install-scratch"));
+            match run_installer_stage(
+                &app,
+                &state,
+                &id,
+                InstallStage {
+                    loader: parsed.manifest.loader,
+                    mc_version: &options.mc_version,
+                    loader_version: &options.loader_version,
+                    java_required: &options.java_version,
+                    reuse: settings.reuse_loader_installs,
+                    cache_dir: Path::new(&settings.cache_dir),
+                    installer_jar: &jar,
+                    scratch: &scratch,
+                    cancel: &cancel,
+                },
+            )
+            .await
+            {
+                Ok(v) => {
+                    installed = Some(v);
+                    INSTALL_TO
+                }
+                Err(InstallStop::Cancelled) => {
+                    push_log(
+                        &app,
+                        &state,
+                        &id,
+                        PipelineStage::Installer,
+                        LogLevel::Warn,
+                        "任务已取消，本机安装已中止",
+                    );
+                    return;
+                }
+                Err(InstallStop::Failed(e)) => {
+                    fail(&app, &state, &id, e);
+                    return;
+                }
+            }
+        }
+        None => FETCH_FROM,
+    };
 
     let total = items.len() as u32;
     // 自检要对账「计划落进 mods/ 的文件」，items 随后被 download_all 吃掉，此刻快照一次
@@ -518,14 +607,6 @@ async fn run_pipeline(app: AppHandle, state: Arc<AppState>, id: String) {
     let net_actual = Arc::new(std::sync::atomic::AtomicU32::new(0));
     let bytes_actual = Arc::new(std::sync::atomic::AtomicU64::new(0));
     let (net_a, bytes_a) = (net_actual.clone(), bytes_actual.clone());
-    let cancel = state
-        .inner
-        .lock()
-        .unwrap()
-        .cancel
-        .get(&id)
-        .cloned()
-        .unwrap_or_else(|| Arc::new(AtomicBool::new(false)));
     let groups = Arc::new(Mutex::new(FetchGroups::new(group_plan)));
     /* 联网实时条：字节级回调比日志密两个数量级，只攒账、按窗口出一条 activity；
        日志仍然一个条目完成一行 */
@@ -585,7 +666,7 @@ async fn run_pipeline(app: AppHandle, state: Arc<AppState>, id: String) {
                     level,
                     &msg,
                     move |t| {
-                        apply_fetch_counts(t, done, tot, &net_u, &bytes_u);
+                        apply_fetch_counts(t, done, tot, &net_u, &bytes_u, fetch_from);
                         t.activity = snap;
                     },
                 );
@@ -605,7 +686,7 @@ async fn run_pipeline(app: AppHandle, state: Arc<AppState>, id: String) {
                         PipelineStage::Downloader,
                         LogLevel::Info,
                         &group_line(&g),
-                        move |t| apply_fetch_counts(t, g.done, g.total, &net_u, &bytes_u),
+                        move |t| apply_fetch_counts(t, g.done, g.total, &net_u, &bytes_u, fetch_from),
                     );
                 }
                 None => {
@@ -615,7 +696,7 @@ async fn run_pipeline(app: AppHandle, state: Arc<AppState>, id: String) {
                             &app_f,
                             &state_f,
                             &id_f,
-                            |t| apply_fetch_counts(t, done, tot, &net_u, &bytes_u),
+                            |t| apply_fetch_counts(t, done, tot, &net_u, &bytes_u, fetch_from),
                             true,
                         );
                     }
@@ -626,7 +707,7 @@ async fn run_pipeline(app: AppHandle, state: Arc<AppState>, id: String) {
     // 兜底只给「跑完了但账本没对上」的正常任务补行；取消/失败不补，
     // 否则会把半截目录说成取件完成，还会覆写已取消任务的进度
     if dl_result.is_ok() && is_active(&state, &id) {
-        flush_groups(&app, &state, &id, &groups, &net_actual, &bytes_actual);
+        flush_groups(&app, &state, &id, &groups, &net_actual, &bytes_actual, fetch_from);
     }
     if let Err(e) = dl_result {
         map_download_error(&app, &state, &id, &e);
@@ -658,7 +739,15 @@ async fn run_pipeline(app: AppHandle, state: Arc<AppState>, id: String) {
         t.activity = None;
     }, true);
     let output_name = output_name_of(&pack.file_name);
-    let readme = build_readme(&plan, &counts, &review, parsed.manifest.loader, &options.keep_dirs, options.agree_eula);
+    let readme = build_readme(
+        &plan,
+        &counts,
+        &review,
+        parsed.manifest.loader,
+        &options.keep_dirs,
+        options.agree_eula,
+        installed.is_some(),
+    );
     let build_state = state.clone();
     let build_app = app.clone();
     // 本次包的输出目录覆写：空则回落全局设置
@@ -683,7 +772,7 @@ async fn run_pipeline(app: AppHandle, state: Arc<AppState>, id: String) {
     let build_cancel = cancel.clone();
     // 自检开关：打包一结束、staging 还没回收时对账产物（离线六项，零子进程）
     let verify_on = settings.verify_after_build;
-    let build_start_jar = loader_jar.clone();
+    let build_installed = installed.take();
     let build_result = tokio::task::spawn_blocking(move || {
         let mut agg = ZipActivity::default();
         let (a, s, i) = (build_app, build_state, build_id);
@@ -696,6 +785,7 @@ async fn run_pipeline(app: AppHandle, state: Arc<AppState>, id: String) {
             loader: build_loader,
             server_jar_name,
             installer_jar_name,
+            installed: build_installed.as_ref(),
             readme_lines: readme,
         };
         // 打包是 CPU + 磁盘活，进度事件按窗口节流；取消后不再写任务表
@@ -748,7 +838,10 @@ async fn run_pipeline(app: AppHandle, state: Arc<AppState>, id: String) {
                 options: &build_options,
                 loader: build_loader,
                 plan: &plan,
-                start_jar: build_start_jar.as_deref(),
+                // 认 builder 的结论而不是取件时那个 jar 名：已装的包里 installer jar 根本不进包，
+                // 拿旧名字对账会把「装好了」报成「启动脚本指向的 jar 不在包里」
+                start_jar: built.start_jar.as_deref(),
+                installed: build_installed.is_some(),
                 generated: &built.generated,
                 expected_mod_files: &expected_mod_files,
                 expected_keep_dirs: &kept_by_dir,
@@ -917,6 +1010,7 @@ async fn run_pipeline(app: AppHandle, state: Arc<AppState>, id: String) {
             file_count: built.entries as u32,
             generated_files: built.generated.clone(),
             start_jar: built.start_jar.clone(),
+            installed: built.installed,
             checks,
         };
         emit_progress(&app, t);
@@ -924,6 +1018,307 @@ async fn run_pipeline(app: AppHandle, state: Arc<AppState>, id: String) {
     }
     notify_done(&app, &id);
     save_tasks(&app, &state.inner.lock().unwrap());
+}
+
+/// 开了「本机安装 Loader」⇒ 官方安装器 jar 从主轮计划里拎出来提前取（阶段 2.5），
+/// 关着 ⇒ 一切照旧，它仍是取件计划里的一项。判据只在这一个函数里，两家不会走偏
+fn push_loader_item(
+    install: bool,
+    items: &mut Vec<ItemSpec>,
+    first: &mut Option<ItemSpec>,
+    spec: ItemSpec,
+) {
+    if install {
+        *first = Some(spec);
+    } else {
+        items.push(spec);
+    }
+}
+
+/// 单独取一枚加载器 jar（本机安装的前置件）。走同一个 `download_all`，所以重试、sha1 校验、
+/// 下载缓存那套口径与主轮完全一致。实时条用**它自己的**账本（`items_total = 1`）：
+/// 拿整包的计划量当分母会把「十几 MB 的安装器」画成「整包下好了 5%」。
+async fn prefetch_loader_jar(
+    app: &AppHandle,
+    state: &Arc<AppState>,
+    id: &str,
+    dl: &mut Downloader,
+    cancel: &Arc<AtomicBool>,
+    spec: ItemSpec,
+) -> Result<(), DownloadError> {
+    let agg = Arc::new(Mutex::new(NetActivity::new(spec.size_bytes, 1)));
+    let (app_t, state_t, id_t) = (app.clone(), state.clone(), id.to_string());
+    let (agg_t, cancel_t) = (agg.clone(), cancel.clone());
+    dl.set_transfer(Arc::new(move |p: &TransferProgress| {
+        if cancel_t.load(Ordering::Relaxed) {
+            return;
+        }
+        // 锁顺序照旧：先账本、后任务表
+        if let Some(info) = agg_t.lock().unwrap().record(p, 0) {
+            update(&app_t, &state_t, &id_t, |t| t.activity = Some(info), true);
+        }
+    }));
+    let (app_f, state_f, id_f) = (app.clone(), state.clone(), id.to_string());
+    let cancel_f = cancel.clone();
+    let res = dl
+        .download_all(vec![spec], cancel.clone(), move |done, tot, oc| {
+            if cancel_f.load(Ordering::Relaxed) || done < tot {
+                return;
+            }
+            // 一项的爬坡没有意义（只有落位那一刻），总条交给 30→34 这一步，
+            // 途中那十几 MB 由实时条按真实字节走
+            let _ = done;
+            let (a, s, i) = (app_f.clone(), state_f.clone(), id_f.clone());
+            let line = format!("安装器就位：{} · {}", oc.file_name, fmt_size(oc.bytes));
+            log_update(
+                &a,
+                &s,
+                &i,
+                PipelineStage::Downloader,
+                if oc.retries > 0 { LogLevel::Warn } else { LogLevel::Info },
+                &line,
+                move |t| t.progress = t.progress.max(LOADER_JAR_TO),
+            );
+        })
+        .await;
+    if res.is_ok() {
+        // 预取的这一项不属于主轮账本，实时条到此收摊
+        update(app, state, id, |t| t.activity = None, true);
+    }
+    res
+}
+
+/// 阶段 2.5 的入参：一次本机安装需要知道的全部坐标（都在任务快照里，不回头读全局设置）
+struct InstallStage<'a> {
+    loader: LoaderKind,
+    mc_version: &'a str,
+    loader_version: &'a str,
+    /// 本次转换要求的 Java 主版本线（`options.java_version`）——第一次真正被后端消费
+    java_required: &'a str,
+    /// 设置里那颗「复用已装的 Loader」
+    reuse: bool,
+    cache_dir: &'a Path,
+    /// 阶段 2.5 单独取到 staging 的官方 installer jar
+    installer_jar: &'a Path,
+    /// reuse 关时的落点（任务私有目录）
+    scratch: &'a Path,
+    cancel: &'a Arc<AtomicBool>,
+}
+
+/// 本机安装没走到末态的两种收场：取消不算失败（取消是用户意图，不该出错误卡）
+enum InstallStop {
+    Cancelled,
+    Failed(TaskError),
+}
+
+/// 在本机跑 loader 官方安装器，拿到一份可用的 loader 树（进度、日志、失败卡都在这段外显）。
+///
+/// 三条口径：① **决定①——跑不成即任务失败**，不静默退回「产物到服务器上首启自装」那条老路
+/// （那种包在国内服务器上最常卡住，而用户以为已经装好了）；② 整段放在 `spawn_blocking`：
+/// 一趟实测 3~4 分钟，跑在 async 线程上会把其他任务的取消都堵住；③ Java 探测也在阻塞线程里
+/// 现探（它自己起 `java -version`），且排在子进程之前——可预见的失败不该等一趟几分钟的安装。
+async fn run_installer_stage(
+    app: &AppHandle,
+    state: &Arc<AppState>,
+    id: &str,
+    stage: InstallStage<'_>,
+) -> Result<Installed, InstallStop> {
+    update(app, state, id, |t| {
+        t.stage = Some(PipelineStage::Installer);
+        t.progress = INSTALL_FROM;
+        t.activity = None;
+    }, true);
+
+    let InstallStage {
+        loader,
+        mc_version,
+        loader_version,
+        java_required,
+        reuse,
+        cache_dir,
+        installer_jar,
+        scratch,
+        cancel,
+    } = stage;
+    let (a, s, i) = (app.clone(), state.clone(), id.to_string());
+    let (mc, ver, java_req) = (mc_version.to_string(), loader_version.to_string(), java_required.to_string());
+    let (cache, jar, scratch_dir) = (cache_dir.to_path_buf(), installer_jar.to_path_buf(), scratch.to_path_buf());
+    let cancel_flag = cancel.clone();
+    // 实时条与日志都认这一个名字：安装器没有「正在第几个包」的接口，主体只能说到这一档为止
+    let subject = format!("{} {}-{}", loader.as_label(), mc, ver);
+
+    let joined = tokio::task::spawn_blocking(move || -> Result<Installed, InstallStop> {
+        let probe = java::probe(&Some(java_req));
+        let Some(found) = probe.java_path else {
+            return Err(InstallStop::Failed(TaskError {
+                stage: PipelineStage::Installer,
+                title: "本机没有可用的 Java".into(),
+                detail: probe.detail,
+                retryable: true,
+                attempts: None,
+                log_tail: None,
+                exit_code: None,
+            }));
+        };
+        let java = PathBuf::from(&found);
+        push_log(
+            &a,
+            &s,
+            &i,
+            PipelineStage::Installer,
+            LogLevel::Info,
+            &format!(
+                "本机安装 {subject} · Java {} · {found}",
+                probe.major.map(|m| m.to_string()).unwrap_or_else(|| "?".into())
+            ),
+        );
+
+        let started = Instant::now();
+        let input = installer::EnsureInput {
+            loader,
+            mc_version: &mc,
+            loader_version: &ver,
+            reuse,
+            cache_dir: &cache,
+            scratch: &scratch_dir,
+            java: &java,
+            installer_jar: &jar,
+            cancel: &cancel_flag,
+            timeout: installer::INSTALL_TIMEOUT,
+        };
+        // 安装器侧每 500ms 才扫一次目录，节拍已经比取件慢一个量级，不再另攒窗口
+        let mut on_event = |ev: InstallEvent| match ev {
+            InstallEvent::Log(line) => {
+                push_log(&a, &s, &i, PipelineStage::Installer, LogLevel::Info, line)
+            }
+            InstallEvent::Progress { files, bytes } => {
+                let secs = started.elapsed().as_secs_f64();
+                let info = ActivityInfo {
+                    kind: ActivityKind::Install,
+                    subject: subject.clone(),
+                    done_bytes: bytes,
+                    // 总量未知（安装器不报总量）：实时条据此走不定态，不假装快满了
+                    total_bytes: 0,
+                    items_done: files.min(u32::MAX as u64) as u32,
+                    items_total: 0,
+                    rate_bps: if secs > 0.0 { bytes as f64 / secs } else { 0.0 },
+                    attempt: 1,
+                };
+                update(
+                    &a,
+                    &s,
+                    &i,
+                    move |t| {
+                        t.activity = Some(info);
+                        // 总条只按估算爬坡，且只往上走：复用命中那一拍直接给末态数字
+                        let p = install_progress(bytes);
+                        if p > t.progress {
+                            t.progress = p;
+                        }
+                    },
+                    true,
+                );
+            }
+        };
+
+        match installer::ensure(&input, &mut on_event) {
+            Ok(v) => {
+                push_log(
+                    &a,
+                    &s,
+                    &i,
+                    PipelineStage::Installer,
+                    LogLevel::Info,
+                    &install_done_line(&v, &subject),
+                );
+                // 落点要说出来：复用模式下这里就是缓存桶的坐标，用户排查「装到哪去了」只靠这一行
+                push_log(
+                    &a,
+                    &s,
+                    &i,
+                    PipelineStage::Installer,
+                    LogLevel::Info,
+                    &format!("安装目录 {}", v.dir.display()),
+                );
+                update(&a, &s, &i, |t| t.progress = INSTALL_TO, true);
+                Ok(v)
+            }
+            Err(installer::InstallError::Cancelled) => Err(InstallStop::Cancelled),
+            Err(e) => Err(InstallStop::Failed(install_task_error(&e))),
+        }
+    })
+    .await;
+
+    match joined {
+        Ok(r) => r,
+        // 阻塞线程本身炸了（内部 panic）：与构建侧同款口径报失败，不让人对着一个不动的进度猜
+        Err(e) => Err(InstallStop::Failed(TaskError {
+            stage: PipelineStage::Installer,
+            title: "本机安装异常".into(),
+            detail: format!("安装线程异常：{e}"),
+            retryable: true,
+            attempts: None,
+            log_tail: None,
+            exit_code: None,
+        })),
+    }
+}
+
+/// 安装成功的收场行：命中复用与真装出来的说法必须分开——前者一次进程都没起。
+/// 顶层布局也写进来：第 6 步的启动脚本三分叉就是按「有没有 run 脚本 / 顶层是不是散 jar」判的，
+/// 现在让它先在日志里可见，装错了能在这一行看出来
+fn install_done_line(installed: &Installed, subject: &str) -> String {
+    let counts = format!(
+        "{} 个文件 · {}",
+        installed.report.files,
+        fmt_size(installed.report.bytes)
+    );
+    let layout = describe_layout(&installed.report.scripts, &installed.report.jars);
+    if installed.from_cache {
+        format!("复用已装的 {subject} · {counts} · 未起进程 · {layout}")
+    } else {
+        format!(
+            "本机安装完成 · {subject} · {counts} · 用时 {:.1} 秒 · {layout}",
+            installed.report.elapsed.as_secs_f64()
+        )
+    }
+}
+
+fn describe_layout(scripts: &[String], jars: &[String]) -> String {
+    let head = if scripts.is_empty() { None } else { Some(scripts.join("、")) };
+    let tail = if jars.is_empty() { None } else { Some(jars.join("、")) };
+    match (head, tail) {
+        (Some(s), None) => format!("顶层 {s}"),
+        (Some(s), Some(j)) => format!("顶层 {s} + {j}"),
+        (None, Some(j)) => format!("无 run 脚本，顶层散 jar {j}"),
+        (None, None) => "顶层既无 run 脚本也无散 jar".to_string(),
+    }
+}
+
+/// 安装失败 → 错误卡载荷。退出码在安装器那边是字符串（Windows 与 Unix 口径不同），
+/// 留在 detail 里说，不硬塞进 `TaskError.exit_code` 那个 i32 槽
+fn install_task_error(e: &installer::InstallError) -> TaskError {
+    let title = match e {
+        installer::InstallError::Io(_) => "安装目录准备失败",
+        installer::InstallError::Spawn(_) => "Java 起不来",
+        installer::InstallError::Timeout { .. } => "本机安装超时",
+        installer::InstallError::Failed { .. } => "安装器报错",
+        installer::InstallError::Incomplete { .. } => "安装器报成功却没装出结果",
+        installer::InstallError::Cancelled => "本机安装已取消",
+    };
+    let mut detail = e.to_string();
+    if matches!(e, installer::InstallError::Timeout { .. }) {
+        detail.push_str("，安装器进程已终止，半成品已回收");
+    }
+    TaskError {
+        stage: PipelineStage::Installer,
+        title: title.into(),
+        detail,
+        retryable: true,
+        attempts: None,
+        log_tail: None,
+        exit_code: None,
+    }
 }
 
 fn map_download_error(app: &AppHandle, state: &Arc<AppState>, id: &str, e: &DownloadError) {
@@ -968,16 +1363,23 @@ fn build_readme(
     loader: LoaderKind,
     keep_dirs: &[String],
     agree_eula: bool,
+    installed: bool,
 ) -> Vec<String> {
+    // 最后一维是「阶段 2.5 有没有在本机把 loader 装好并进了包」：README 的启动说法按它分叉
+    let loader_line = match (loader, installed) {
+        // 关着这一档才是原来那句：包里只有 installer，首次运行联网自装
+        (LoaderKind::Forge | LoaderKind::NeoForge, false) => {
+            "Forge/NeoForge：start 脚本首次运行会自动执行 installServer（需要本机 Java 与网络），届时生成 run.bat/run.sh 与服务器本体，之后以 run 脚本启动".to_string()
+        }
+        (LoaderKind::Forge | LoaderKind::NeoForge, true) => {
+            "Forge/NeoForge：加载器与依赖已在本机装好并打进包，解压后直接运行 start.bat / start.sh，无需联网安装".to_string()
+        }
+        (LoaderKind::Fabric, _) => "Fabric 服务端：直接运行 start.bat / start.sh".to_string(),
+    };
     let mut lines = vec![
         "SideShift 转换报告".to_string(),
         format!("剔除 {} · 保留 {} · 新增 {}", counts.remove, counts.keep, counts.add),
-        match loader {
-            LoaderKind::Fabric => "Fabric 服务端：直接运行 start.bat / start.sh".to_string(),
-            LoaderKind::Forge | LoaderKind::NeoForge => {
-                "Forge/NeoForge：start 脚本首次运行会自动执行 installServer（需要本机 Java 与网络），届时生成 run.bat/run.sh 与服务器本体，之后以 run 脚本启动".to_string()
-            }
-        },
+        loader_line,
     ];
     if !agree_eula {
         lines.push("eula.txt 已生成但为 eula=false：首次启动前请改为 eula=true，否则服务端会拒绝启动".to_string());
@@ -1006,4 +1408,66 @@ fn output_name_of(file_name: &str) -> String {
         .or_else(|| file_name.strip_suffix(".7z"))
         .unwrap_or(file_name);
     format!("{stem}-server.zip")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::Duration;
+
+    fn installed(from_cache: bool, scripts: &[&str], jars: &[&str], secs: u64) -> Installed {
+        Installed {
+            dir: PathBuf::from("X:\\cache\\installs\\forge\\1.20.1-47.4.10"),
+            from_cache,
+            report: installer::InstallReport {
+                files: 107,
+                bytes: 158 * 1024 * 1024,
+                elapsed: Duration::from_secs(secs),
+                scripts: scripts.iter().map(|s| s.to_string()).collect(),
+                jars: jars.iter().map(|s| s.to_string()).collect(),
+            },
+        }
+    }
+
+    /// 收场行：复用与真装的说法分开（前者一次进程都没起），耗时只出现在真装过的那条上
+    #[test]
+    fn install_done_line_separates_cache_hit_from_real_run() {
+        let hit = install_done_line(&installed(true, &["run.bat", "run.sh"], &[], 0), "Forge 1.20.1-47.4.10");
+        assert!(hit.starts_with("复用已装的 Forge 1.20.1-47.4.10"), "{hit}");
+        assert!(hit.contains("未起进程"), "命中必须说明零进程，否则读起来像装完了");
+        assert!(!hit.contains("用时"), "命中没有耗时可报");
+
+        let real = install_done_line(&installed(false, &["run.bat", "run.sh"], &[], 226), "Forge 1.20.1-47.4.10");
+        assert!(real.contains("本机安装完成") && real.contains("226.0 秒"), "{real}");
+        assert!(real.contains("顶层 run.bat、run.sh"), "{real}");
+    }
+
+    /// 老 Forge（≤1.16）装完没有 run 脚本、只有顶层散 jar：这条日志就是第 6 步三分叉的判据，
+    /// 说法必须与真实布局对上，不能把「没脚本」写成成功
+    #[test]
+    fn install_done_line_names_the_layout_it_found() {
+        let v = |items: &[&str]| items.iter().map(|s| s.to_string()).collect::<Vec<String>>();
+        let old = describe_layout(&v(&[]), &v(&["forge-1.16.5-36.2.39.jar", "minecraft_server.1.16.5.jar"]));
+        assert!(old.starts_with("无 run 脚本，顶层散 jar "), "{old}");
+        assert_eq!(describe_layout(&v(&["run.sh"]), &v(&["a.jar"])), "顶层 run.sh + a.jar");
+        assert_eq!(describe_layout(&v(&[]), &v(&[])), "顶层既无 run 脚本也无散 jar");
+    }
+
+    /// 取消不算失败：错误卡只由 Failed 分支生成，取消走的是与取件同款的中止日志
+    #[test]
+    fn install_failures_are_retryable_and_keep_the_cause() {
+        let e = install_task_error(&installer::InstallError::Failed {
+            code: "1".into(),
+            tail: "安装器报告成功 / There was an error during installation".into(),
+        });
+        assert_eq!(e.stage, PipelineStage::Installer);
+        assert!(e.retryable, "装 JDK 之后点重试就该能过，不能判成死路");
+        assert!(e.detail.contains("退出码 1"), "{}", e.detail);
+        assert!(e.detail.contains("There was an error"), "安装器的尾巴要跟着进错误卡，否则只剩一句空话");
+
+        let t = install_task_error(&installer::InstallError::Timeout { secs: 1800 });
+        assert!(t.detail.contains("半成品已回收"), "{}", t.detail);
+        // 安装器退出码不是 i32 口径（Windows/Unix 不同），不硬塞进 exit_code 槽
+        assert_eq!(e.exit_code, None);
+    }
 }

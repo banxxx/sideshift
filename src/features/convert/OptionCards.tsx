@@ -66,8 +66,9 @@ export function RuntimeEnvCard({
     readOnly?: boolean;
 }) {
     const installLoader = options?.installLoaderLocally ?? false;
-    // Fabric 没有 installer 可跑（loader jar 与 launcher 直接从版本表取），这一档对本包是空开关。
-    // 与其让它静默无效，就地说一句：用户在全局设置里开着，回到这儿得知道为什么没反应。
+    // Fabric 没有 installer 可跑：它的 loader jar 与 launcher 直接从版本表取，这一档对本包是空开关
+    // （实测：meta 给的 server/jar 是「首启自装」的启动器，不是一份装好的树）。
+    // 后端整档跳过 ⇒ 这里连开关也不显示：留一个拨了没反应的控件，比留一句解释更糟。
     const needsInstaller = manifest.loader !== "fabric";
     return (
         <Panel gap={14}>
@@ -110,18 +111,18 @@ export function RuntimeEnvCard({
                     onChange={(v) => patch({ generateScripts: v })}
                 />
             </InlineRow>
-            <InlineRow label="本机安装 Loader（产物上传即开服）">
-                <Toggle
-                    checked={installLoader}
-                    readOnly={readOnly}
-                    onChange={(v) => patch({ installLoaderLocally: v })}
-                />
-            </InlineRow>
-            {installLoader && !readOnly && (
-                <NoteRow icon={needsInstaller && javaProbe?.status === "fail" ? AlertTriangle : Info}>
-                    {!needsInstaller
-                        ? "Fabric 没有 installer 可跑，这一档对本包不生效"
-                        : (javaProbe?.detail ?? "正在检测本机 Java…")}
+            {needsInstaller && (
+                <InlineRow label="本机安装 Loader（产物上传即开服）">
+                    <Toggle
+                        checked={installLoader}
+                        readOnly={readOnly}
+                        onChange={(v) => patch({ installLoaderLocally: v })}
+                    />
+                </InlineRow>
+            )}
+            {needsInstaller && installLoader && !readOnly && (
+                <NoteRow icon={javaProbe?.status === "fail" ? AlertTriangle : Info}>
+                    {javaProbe?.detail ?? "正在检测本机 Java…"}
                 </NoteRow>
             )}
         </Panel>

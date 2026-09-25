@@ -21,8 +21,8 @@ export interface FetchTally {
     cachedFiles: number;
 }
 
-/** 正在进行中的动作类型：联网收字节 / 本地写 zip */
-export type ActivityKind = "net" | "zip";
+/** 正在进行中的动作类型：联网收字节 / 本机跑 loader 安装器 / 本地写 zip */
+export type ActivityKind = "net" | "install" | "zip";
 
 /**
  * 当前动作。前端据此在日志区上方渲染一条实时条——
@@ -30,13 +30,13 @@ export type ActivityKind = "net" | "zip";
  */
 export interface ActivityInfo {
     kind: ActivityKind;
-    /** 联网 = 当前文件名；打包 = 当前顶层目录名（包根散件记「包根」） */
+    /** 联网 = 当前文件名；本机安装 = 「Forge 1.20.1-47.4.10」这样的一行主体；打包 = 当前顶层目录名（包根散件记「包根」） */
     subject: string;
     doneBytes: number;
-    /** 0 = 总量未知（响应无 Content-Length） */
+    /** 0 = 总量未知（响应无 Content-Length；本机安装恒为 0，安装器不报总量） */
     totalBytes: number;
     itemsDone: number;
-    /** 0 = 总量未知 */
+    /** 0 = 总量未知（本机安装同样恒为 0 ⇒ 实时条走不定态） */
     itemsTotal: number;
     /** 平均速率（字节/秒） */
     rateBps: number;

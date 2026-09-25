@@ -161,7 +161,9 @@ impl Downloader {
         }
     }
 
-    /// Fabric 一体化服务端 jar（内含 vanilla + loader）
+    /// Fabric 官方服务端 jar。名字里的「一体化」是误称：实测它是 Fabric installer
+    /// （内容全是 `net.fabricmc.installer.*`，`Main-Class: ServerLauncher`），
+    /// 首次启动才现拉 libraries + intermediary + loader 并解出 vanilla 服务端 ⇒ 并非离线可跑
     pub async fn fabric_server_jar(
         &self,
         game: &str,

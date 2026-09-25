@@ -6,6 +6,9 @@
  * accent 进行中腿表达（runFrac = 当前阶段在自身区间内的完成度）；
  * 失败站 redstone；成功=四站全绿；取消=停在原地（不标错）。
  * 金色不再出现在轨道上（芯片/进度条仍可带 gold）。
+ *
+ * 站点表恒为定稿四站（见 `railStation`）：「本机执行 installer」是下载站内部的一小段，
+ * 不另起一站。
  */
 import { Check, RefreshCw, X, type LucideIcon } from "lucide-react";
 import type { ConversionTask, FetchTally, PipelineStage, TaskStatus } from "@/lib/types";
@@ -26,7 +29,23 @@ export interface RailLog {
 /** 芯片/状态配色语义（与设计稿状态色一一对应） */
 export type RailTone = "emerald" | "gold" | "redstone" | "muted";
 
-const ORDER: PipelineStage[] = ["parser", "detector", "downloader", "builder"];
+const RAIL_ORDER: PipelineStage[] = ["parser", "detector", "downloader", "builder"];
+
+/**
+ * 本条任务会不会走「本机执行 installer」这一档。判据与 Rust 侧同源：
+ * 开关取自任务快照（不是全局设置，重试不能跟着漂移），且 Fabric 没有安装器可跑 ⇒ 整档跳过。
+ */
+export function hasInstallerStage(task: ConversionTask): boolean {
+    return task.options.installLoaderLocally && task.pack.loader !== "fabric";
+}
+
+/**
+ * 轨道站点恒为定稿四站：本机执行安装器排在模组取件**之前**，是下载站内部的一小段
+ * （30→42），不另起一站——轨道上多一个只在部分任务出现的站，等于让同一个组件有两套几何。
+ */
+export function railStation(stage: PipelineStage): PipelineStage {
+    return stage === "installer" ? "downloader" : stage;
+}
 
 /**
  * 本条任务的取件是否真走网络。fetch 计划未落定（阶段 1–2、排队、旧存档）时保守按联网口径。
@@ -100,12 +119,15 @@ export interface TaskRailView {
 
 /**
  * 各阶段在总进度里占的区间（与 Rust task_engine 的写值一一对应：
- * parser 8→15、detector →30、downloader 30+52·done/total、builder build_progress 84→99）。
+ * parser 8→15、detector →30、downloader 30→82、builder 84→99）。
+ * 本机执行安装器是下载站内部的一小段：预取安装器 jar 30→34、装 34→42，然后模组取件 42→82。
+ * 所以 installer 的区间就是下载站整段——腿在装上爬到 23%，接着往下走不会回退。
  */
 const STAGE_BAND: Record<PipelineStage, [number, number]> = {
     parser: [0, 15],
     detector: [15, 30],
     downloader: [30, 82],
+    installer: [30, 82],
     builder: [84, 99],
 };
 
@@ -117,19 +139,20 @@ export function runFraction(task: ConversionTask): number | undefined {
 }
 
 export function taskToRail(task: ConversionTask): TaskRailView {
-    const stageIdx = task.stage ? ORDER.indexOf(task.stage) : -1;
+    const station = task.stage ? railStation(task.stage) : null;
+    const stageIdx = station ? RAIL_ORDER.indexOf(station) : -1;
     const statuses: Partial<Record<PipelineStage, RailStageStatus>> = {};
 
     if (task.status === "success") {
-        for (const s of ORDER) statuses[s] = "done";
+        for (const s of RAIL_ORDER) statuses[s] = "done";
     } else if (task.status === "failed") {
-        ORDER.forEach((s, i) => {
+        RAIL_ORDER.forEach((s, i) => {
             if (i < stageIdx) statuses[s] = "done";
             else if (i === stageIdx) statuses[s] = "error";
             else statuses[s] = "pending";
         });
     } else if (task.status === "running") {
-        ORDER.forEach((s, i) => {
+        RAIL_ORDER.forEach((s, i) => {
             statuses[s] = i < stageIdx ? "done" : i === stageIdx ? "active" : "pending";
         });
     }
@@ -196,7 +219,13 @@ const FINISHED_LABEL: Record<string, string> = {
  */
 export function stageLabel(stage: PipelineStage, net = true): string {
     if (stage === "downloader" && !net) return "取件";
-    return { parser: "解析", detector: "检测", downloader: "下载", builder: "构建" }[stage];
+    return {
+        parser: "解析",
+        detector: "检测",
+        downloader: "下载",
+        installer: "安装",
+        builder: "构建",
+    }[stage];
 }
 
 /* ---------------- 任务详情「转换进度」卡（XjfIJ / KdHjU / ZKwyq） ---------------- */
@@ -233,22 +262,24 @@ export function stageTrack(task: ConversionTask): {
     current: { label: string; tone: Tone };
     next?: string;
 } {
-    const idx = task.stage ? ORDER.indexOf(task.stage) : -1;
+    // 这一条画的是「站与站」，本机安装不是站（在下载站里），所以两头都按站点口径取
+    const station = task.stage ? railStation(task.stage) : null;
+    const idx = station ? RAIL_ORDER.indexOf(station) : -1;
     const net = needsNetwork(task);
     const next =
-        idx >= 0 && idx < ORDER.length - 1 ? stageLabel(ORDER[idx + 1], net) : undefined;
+        idx >= 0 && idx < RAIL_ORDER.length - 1 ? stageLabel(RAIL_ORDER[idx + 1], net) : undefined;
     if (task.status === "success") return { current: { label: "构建完成", tone: "emerald" } };
     if (task.status === "failed")
         return {
             current: {
-                label: `${stageLabel(task.stage ?? "builder", net)}失败`,
+                label: `${stageLabel(station ?? "builder", net)}失败`,
                 tone: "redstone",
             },
             next,
         };
     if (task.status === "cancelled") return { current: { label: "已取消", tone: "muted" }, next };
     return {
-        current: { label: stageLabel(task.stage ?? "parser", net), tone: "gold" },
+        current: { label: stageLabel(station ?? "parser", net), tone: "gold" },
         next,
     };
 }

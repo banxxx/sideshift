@@ -82,6 +82,11 @@ impl Downloader {
         self
     }
 
+    /// 就地换挂字节进度出口（主轮挂的是整包账本，预取那一段要换成它自己的单条账本）
+    pub fn set_transfer(&mut self, f: Arc<OnTransfer>) {
+        self.transfer = Some(f);
+    }
+
     /// 挂上设置里的下载源：未调用即官方源（保持默认行为）
     pub fn with_source(mut self, source: DownloadSource) -> Self {
         self.source = source;

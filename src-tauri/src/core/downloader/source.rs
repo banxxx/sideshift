@@ -49,7 +49,7 @@ pub fn candidates(url: &str, source: DownloadSource) -> Vec<String> {
 
 /// 该 URL 的镜像地址；镜像没有对应端点时 None（不重写，直接打官方）
 fn mirror_of(url: &str) -> Option<String> {
-    // Fabric 的服务端一体化 jar 是 meta 现拼的组合端点，镜像没实现（实测 404）
+    // Fabric 的服务端 jar 是 meta 现拼的组合端点，镜像没实现（实测 404）
     if url.ends_with("/server/jar") {
         return None;
     }

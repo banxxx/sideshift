@@ -3,8 +3,17 @@ import type { LoaderKind, PackManifest } from "./pack";
 import type { ConversionOptions } from "./options";
 import type { ActivityInfo, FetchTally } from "./activity";
 
-/** 流水线四阶段（Shift Rail 站点，对应 Rust core 四模块） */
-export type PipelineStage = "parser" | "detector" | "downloader" | "builder";
+/**
+ * 流水线阶段（对应 Rust core 各模块）。`installer` 是可选的一档：
+ * 只有「本机执行 installer」开着、且这个 loader 真有安装器可跑（Forge / NeoForge）时才会出现，
+ * Fabric 与关掉开关的任务全程不会拿到这个值。
+ */
+export type PipelineStage =
+    | "parser"
+    | "detector"
+    | "downloader"
+    | "installer"
+    | "builder";
 
 /** 任务状态 */
 export type TaskStatus = "queued" | "running" | "success" | "failed" | "cancelled";

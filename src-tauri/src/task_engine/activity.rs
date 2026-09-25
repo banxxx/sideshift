@@ -150,18 +150,32 @@ pub fn fetch_group_label(dest: &Path, staging: &Path) -> String {
     }
 }
 
+/// 取件计数的唯一写值口。`from` = 本轮取件的起脚：本机安装排在前面时是 42（安装档占了
+/// 30→42），否则是 `FETCH_FROM`；上沿恒 82，所以关掉开关时写值与没有安装档时逐字节相同
 pub fn apply_fetch_counts(
     t: &mut ConversionTask,
     done: usize,
     total: usize,
     net: &std::sync::atomic::AtomicU32,
     bytes: &std::sync::atomic::AtomicU64,
+    from: u32,
 ) {
     t.downloaded = Some(done as u32);
     t.total = Some(total as u32);
     t.net_done = Some(net.load(Ordering::Relaxed));
     t.done_bytes = Some(bytes.load(Ordering::Relaxed));
-    t.progress = 30 + (52 * done as u32).checked_div(total as u32).unwrap_or(0).max(1);
+    let span = (FETCH_TO - from).max(1) as u32;
+    t.progress = fetch_progress(done, total, span, from);
+}
+
+/// `from` → 82 之间按已取件比例铺开（至少走 1 格，否则第一项之前条子钉在起脚读不出动）
+fn fetch_progress(done: usize, total: usize, span: u32, from: u32) -> u32 {
+    let step = (span as u64)
+        .checked_mul(done as u64)
+        .and_then(|v| v.checked_div(total as u64))
+        .unwrap_or(0)
+        .min(span as u64);
+    from + step.max(1) as u32
 }
 
 /// 兜底刷出仍未出过日志的分组：整轮取件成功结束后走一次，账本对不上时不至于静默
@@ -172,6 +186,7 @@ pub fn flush_groups(
     groups: &Arc<Mutex<FetchGroups>>,
     net: &Arc<std::sync::atomic::AtomicU32>,
     bytes: &Arc<std::sync::atomic::AtomicU64>,
+    from: u32,
 ) {
     for g in groups.lock().unwrap().pending() {
         let (net_u, bytes_u) = (net.clone(), bytes.clone());
@@ -182,7 +197,7 @@ pub fn flush_groups(
             PipelineStage::Downloader,
             LogLevel::Info,
             &group_line(&g),
-            move |t| apply_fetch_counts(t, g.done, g.total, &net_u, &bytes_u),
+            move |t| apply_fetch_counts(t, g.done, g.total, &net_u, &bytes_u, from),
         );
     }
 }
@@ -341,6 +356,34 @@ impl ZipActivity {
 pub fn build_progress(done: u64, total: u64) -> u32 {
     let step = done.saturating_mul(15).checked_div(total.max(1)).unwrap_or(0).min(15);
     84 + step as u32
+}
+
+/* ---------------- 本机安装 loader（阶段 2.5，只在开关打开时存在） ---------------- */
+
+/// 取件档（下载站）的上下沿。本机安装排在模组取件**之前**（早失败早停），所以它从
+/// 这一档的头部切走一格：主轮仍到 82 收，只是起脚从 30 抬到 42
+pub const FETCH_FROM: u32 = 30;
+pub const FETCH_TO: u32 = 82;
+/// 阶段 2.5 先单独取那一枚官方安装器 jar（它是模组取件计划里的一项，被提前了）
+pub const LOADER_JAR_TO: u32 = 34;
+pub const INSTALL_FROM: u32 = 34;
+pub const INSTALL_TO: u32 = 42;
+
+/// 安装总条的分母：安装器不报总量（它的输出不是接口，拿 22k 行 stdout 算百分比是瞎猜），
+/// 这里用第 0 步实测三档的量级上限做**估算**：Forge 1.16.5 = 106 MB、NeoForge = 133 MB、
+/// Forge 1.20.1 = 159 MB。估算只用于总条爬坡；实时条那侧照实写「总量未知」，
+/// 用户在卡上看到的数字仍是真的
+pub const INSTALL_ESTIMATE_BYTES: u64 = 160 * 1024 * 1024;
+
+/// 已装字节 → 总进度（封顶在安装档上沿；真装完由调用方直接给 INSTALL_TO）
+pub fn install_progress(bytes: u64) -> u32 {
+    let span = (INSTALL_TO - INSTALL_FROM) as u64;
+    let step = bytes
+        .saturating_mul(span)
+        .checked_div(INSTALL_ESTIMATE_BYTES)
+        .unwrap_or(0)
+        .min(span);
+    INSTALL_FROM + step as u32
 }
 
 #[cfg(test)]
@@ -525,5 +568,28 @@ mod tests {
         assert_eq!(build_progress(500, 1000), 91);
         assert_eq!(build_progress(1000, 1000), 99, "打包阶段不满 100，成功收尾才给 100");
         assert_eq!(build_progress(0, 0), 84, "总量为 0 不能崩");
+    }
+
+    /// 取件档的起脚随「前面有没有本机安装」抬一档，但上沿必须同一点：
+    /// 芯片与总条在 82 收尾这条口径不能因为开关而分叉
+    #[test]
+    fn fetch_band_starts_where_the_previous_stage_ended() {
+        let (net0, span1) = (FETCH_TO - FETCH_FROM, FETCH_TO - INSTALL_TO);
+        assert_eq!(fetch_progress(10, 20, net0, FETCH_FROM), 56, "没装：30 起、半程落在中间");
+        assert_eq!(fetch_progress(20, 20, net0, FETCH_FROM), FETCH_TO);
+        assert_eq!(fetch_progress(10, 20, span1, INSTALL_TO), 62, "装过：42 起、半程同一比例");
+        assert_eq!(fetch_progress(20, 20, span1, INSTALL_TO), FETCH_TO, "两条路都收在 82");
+        assert_eq!(fetch_progress(0, 20, span1, INSTALL_TO), INSTALL_TO + 1, "第一项之前也要看得见动");
+        assert_eq!(fetch_progress(1, 0, net0, FETCH_FROM), FETCH_FROM + 1, "总量为 0 不能崩");
+    }
+
+    /// 安装档：估算爬坡，且越过量级上限也不能冲出这一档的区间
+    #[test]
+    fn install_progress_climbs_within_its_band() {
+        assert_eq!(install_progress(0), INSTALL_FROM);
+        assert_eq!(install_progress(INSTALL_ESTIMATE_BYTES / 2), 38);
+        assert_eq!(install_progress(INSTALL_ESTIMATE_BYTES), INSTALL_TO);
+        assert_eq!(install_progress(INSTALL_ESTIMATE_BYTES * 9), INSTALL_TO, "装得比估算多也不能越界");
+        assert_eq!(install_progress(u64::MAX), INSTALL_TO, "乘法溢出不能把进度算成乱数");
     }
 }

@@ -16,9 +16,6 @@ pub fn run() {
         .setup(|app| {
             let state = task_engine::AppState::new(app.handle());
             app.manage(std::sync::Arc::new(state));
-            if let Some(main) = app.get_webview_window("main") {
-                core::window::attach(&main);
-            }
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![

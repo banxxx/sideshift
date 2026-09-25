@@ -1,8 +1,9 @@
 /**
- * 侧栏底部提示区（版本号/主题行上方的预留槽位）：全局 notify() 提示的唯一渲染出口。
+ * 侧栏底部提示区（浮在版本号/主题行之上）：全局 notify() 提示的唯一渲染出口。
  *
- * 位置钉死在侧栏底部、向上生长：新提示贴最近底缘入场（自下淡入+微缩放），
- * 旧提示被顶上去时靠 layout 动画平滑位移；移除用 popLayout 让其余即时补位。
+ * 位置钉死在侧栏底部、向上生长，但**不占侧栏的布局**（absolute，见下方容器注释）：
+ * 新提示贴最近底缘入场（自下淡入+微缩放），旧提示被顶上去时靠 layout 动画平滑位移；
+ * 移除用 popLayout 让其余即时补位。
  * 卡片走「静态悬停壳」口径：surface 底 + stroke 描边，kind 决定图标与语义色，
  * 悬停露出 × 可提前关闭（错误类停留更久，给用户确认余地）。
  */
@@ -31,7 +32,7 @@ function NoticeCard({ notice }: { notice: Notice }) {
             animate={{ opacity: 1, y: 0, scale: 1 }}
             exit={{ opacity: 0, y: 6, scale: 0.97 }}
             transition={{ duration: 0.2, ease: "easeOut" }}
-            className="group flex items-start gap-2 rounded-lg border border-stroke bg-surface px-2.5 py-2"
+            className="group pointer-events-auto flex items-start gap-2 rounded-lg border border-stroke bg-surface px-2.5 py-2"
         >
             {/* 18px 语义色淡底图标盒，与列表行图标盒同口径 */}
             <span
@@ -66,8 +67,14 @@ function NoticeCard({ notice }: { notice: Notice }) {
 export function NotificationStack() {
     const notices = useNotices();
     return (
-        /* 容器常驻（侧栏已有 px-3，勿再加横向内边距）：空态零高度，退场由内层 popLayout 补位 */
-        <div className={cn("flex flex-col gap-2", notices.length > 0 && "pb-2.5")}>
+        /* 挂在底部行的上边缘、向上长（`bottom-full`），**不参与侧栏的布局**。
+         * 之前它是行内流里的一个块，每来一条提示就把版本号/主题行往上顶一截，
+         * 连点清理时整侧栏控件跟着跳——提示区不该有资格挪别人的位置，
+         * 高度变化只该由它自己（和上面那片 `flex-1` 空白）吸收。
+         * 横向仍与旧的侧栏内容盒对齐：绝对定位的包含块是父行的 padding box，
+         * 而 padding box 左缘就是侧栏 px-3 的内缘，所以 `inset-x-0` 与原几何一致。
+         * 容器常驻，空态零高度；退场由内层 popLayout 补位。 */
+        <div className="pointer-events-none absolute inset-x-0 bottom-full flex flex-col gap-2 pb-2.5">
             <AnimatePresence mode="popLayout" initial={false}>
                 {notices.map((n) => (
                     <NoticeCard key={n.id} notice={n} />

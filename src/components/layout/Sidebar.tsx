@@ -106,11 +106,13 @@ export function Sidebar() {
 
             <div className="flex-1" />
 
-            {/* 提示区：版本号/主题行上方的预留槽位，全局 notify() 统一在此渲染 */}
-            <NotificationStack />
-
-            {/* 底部：版本号 + 主题切换（32×32 surface-2 r8） */}
-            <div className="flex items-center justify-between pt-3 pr-0 pb-3 pl-3">
+            {/* 底部：版本号 + 主题切换（32×32 surface-2 r8）。
+                `relative` 是给提示区当定位参照的：提示区挂在这一行的上方边缘（`bottom-full`），
+                彻底不进侧栏的文档流——它长多高、什么时候塌掉都不该动到别的控件。
+                顺带把 popLayout 退场件的位置参照也收在这圈里（原先侧栏没有 positioned 祖先，
+                被抽成 absolute 的退场卡片是挂到整窗外壳那个 `relative` 上的）。 */}
+            <div className="relative flex items-center justify-between pt-3 pr-0 pb-3 pl-3">
+                <NotificationStack />
                 <span className="font-mono text-[11px] text-text-3">v{VERSION_CORE}</span>
                 <button
                     ref={themeBtn}

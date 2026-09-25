@@ -8,6 +8,7 @@ use thiserror::Error;
 use zip::write::SimpleFileOptions;
 use zip::CompressionMethod;
 
+use crate::core::installer::Installed;
 use crate::models::{ConversionOptions, LoaderKind};
 
 #[derive(Error, Debug)]
@@ -16,6 +17,8 @@ pub enum BuilderError {
     Io(#[from] std::io::Error),
     #[error("打包失败：{0}")]
     Zip(#[from] zip::result::ZipError),
+    #[error("本机装好的加载器认不出启动方式：{0}")]
+    Layout(String),
 }
 
 pub struct BuildInput<'a> {
@@ -27,10 +30,13 @@ pub struct BuildInput<'a> {
     pub own_output: Option<PathBuf>,
     pub options: &'a ConversionOptions,
     pub loader: LoaderKind,
-    /// Fabric：一体化服务端 jar 文件名；Forge/NeoForge 为 None（用 installer + run 脚本）
+    /// Fabric：官方服务端 jar 文件名（首启自装）；Forge/NeoForge 为 None（用 installer + run 脚本）
     pub server_jar_name: Option<String>,
     /// Forge/NeoForge installer jar 文件名
     pub installer_jar_name: Option<String>,
+    /// 阶段 2.5 在本机装好的 loader 树：Some ⇒ 这棵树并进 staging、安装器 jar 不再进包、
+    /// 启动脚本直接指向装好的参数文件；None ⇒ 一切照旧（包里留 installer，首启自装）
+    pub installed: Option<&'a Installed>,
     /// 写入包根的说明文件名（可空）
     pub readme_lines: Vec<String>,
 }
@@ -45,8 +51,11 @@ pub struct BuildReport {
     pub entries: usize,
     /// 覆写了本任务上一次的产物（同名序号只给别人的包）
     pub overwritten: bool,
-    /// 启动脚本指向的 jar 名（报告页据此写出真实的手动启动命令）
+    /// 启动脚本指向的 jar 名（报告页据此写出真实的手动启动命令）。
+    /// 已装的新式布局为 None：它靠 `libraries/` 下的参数文件启动，没有单一 jar 可指
     pub start_jar: Option<String>,
+    /// 本次把本机装好的 loader 树并进了产物（目标机不需要再联网首装）
+    pub installed: bool,
 }
 
 /// 打包过程事件：Plan 先给总量（实时条的分母），File 逐文件累加字节，
@@ -100,7 +109,16 @@ pub fn build(
     input: &BuildInput,
     on_event: &mut dyn FnMut(&BuildEvent),
 ) -> Result<BuildReport, BuilderError> {
-    let generated = write_root_files(input)?;
+    // 启动形态先定再并树：认不出来就当场失败，不要先拷 150 MB 再告诉用户打包炸了
+    let shape = resolve_shape(input.installed)?;
+    if let Some(installed) = input.installed {
+        merge_installed(&installed.dir, input.staging)?;
+        // 安装器 jar 的唯一作用是首启自装，而首启已经不需要它了 ⇒ 从 staging 摘掉，别打进包
+        if let Some(jar) = &input.installer_jar_name {
+            let _ = std::fs::remove_file(input.staging.join(jar));
+        }
+    }
+    let generated = write_root_files(input, &shape)?;
     std::fs::create_dir_all(input.output_dir)?;
     let out_path = resolve_out(
         input.output_dir,
@@ -130,10 +148,15 @@ pub fn build(
         generated,
         entries: plan.len(),
         overwritten,
-        start_jar: input
-            .server_jar_name
-            .clone()
-            .or_else(|| input.installer_jar_name.clone()),
+        start_jar: match &shape {
+            RunShape::ArgsFiles { .. } => None,
+            RunShape::LegacyJar { jar } => Some(jar.clone()),
+            RunShape::FirstBootInstall => input
+                .server_jar_name
+                .clone()
+                .or_else(|| input.installer_jar_name.clone()),
+        },
+        installed: input.installed.is_some(),
     })
 }
 
@@ -277,16 +300,166 @@ fn one_line(s: &str) -> String {
     s.replace('\\', "\\\\").replace(['\r', '\n'], " ")
 }
 
+/// 安装目录里不进交付包的东西（实测 Forge 1.20.1 / NeoForge 26.2 的新式布局与 1.16.5 的老式布局）：
+/// run 脚本与 JVM 参数模板由 builder 自己生成，`inst.sha1` 是安装器自留的记账
+const INSTALLER_KEEP_OUT: &[&str] = &[
+    "run.bat",
+    "run.sh",
+    "user_jvm_args.txt",
+    "inst.sha1",
+    "eula.txt",
+    "server.properties",
+];
+/// 运行期目录：服务端首启才会造（安装目录被手动跑过一次就有）。包里的 mods/ 与 config/
+/// 归取件阶段管，让安装目录里那份盖过来等于把上一次试启动的残留打进交付包
+const INSTALLER_KEEP_OUT_DIRS: &[&str] = &["config", "defaultconfigs", "logs", "mods"];
+
+/// 安装目录里的这个相对路径（POSIX 分隔、小写）是否该被挡在交付包外
+fn installed_kept_out(rel: &str) -> bool {
+    let lower = rel.to_ascii_lowercase();
+    if lower.ends_with(".log") {
+        return true;
+    }
+    // 安装器自己那枚 jar：这一档存在的意义就是「已经在本机跑过了」
+    if lower.ends_with(".jar") && lower.contains("installer") {
+        return true;
+    }
+    match lower.split_once('/') {
+        None => INSTALLER_KEEP_OUT.contains(&lower.as_str()),
+        // 只按顶层目录名挡：`libraries/` 里真有个 mods/ 那也是依赖的一部分
+        Some((head, _)) => INSTALLER_KEEP_OUT_DIRS.contains(&head),
+    }
+}
+
+/// 把装好的 loader 树并进 staging。staging 必须等于产物内容（自检与「打开目录」都按这个前提读），
+/// 所以这里复制而不是打包时外挂引用。已有同路径文件一律不覆写：包的 mods/ 与 config/ 由取件阶段说了算
+fn merge_installed(src: &Path, staging: &Path) -> Result<(), BuilderError> {
+    let mut dirs = vec![src.to_path_buf()];
+    while let Some(dir) = dirs.pop() {
+        for e in std::fs::read_dir(&dir)? {
+            let path = e?.path();
+            let rel = path
+                .strip_prefix(src)
+                .map_err(|e| BuilderError::Io(std::io::Error::other(e)))?
+                .to_string_lossy()
+                .replace('\\', "/");
+            if installed_kept_out(&rel) {
+                continue;
+            }
+            if path.is_dir() {
+                dirs.push(path);
+                continue;
+            }
+            let to = staging.join(&rel);
+            if to.exists() {
+                continue;
+            }
+            if let Some(parent) = to.parent() {
+                std::fs::create_dir_all(parent)?;
+            }
+            std::fs::copy(&path, &to)?;
+        }
+    }
+    Ok(())
+}
+
+/// 本机装出来的启动形态（三态，实测三种布局各占一态）
+enum RunShape {
+    /// 没本机安装：包里是 installer jar，start 脚本首次运行先跑 `--installServer`（今日行为）
+    FirstBootInstall,
+    /// 新式（实测 Forge 1.20.1、NeoForge 26.2）：安装器留下 run 脚本 + `libraries/<...>/{win,unix}_args.txt`。
+    /// 我们生成的脚本只引用那两份参数文件，不复用 run 脚本（它用裸 `java`、且 bat 末尾带 `pause`）
+    ArgsFiles { win: String, unix: String },
+    /// 老 Forge（实测 1.16.5）：没有 run 脚本与参数文件，顶层 universal jar 的 MANIFEST 自带
+    /// 相对 `Class-Path: libraries/...` 与 `ServerLaunchArgs` ⇒ 一句 `java -jar <jar> nogui` 就够
+    LegacyJar { jar: String },
+}
+
+/// 从 installer 自己写的 run 脚本里取参数文件路径。那句固定是
+/// `java @user_jvm_args.txt @libraries/net/minecraftforge/forge/1.20.1-47.4.10/win_args.txt %*`，
+/// 路径全用 POSIX 斜杠（Windows 侧也认）。不硬编码各家目录布局：Forge 与 NeoForge 的层级不同，
+/// 版本号一变又会错，而这两行脚本就是官方给的答案
+fn args_token(script: &str, file: &str) -> Option<String> {
+    script
+        .split_whitespace()
+        .map(|t| t.trim_matches(['"', ';']))
+        .find(|t| t.starts_with('@') && t.to_ascii_lowercase().ends_with(file))
+        // 脚本里的路径要进 zip 条目名与 sh 脚本，统一成正斜杠
+        .map(|t| t[1..].replace('\\', "/"))
+}
+
+/// 决定启动形态。认不出来的布局直接报错而不是退回首启自装：用户开了这一档要的是
+/// 「上传即跑」，悄悄给一份还得联网首装的包比失败更坏
+fn resolve_shape(installed: Option<&Installed>) -> Result<RunShape, BuilderError> {
+    let Some(installed) = installed else {
+        return Ok(RunShape::FirstBootInstall);
+    };
+    let dir = installed.dir.as_path();
+    if !installed.report.scripts.is_empty() {
+        let mut win: Option<String> = None;
+        let mut unix: Option<String> = None;
+        for name in ["run.bat", "run.sh"] {
+            let Ok(text) = std::fs::read_to_string(dir.join(name)) else {
+                continue;
+            };
+            if win.is_none() {
+                win = args_token(&text, "win_args.txt");
+            }
+            if unix.is_none() {
+                unix = args_token(&text, "unix_args.txt");
+            }
+        }
+        // 只认出一家时按同名换后缀推另一家：两份参数文件在同一目录（实测），推完还要落盘验一遍
+        let (w, u) = match (win, unix) {
+            (Some(w), Some(u)) => (w, u),
+            (Some(w), None) => {
+                let u = w.replace("win_args.txt", "unix_args.txt");
+                (w, u)
+            }
+            (None, Some(u)) => {
+                let w = u.replace("unix_args.txt", "win_args.txt");
+                (w, u)
+            }
+            (None, None) => {
+                return Err(BuilderError::Layout(format!(
+                    "{} 里的 run 脚本没有引用任何参数文件",
+                    dir.display()
+                )))
+            }
+        };
+        for p in [&w, &u] {
+            if !dir.join(p).is_file() {
+                return Err(BuilderError::Layout(format!(
+                    "run 脚本指向的 {p} 不在安装目录里"
+                )));
+            }
+        }
+        return Ok(RunShape::ArgsFiles { win: w, unix: u });
+    }
+    // 老式：顶层散 jar 里挑 universal 那枚（`minecraft_server.*.jar` 是官方本体不带启动入口，
+    // 安装器 jar 我们不打进包，指过去就是死链）
+    if let Some(jar) = installed.report.jars.iter().find(|j| {
+        let lower = j.to_ascii_lowercase();
+        !lower.starts_with("minecraft_server") && !lower.contains("installer")
+    }) {
+        return Ok(RunShape::LegacyJar { jar: jar.clone() });
+    }
+    Err(BuilderError::Layout(format!(
+        "{} 顶层既没有 run 脚本也没有可直启的 jar",
+        dir.display()
+    )))
+}
+
 /// 启动脚本、eula、server.properties、README；返回本次实际生成的包根文件名
-fn write_root_files(input: &BuildInput) -> Result<Vec<String>, BuilderError> {
+fn write_root_files(input: &BuildInput, shape: &RunShape) -> Result<Vec<String>, BuilderError> {
     let mut generated: Vec<String> = Vec::new();
     let jvm = jvm_args(input.options);
     if input.options.generate_scripts {
         // 脚本先锚定自身目录：从任意 cwd 调用（终端/计划任务）相对 jar 路径仍然有效
+        let nogui = if input.options.nogui { " nogui" } else { "" };
         let (bat, sh) = match input.loader {
             LoaderKind::Fabric => {
                 let jar = input.server_jar_name.as_deref().unwrap_or("server.jar");
-                let nogui = if input.options.nogui { " nogui" } else { "" };
                 (
                     format!(
                         "@echo off\r\ncd /d \"%~dp0\"\r\njava {jvm} -jar {jar}{nogui}\r\npause\r\n"
@@ -295,22 +468,43 @@ fn write_root_files(input: &BuildInput) -> Result<Vec<String>, BuilderError> {
                 )
             }
             LoaderKind::Forge | LoaderKind::NeoForge => {
-                // JVM 参数经 user_jvm_args.txt 注入（installer 生成的 run 脚本以 @user_jvm_args.txt 引用）
-                std::fs::write(input.staging.join("user_jvm_args.txt"), format!("{jvm}\n"))?;
-                generated.push("user_jvm_args.txt".to_string());
-                let installer = input
-                    .installer_jar_name
-                    .as_deref()
-                    .unwrap_or("installer.jar");
-                // 首次运行自动执行 installServer，之后用 installer 生成的 run 脚本启动
-                (
-                    format!(
-                        "@echo off\r\ncd /d \"%~dp0\"\r\nif not exist run.bat java -Xmx1G -jar {installer} --installServer\r\nif exist run.bat (call run.bat) else (echo 安装失败，请手动运行: java -jar {installer} --installServer & pause)\r\n"
+                // 三态里两态靠 `@user_jvm_args.txt` 注入 JVM 参数（老 Forge 没有这套，参数上命令行）
+                if !matches!(shape, RunShape::LegacyJar { .. }) {
+                    std::fs::write(input.staging.join("user_jvm_args.txt"), format!("{jvm}\n"))?;
+                    generated.push("user_jvm_args.txt".to_string());
+                }
+                match shape {
+                    // 已装好：直接引用安装器生成的参数文件（内部全是相对路径，整棵树可整体搬运）
+                    RunShape::ArgsFiles { win, unix } => (
+                        format!(
+                            "@echo off\r\ncd /d \"%~dp0\"\r\njava @user_jvm_args.txt @{win}{nogui}\r\npause\r\n"
+                        ),
+                        format!(
+                            "#!/usr/bin/env bash\ncd \"$(dirname \"$0\")\"\njava @user_jvm_args.txt @{unix}{nogui}\n"
+                        ),
                     ),
-                    format!(
-                        "#!/usr/bin/env bash\ncd \"$(dirname \"$0\")\"\n[ -f run.sh ] || java -Xmx1G -jar {installer} --installServer\nbash run.sh\n"
+                    RunShape::LegacyJar { jar } => (
+                        format!(
+                            "@echo off\r\ncd /d \"%~dp0\"\r\njava {jvm} -jar {jar}{nogui}\r\npause\r\n"
+                        ),
+                        format!("#!/usr/bin/env bash\ncd \"$(dirname \"$0\")\"\njava {jvm} -jar {jar}{nogui}\n"),
                     ),
-                )
+                    // 未本机安装：首次运行自动执行 installServer，之后用 installer 生成的 run 脚本启动
+                    RunShape::FirstBootInstall => {
+                        let installer = input
+                            .installer_jar_name
+                            .as_deref()
+                            .unwrap_or("installer.jar");
+                        (
+                            format!(
+                                "@echo off\r\ncd /d \"%~dp0\"\r\nif not exist run.bat java -Xmx1G -jar {installer} --installServer\r\nif exist run.bat (call run.bat) else (echo 安装失败，请手动运行: java -jar {installer} --installServer & pause)\r\n"
+                            ),
+                            format!(
+                                "#!/usr/bin/env bash\ncd \"$(dirname \"$0\")\"\n[ -f run.sh ] || java -Xmx1G -jar {installer} --installServer\nbash run.sh\n"
+                            ),
+                        )
+                    }
+                }
             }
         };
         std::fs::write(input.staging.join("start.bat"), bat)?;
@@ -462,6 +656,7 @@ mod tests {
             loader: LoaderKind::Fabric,
             server_jar_name: Some("server.jar".into()),
             installer_jar_name: None,
+            installed: None,
             readme_lines: vec![],
         }
     }
@@ -569,6 +764,301 @@ mod tests {
             2,
             "同一任务反复重试不该攒出一堆重复包"
         );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /* ---------------- 本机安装的并树与启动脚本三分叉 ---------------- */
+
+    use crate::core::installer;
+
+    /// 安装目录夹具：`files` 按真实布局给，scripts/jars 是 installer 那边探测出来的两份顶层名单
+    fn installed_tree(files: &[(&str, &[u8])], scripts: &[&str], jars: &[&str]) -> Installed {
+        let dir = tmp().join("installs/forge/1.20.1-47.4.10");
+        for (rel, body) in files {
+            put(&dir.join(rel), body);
+        }
+        Installed {
+            dir,
+            from_cache: true,
+            report: installer::InstallReport {
+                files: files.len() as u64,
+                bytes: 0,
+                elapsed: std::time::Duration::ZERO,
+                scripts: scripts.iter().map(|s| s.to_string()).collect(),
+                jars: jars.iter().map(|s| s.to_string()).collect(),
+            },
+        }
+    }
+
+    fn zip_names(path: &Path) -> Vec<String> {
+        let z = zip::ZipArchive::new(File::open(path).unwrap()).unwrap();
+        let mut v: Vec<String> = z.file_names().map(|s| s.to_string()).collect();
+        v.sort();
+        v
+    }
+
+    fn zip_text(path: &Path, name: &str) -> String {
+        use std::io::Read;
+        let mut z = zip::ZipArchive::new(File::open(path).unwrap()).unwrap();
+        let mut s = String::new();
+        z.by_name(name).unwrap().read_to_string(&mut s).unwrap();
+        s
+    }
+
+    fn forge_input<'a>(
+        staging: &'a Path,
+        out: &'a Path,
+        o: &'a ConversionOptions,
+        installed: &'a Installed,
+    ) -> BuildInput<'a> {
+        BuildInput {
+            loader: LoaderKind::Forge,
+            installer_jar_name: Some("forge-installer.jar".into()),
+            installed: Some(installed),
+            ..input(staging, out, o)
+        }
+    }
+
+    /// 新式布局（实测 Forge 1.20.1、NeoForge 26.2）：依赖树进包、installer 的 run 脚本与记账件不进包，
+    /// start 脚本自己生成并引用装好的参数文件
+    #[test]
+    fn installed_new_style_ships_tree_and_points_at_args_files() {
+        let root = tmp();
+        let staging = root.join("staging");
+        let out = root.join("out");
+        let args = "libraries/net/minecraftforge/forge/1.20.1-47.4.10";
+        let win_line =
+            "java @user_jvm_args.txt @libraries/net/minecraftforge/forge/1.20.1-47.4.10/win_args.txt %*";
+        let unix_line =
+            "java @user_jvm_args.txt @libraries/net/minecraftforge/forge/1.20.1-47.4.10/unix_args.txt \"$@\"";
+        let installed = installed_tree(
+            &[
+                (&format!("{args}/win_args.txt"), b"--launchTarget forgeserver"),
+                (&format!("{args}/unix_args.txt"), b"--launchTarget forgeserver"),
+                ("libraries/net/minecraft/server/server-1.20.1-extra.jar", b"PK\x03\x04"),
+                ("libraries/keep.txt", b"theirs"),
+                ("run.bat", format!("@echo off\r\n{win_line}\r\npause\r\n").as_bytes()),
+                ("run.sh", format!("#!/usr/bin/env sh\n{unix_line}\n").as_bytes()),
+                ("user_jvm_args.txt", b"# -Xmx4G\n"),
+                ("install.log", b"noise"),
+                ("forge-installer.jar.log", b"noise"),
+                ("inst.sha1", b"deadbeef"),
+                ("config/fml.toml", b"runDirectory = '.'\n"),
+                ("mods/readme.txt", "服务端首启造的".as_bytes()),
+                ("eula.txt", b"eula=true\n"),
+            ],
+            &["run.bat", "run.sh"],
+            &[],
+        );
+        put(&staging.join("mods/example-mod.jar"), b"PK\x03\x04");
+        put(&staging.join("forge-installer.jar"), b"installer bytes");
+        // 同路径文件以 staging 为准：安装目录只补依赖，不抢包自己那份
+        put(&staging.join("libraries/keep.txt"), b"ours");
+
+        let o = opts();
+        let report = build(&forge_input(&staging, &out, &o, &installed), &mut |_| {}).unwrap();
+        assert!(report.installed);
+        assert_eq!(report.start_jar, None, "新式布局靠参数文件启动，没有单一 jar 可指");
+
+        let names = zip_names(&report.path);
+        assert!(names.contains(&format!("{args}/win_args.txt")), "{names:?}");
+        assert!(names.contains(&format!("{args}/unix_args.txt")), "{names:?}");
+        assert!(
+            names.contains(&"libraries/net/minecraft/server/server-1.20.1-extra.jar".to_string()),
+            "离线可跑全靠 libraries/：{names:?}"
+        );
+        assert_eq!(zip_text(&report.path, "libraries/keep.txt"), "ours");
+        for gone in [
+            "run.bat",
+            "run.sh",
+            "inst.sha1",
+            "install.log",
+            "forge-installer.jar.log",
+            "config/fml.toml",
+            "mods/readme.txt",
+            "forge-installer.jar",
+        ] {
+            assert!(!names.contains(&gone.to_string()), "{gone} 不该进交付包");
+        }
+        // 脚本：引用参数文件，不再提 installServer，也不 call 那份带 pause 的 run.bat
+        let bat = zip_text(&report.path, "start.bat");
+        assert!(
+            bat.contains(&format!("java @user_jvm_args.txt @{args}/win_args.txt nogui")),
+            "{bat}"
+        );
+        assert!(!bat.contains("installServer") && !bat.contains("run.bat"), "{bat}");
+        let sh = zip_text(&report.path, "start.sh");
+        assert!(
+            sh.contains(&format!("java @user_jvm_args.txt @{args}/unix_args.txt nogui")),
+            "{sh}"
+        );
+        // installer 那两份模板/协议文件由我们的内容盖掉
+        assert!(zip_text(&report.path, "user_jvm_args.txt").contains("-Xmx4096M"));
+        assert!(zip_text(&report.path, "eula.txt").contains("eula=false"));
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// 老 Forge（实测 1.16.5）：装完没有 run 脚本与参数文件，顶层 universal jar 的 MANIFEST
+    /// 自带相对 Class-Path ⇒ 一句 `java -jar <jar> nogui`，且不造没人读的 user_jvm_args.txt
+    #[test]
+    fn installed_old_forge_starts_from_the_universal_jar() {
+        let root = tmp();
+        let staging = root.join("staging");
+        let out = root.join("out");
+        let installed = installed_tree(
+            &[
+                ("libraries/net/minecraftforge/forge/1.16.5-36.2.39/forge-1.16.5-36.2.39.jar", b"PK\x03\x04"),
+                ("forge-1.16.5-36.2.39.jar", b"PK\x03\x04"),
+                ("minecraft_server.1.16.5.jar", b"PK\x03\x04"),
+                ("forge-1.16.5-36.2.39-installer.jar", b"PK\x03\x04"),
+                ("install.log", b"noise"),
+            ],
+            &[],
+            &[
+                "forge-1.16.5-36.2.39-installer.jar",
+                "forge-1.16.5-36.2.39.jar",
+                "minecraft_server.1.16.5.jar",
+            ],
+        );
+        put(&staging.join("mods/example-mod.jar"), b"PK\x03\x04");
+        put(&staging.join("forge-installer.jar"), b"installer bytes");
+
+        let o = opts();
+        let report = build(&forge_input(&staging, &out, &o, &installed), &mut |_| {}).unwrap();
+        assert_eq!(
+            report.start_jar.as_deref(),
+            Some("forge-1.16.5-36.2.39.jar"),
+            "既不能挑官方本体 jar，也不能挑根本不打进包的安装器 jar"
+        );
+        let names = zip_names(&report.path);
+        assert!(names.contains(&"forge-1.16.5-36.2.39.jar".to_string()), "{names:?}");
+        assert!(names.contains(&"minecraft_server.1.16.5.jar".to_string()), "{names:?}");
+        assert!(!names.contains(&"forge-1.16.5-36.2.39-installer.jar".to_string()), "{names:?}");
+        assert!(!names.contains(&"user_jvm_args.txt".to_string()), "老布局没有 @参数文件可读");
+        let bat = zip_text(&report.path, "start.bat");
+        assert!(
+            bat.contains("java -Xmx4096M -jar forge-1.16.5-36.2.39.jar nogui"),
+            "{bat}"
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// 认不出布局就当场失败：这一档的用户要的是「上传即跑」，悄悄给一份还得联网首装的包比报错更坏
+    #[test]
+    fn unrecognized_installed_layout_fails_instead_of_degrading() {
+        let o = opts();
+        // run 脚本在，但没引用任何参数文件（安装器改了布局）
+        let no_args = installed_tree(
+            &[("run.bat", b"@echo off\r\njava -jar server.jar\r\n"), ("libraries/a.jar", b"x")],
+            &["run.bat"],
+            &[],
+        );
+        // 顶层既无脚本也无散 jar
+        let bare = installed_tree(&[("libraries/a.jar", b"x")], &[], &[]);
+        // 脚本指了一条不存在的参数文件路径
+        let stale = installed_tree(
+            &[("run.bat", b"java @user_jvm_args.txt @libraries/gone/win_args.txt %*\r\n")],
+            &["run.bat"],
+            &[],
+        );
+        for (case, why) in [(&no_args, "没有参数文件引用"), (&bare, "顶层空"), (&stale, "引用落空")] {
+            let root = tmp();
+            let staging = root.join("staging");
+            std::fs::create_dir_all(&staging).unwrap();
+            let err = build(&forge_input(&staging, &root.join("out"), &o, case), &mut |_| {})
+                .err()
+                .unwrap_or_else(|| panic!("{why} 的布局本该报错"));
+            assert!(matches!(err, BuilderError::Layout(_)), "{why} ⇒ {err}");
+            let _ = std::fs::remove_dir_all(&root);
+        }
+    }
+
+    /// 过滤表：安装目录里那些东西一件都不该出现在交付包（实测布局 + 手动试启动过的残留）
+    #[test]
+    fn installed_filter_blocks_runtime_leftovers() {
+        for rel in [
+            "run.bat",
+            "run.sh",
+            "user_jvm_args.txt",
+            "inst.sha1",
+            "eula.txt",
+            "server.properties",
+            "install.log",
+            "logs/latest.log",
+            "config/fml.toml",
+            "defaultconfigs/x.toml",
+            "mods/some.jar",
+            "forge-installer.jar",
+        ] {
+            assert!(installed_kept_out(rel), "{rel} 应被挡住");
+        }
+        // 依赖本体与 libraries 里的同名嵌套目录都要照装：只按顶层目录名挡
+        for keep in [
+            "libraries/net/minecraftforge/forge/win_args.txt",
+            "libraries/mods/inner.jar",
+            "libraries/config/x.toml",
+        ] {
+            assert!(!installed_kept_out(keep), "{keep} 是依赖的一部分");
+        }
+    }
+
+    /// 真机验：拿 `.scratch/installer-probe/` 里那三次真装出来的目录（Forge 1.20.1 新式 /
+    /// NeoForge 26.2 新式 / Forge 1.16.5 老式，含我手动试启动留下的残留）跑一遍并树 + 分叉。
+    /// 上面的夹具是按实测写的，这一条证明实测目录本身也过。跑法：
+    /// `SS_INSTALLED_DIR=<安装目录绝对路径> cargo test --lib real_installed_tree -- --ignored --nocapture`
+    #[test]
+    #[ignore = "要指向一次真装出来的 loader 目录（几百 MB），手动跑"]
+    fn real_installed_tree_merges_and_starts() {
+        let src = PathBuf::from(std::env::var("SS_INSTALLED_DIR").expect("未给 SS_INSTALLED_DIR"));
+        let mut scripts = Vec::new();
+        let mut jars = Vec::new();
+        for e in std::fs::read_dir(&src).unwrap().flatten() {
+            if !e.path().is_file() {
+                continue;
+            }
+            let name = e.file_name().to_string_lossy().to_string();
+            let lower = name.to_ascii_lowercase();
+            if lower == "run.bat" || lower == "run.sh" {
+                scripts.push(name);
+            } else if lower.ends_with(".jar") {
+                jars.push(name);
+            }
+        }
+        let installed = Installed {
+            from_cache: true,
+            report: installer::InstallReport {
+                files: 0,
+                bytes: 0,
+                elapsed: std::time::Duration::ZERO,
+                scripts,
+                jars,
+            },
+            dir: src,
+        };
+        let root = tmp();
+        let staging = root.join("staging");
+        let out = root.join("out");
+        put(&staging.join("mods/example-mod.jar"), b"PK\x03\x04");
+        put(&staging.join("forge-installer.jar"), b"installer bytes");
+        let o = opts();
+        let report = build(&forge_input(&staging, &out, &o, &installed), &mut |_| {}).unwrap();
+        let names = zip_names(&report.path);
+        println!(
+            "产物 {} · {} 个条目 · {} · start_jar={:?} · user_jvm_args 进包={}",
+            report.path.display(),
+            report.entries,
+            report.size,
+            report.start_jar,
+            names.contains(&"user_jvm_args.txt".to_string())
+        );
+        println!("start.bat: {}", zip_text(&report.path, "start.bat"));
+        // eula.txt 例外：包里有 ours 那份（builder 恒生成），这里挡的是安装目录那份
+        for gone in ["run.bat", "run.sh", "install.log", "inst.sha1"] {
+            assert!(!names.iter().any(|n| n == gone), "{gone} 不该进交付包");
+        }
+        assert!(!names.iter().any(|n| n.ends_with("-installer.jar")), "安装器 jar 不该进包");
+        assert!(names.iter().any(|n| n.starts_with("libraries/")), "依赖树没并进包");
+        assert!(!zip_text(&report.path, "start.bat").contains("installServer"));
         let _ = std::fs::remove_dir_all(&root);
     }
 }

@@ -10,7 +10,15 @@
  */
 import { formatRate, formatSize } from "@/lib/format";
 import { cn } from "@/lib/utils";
-import type { ActivityInfo } from "@/lib/types";
+import type { ActivityInfo, ActivityKind } from "@/lib/types";
+
+/**
+ * 实时条动词。三种动作三种说法：「下载」是收字节、「打包」是写 zip，
+ * 而本机安装是**跑一个外部进程**（分钟级、总量拿不到），不能混叫成下载。
+ */
+export function activityVerb(kind: ActivityKind): string {
+    return kind === "net" ? "下载" : kind === "install" ? "本机安装" : "打包";
+}
 
 /** 分母优先字节量；字节未知（响应无 Content-Length）退回条目数，两者都未知按不定态 */
 function percentOf(a: ActivityInfo): { percent: number; indeterminate: boolean } {
@@ -45,5 +53,7 @@ export function activityMeasure(a: ActivityInfo): string {
             ? `${formatSize(a.doneBytes)} / ${formatSize(a.totalBytes)}`
             : `${formatSize(a.doneBytes)} · 总量未知`;
     const retry = a.attempt > 1 ? `第 ${a.attempt} 次尝试 · ` : "";
-    return `${retry}${bytes} · ${formatRate(a.rateBps)}`;
+    // 安装器没有总量接口，能如实报的只有「已经装出多少个文件」，字节是写进目录的量而非下载量
+    const lead = a.kind === "install" ? `已装出 ${a.itemsDone} 个文件 · ` : "";
+    return `${retry}${lead}${bytes} · ${formatRate(a.rateBps)}`;
 }

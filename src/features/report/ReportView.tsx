@@ -151,6 +151,8 @@ export function ReportView({
                 {/* 窄窗口下六个格子换行，不靠横向挤压保排版 */}
                 <div className="flex w-full flex-wrap gap-x-6 gap-y-3">
                     <MiniMeta label="加载器" value={`${loader} ${o.loaderVersion}`} />
+                    {/* 本机装好这一档要在概况里看得见：它决定了「上传即跑」还是「首启联网自装」 */}
+                    {report.installed && <MiniMeta label="加载器安装" value="本机已装好" />}
                     <MiniMeta label="游戏版本" value={`Minecraft ${o.mcVersion}`} />
                     <MiniMeta label="Java" value={`Java ${o.javaVersion}`} />
                     <MiniMeta label="内存上限" value={gb(o.memoryMb)} />
@@ -434,9 +436,16 @@ function buildSteps(a: {
 
     if (o.generateScripts) {
         steps.push(
-            isForge
-                ? "首次运行包内 start.bat / start.sh：会先自动执行 installer --installServer，之后同样用该脚本启动"
-                : "运行包内 start.bat（Windows）或 start.sh（Linux/macOS），JVM 参数与 --nogui 已按本次配置写好"
+            report.installed
+                ? "解压后直接运行包内 start.bat / start.sh：加载器与依赖已在本机装好并打进包，目标机不需要再联网安装"
+                : isForge
+                  ? "首次运行包内 start.bat / start.sh：会先自动执行 installer --installServer，之后同样用该脚本启动"
+                  : "运行包内 start.bat（Windows）或 start.sh（Linux/macOS），JVM 参数与 --nogui 已按本次配置写好"
+        );
+    } else if (report.installed && !report.startJar) {
+        // 已装好又没生成脚本：起跳靠打进包的那两份参数文件（老 Forge 那态有 startJar，走下面那句 -jar）
+        steps.push(
+            "本次未生成启动脚本：在解压目录执行 java <JVM 参数> @libraries/…/win_args.txt（Linux 用 unix_args.txt），参数文件随依赖树一起打进包"
         );
     } else {
         const jar = report.startJar ?? "服务端 jar";

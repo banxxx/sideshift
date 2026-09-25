@@ -33,8 +33,11 @@ export interface ConversionReport {
     fileCount: number;
     /** 本次实际写入包根的文件（start.bat / eula.txt / server.properties / …） */
     generatedFiles: string[];
-    /** 启动脚本指向的 jar 名：Fabric 为服务端 jar，Forge/NeoForge 为 installer */
+    /** 启动脚本指向的 jar 名：Fabric 为服务端 jar，未本机安装的 Forge/NeoForge 为 installer；
+     *  已装好的新式布局为 undefined（起跳靠 libraries/ 下的参数文件，没有单一 jar 可指） */
     startJar?: string;
+    /** 本次把本机装好的 loader 树并进了产物：目标机不用再联网首装（Java 仍然要有） */
+    installed: boolean;
     /** 构建后自检结论；空数组 = 未开启该开关 */
     checks: CheckResult[];
 }

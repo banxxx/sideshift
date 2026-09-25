@@ -51,7 +51,7 @@ import {
 } from "@/lib/format";
 import type { ActivityInfo, ConversionReport, ConversionTask } from "@/lib/types";
 import { TaskErrorCard } from "@/features/task/TaskErrorCard";
-import { ActivitySubBar, activityMeasure } from "@/features/task/ActivityBar";
+import { ActivitySubBar, activityMeasure, activityVerb } from "@/features/task/ActivityBar";
 import { LogCopyButton } from "@/components/shared/LogCopyButton";
 import { PlanReviewView } from "@/features/convert/PlanReviewView";
 import { buildPlanSummary, ReportView } from "@/features/report/ReportView";
@@ -449,7 +449,7 @@ export function TaskDetailPage() {
                                                     )}
                                                 >
                                                     {act
-                                                        ? `${act.kind === "net" ? "下载" : "打包"} · ${act.subject}`
+                                                        ? `${activityVerb(act.kind)} · ${act.subject}`
                                                         : (lastLog?.message ?? "等待日志…")}
                                                 </span>
                                                 <Tip

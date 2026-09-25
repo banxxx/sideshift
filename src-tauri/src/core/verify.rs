@@ -1,8 +1,8 @@
 //! 构建后静态自检：打包完成、staging 还没回收之前，对着**真实落盘的产物**核对六件事。
 //!
 //! 全程离线、零子进程。这里回答的是「这份 zip 少没少东西、有没有半截 jar」，
-//! 不是「服务端能不能起来」——后者要 Java、要同意 EULA、Forge 还要首次联网装服务端，
-//! 失败原因九成与本包无关，把它做成构建开关只会让用户误信「跑起来了 = 包没问题」。
+//! 不是「服务端能不能起来」——后者要 Java、要同意 EULA，未开本机安装那一档的 Forge 还要首次
+//! 联网自装服务端，失败原因九成与本包无关，把它做成构建开关只会让用户误信「跑起来了 = 包没问题」。
 //! 所以结论口径统一是**对账**，报告页也不得写成「校验通过 = 可开服」。
 
 use std::collections::{HashMap, HashSet};
@@ -25,6 +25,8 @@ pub struct Input<'a> {
     pub plan: &'a [PlanMod],
     /// 启动脚本指向的 jar 名
     pub start_jar: Option<&'a str>,
+    /// 本次把本机装好的 loader 树并进了 staging：启动不再指向某一枚 jar，对账维度换成依赖树
+    pub installed: bool,
     /// builder 报的本次包根生成文件
     pub generated: &'a [String],
     /// 取件前登记的 mods/ 应到文件名：下载静默少一条，只有对账才看得出来
@@ -137,8 +139,11 @@ fn deps_check(input: &Input) -> CheckResult {
     check("deps", "依赖闭合", status, detail, broken)
 }
 
-/// 4 · 启动指向：start 脚本认的那个 jar 真的在包根
+/// 4 · 启动指向：start 脚本认的那个 jar 真的在包根；本机装好的包走 installed_check 那套对账
 fn start_check(input: &Input) -> CheckResult {
+    if input.installed {
+        return installed_check(input);
+    }
     let Some(jar) = input.start_jar else {
         return check(
             "start",
@@ -173,6 +178,50 @@ fn start_check(input: &Input) -> CheckResult {
         LoaderKind::Forge | LoaderKind::NeoForge => "首次运行会自动安装服务端（需本机 Java 与网络）",
     };
     check("start", "启动指向", CheckStatus::Pass, format!("{jar} 就位 · {tail}"), Vec::new())
+}
+
+/// 已装好的包的第四项：起跳不指向某一枚 jar，而是 `libraries/` 下那两份参数文件
+/// ⇒ 对账维度换成「依赖树真的并进了 staging」；老 Forge（装完没有 run 脚本）仍指着一枚
+/// 顶层 universal jar，那种情况顺带验它在不在
+fn installed_check(input: &Input) -> CheckResult {
+    let libs = input.staging.join("libraries");
+    if !fs::read_dir(&libs)
+        .map(|mut d| d.next().is_some())
+        .unwrap_or(false)
+    {
+        return check(
+            "start",
+            "启动指向",
+            CheckStatus::Fail,
+            "本机装好的依赖树没有并进包（libraries/ 缺失或为空）".to_string(),
+            vec!["libraries".to_string()],
+        );
+    }
+    let head = match input.start_jar {
+        Some(jar) if !input.staging.join(jar).is_file() => {
+            return check(
+                "start",
+                "启动指向",
+                CheckStatus::Fail,
+                format!("启动脚本指向的 {jar} 不在包里"),
+                vec![jar.to_string()],
+            )
+        }
+        Some(jar) => format!("{jar} 与依赖树都在包内"),
+        None => "依赖树已并入包内".to_string(),
+    };
+    let tail = if input.options.generate_scripts {
+        "start 脚本直接可跑"
+    } else {
+        "本次未生成启动脚本，需自行按包内参数文件启动"
+    };
+    check(
+        "start",
+        "启动指向",
+        if input.options.generate_scripts { CheckStatus::Pass } else { CheckStatus::Warn },
+        format!("{head} · {tail}"),
+        Vec::new(),
+    )
 }
 
 /// 5 · 包根文件：builder 报的生成件真的落盘了，且必需件一个不少
@@ -341,6 +390,7 @@ mod tests {
             loader: LoaderKind::Fabric,
             plan,
             start_jar: Some("fabric-server.jar"),
+            installed: false,
             generated: &generated,
             expected_mod_files: &expected,
             expected_keep_dirs: &HashMap::new(),
@@ -421,6 +471,7 @@ mod tests {
             loader: LoaderKind::Fabric,
             plan: &[],
             start_jar: Some("fabric-server.jar"),
+            installed: false,
             generated: &generated,
             expected_mod_files: &["keep.jar".to_string()],
             expected_keep_dirs: &expected,
@@ -430,5 +481,44 @@ mod tests {
         assert!(keep.items[0].starts_with("config"), "{}", keep.items[0]);
         assert_eq!(status_of(&checks, "files"), CheckStatus::Pass);
         let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// 本机装好的包：起跳不指向某一枚 jar（新式布局靠 libraries/ 下的参数文件），
+    /// 所以这一项改成对账依赖树进没并进 staging
+    #[test]
+    fn installed_pack_reconciles_the_dependency_tree() {
+        let with_tree = temp_staging(
+            &[("mods/a.jar", b""), ("libraries/net/x/win_args.txt", b"-cp")],
+            &[("start.bat", b"@echo off".as_slice())],
+        );
+        let without = temp_staging(&[("mods/a.jar", b"")], &[("start.bat", b"@echo off".as_slice())]);
+        let start_of = |dir: &Path| -> CheckResult {
+            let generated = vec!["start.bat".to_string()];
+            let opts = ConversionOptions::default();
+            let expected: Vec<String> = vec!["a.jar".to_string()];
+            run(&Input {
+                staging: dir,
+                options: &opts,
+                loader: LoaderKind::Forge,
+                plan: &[],
+                start_jar: None,
+                installed: true,
+                generated: &generated,
+                expected_mod_files: &expected,
+                expected_keep_dirs: &HashMap::new(),
+            })
+            .into_iter()
+            .find(|c| c.id == "start")
+            .unwrap()
+        };
+
+        let hit = start_of(&with_tree);
+        assert_eq!(hit.status, CheckStatus::Pass, "{}", hit.detail);
+        assert!(hit.detail.contains("依赖树"), "{}", hit.detail);
+        // 树没并进来看不见：本机装好了却没打进包，比缺一枚 jar 更该红
+        let miss = start_of(&without);
+        assert_eq!(miss.status, CheckStatus::Fail, "{}", miss.detail);
+        let _ = fs::remove_dir_all(&with_tree);
+        let _ = fs::remove_dir_all(&without);
     }
 }

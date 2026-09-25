@@ -129,6 +129,27 @@
   /* 圆角标尺：--radius = 控件基准 8px
    * 卡片 12 = radius*1.5，小元素 6 = radius*0.75，徽章 99 用 rounded-full */
   --radius: 8px;
+
+  /* ---- 窗口外壳（透明窗口 + 自绘投影）----
+   * tauri.conf 里 decorations:false + shadow:false：tao 的 shadow 只决定要不要让出
+   * 一圈隐形边框带子，而 DWM 把投影和那条 1px 描边画在同一圈带子里 ⇒ 线与投影同源。
+   * 所以改成窗口比卡片大一圈（--win-inset），露出的那圈透明区由我们画 box-shadow。
+   * shadow 的第三个数字是模糊半径，越大越"扩散"，当前取值贴着"读得出边界但不糊成光晕"。
+   * 一个数两头用：--win-inset 既是投影能扩散的距离，也是"边框外多宽能拖大"的下限
+   * （原生那条缩放环焊在窗口外沿，收不掉），调它之前先想清楚这两头。
+   * 代价：模态遮罩 / 垃圾桶 / 删除飞行层那几处 `fixed` 仍按视口（=整窗）定位，
+   * 与卡片边缘差一个 inset。最大化时 inset 由 [data-win-max] 收成 0。
+   * 6px 是实测出来的：4px 时下沿那截尾巴被窗口裁掉，读出一条"被切平"的硬边，
+   * 左右/底部的边界感也跟着变弱。0 2px 6px 要 ~6px 才走完尾巴。 */
+  --win-inset: 6px;
+  /* 缩放把手向内跨过卡片边多少。卡片边落在带的中间才读得出"按在边框上"：
+   * 只铺留白（=0）时卡片边是带的内边界，压线点有一半概率落在卡片里而不触发。
+   * 与 --win-inset 合起来 = 总命中带宽 10px（内 4 / 外 6），比原生 8px 宽一档，
+   * 换的是投影不被裁——外层那 6px 是投影的距离，不是白给的。
+   * 4px 安全：标题栏 px-4 / 侧栏 px-3 / 底部信息行 pb-3，最内 4px 内没有可点件；
+   * 唯一行为变化是标题栏最上 4px 从"拖动窗口"变成"改尺寸"——原生窗口本来也是这样。 */
+  --win-edge-inside: 4px;
+  --win-shadow: 0 2px 6px rgba(15, 18, 26, 0.22);
 }
 
 /* ================= 深色主题 ================= */
@@ -161,6 +182,9 @@
   --diamond: #5bd3e8;
 
   --rail-track: #2a2d36;
+
+  /* 深色下桌面通常本来就暗，投影要更重才读得出边界 */
+  --win-shadow: 0 2px 7px rgba(0, 0, 0, 0.55);
 }
 
 /* ============ Tailwind 4 主题注册 ============ */
@@ -336,6 +360,88 @@
   }
 }
 
+/* ============ 最大化：留白收掉 ============
+ * tao 最大化走 ShowWindow(SW_MAXIMIZE)（window_state.rs:377），矩形交给系统算，
+ * 而系统会把带 WS_THICKFRAME 的窗口向外撑一个边框厚度（Win10 左/右/下各一截、上为 0）。
+ * 于是 inset 归零后卡片正好落在屏幕边沿上——那截被撑出去的部分本就在屏外。
+ * 投影同时被窗口边界裁掉：最大化不该有浮起感。
+ * 与 :root 同优先级，靠源码顺序（本段在后）压过那条声明。 */
+[data-win-max] {
+  --win-inset: 0px;
+  --win-edge-inside: 0px;
+}
+
+/* ============ 窗口缩放把手（透明留白那圈）============
+ * 口径见 components/shared/ResizeEdges.tsx：无边框窗口的拖拽改尺寸归 tauri 挂在
+ * 客户区最外圈的原生子窗口，那条环不知道我们把卡片内缩了，于是「看得见、按不到」。
+ * 命中带 = --win-inset（向外到窗口边）+ --win-edge-inside（向内跨过卡片边），
+ * 卡片边落在带子中间才读得出"按在边框上"。
+ * --s 声明在本元素上，读的是外壳覆盖后的值 ⇒ 最大化时两个变量都是 0，带子缩成零宽
+ * （原生环在最大化时也被 tao 撤了），组件不必自己判状态。
+ * 角排在边之后：同优先级后者压前者，四角才拿得到斜向光标。
+ * z-index 与模态遮罩同档 + DOM 里排在卡片之后 ⇒ 弹窗开着时这一圈仍可拖。 */
+.win-edge {
+  --s: calc(var(--win-inset) + var(--win-edge-inside));
+  position: absolute;
+  z-index: 50;
+}
+.win-edge[data-edge="west"] {
+  left: 0;
+  top: var(--s);
+  bottom: var(--s);
+  width: var(--s);
+  cursor: ew-resize;
+}
+.win-edge[data-edge="east"] {
+  right: 0;
+  top: var(--s);
+  bottom: var(--s);
+  width: var(--s);
+  cursor: ew-resize;
+}
+.win-edge[data-edge="north"] {
+  top: 0;
+  left: var(--s);
+  right: var(--s);
+  height: var(--s);
+  cursor: ns-resize;
+}
+.win-edge[data-edge="south"] {
+  bottom: 0;
+  left: var(--s);
+  right: var(--s);
+  height: var(--s);
+  cursor: ns-resize;
+}
+.win-edge[data-edge="northwest"] {
+  top: 0;
+  left: 0;
+  width: var(--s);
+  height: var(--s);
+  cursor: nwse-resize;
+}
+.win-edge[data-edge="northeast"] {
+  top: 0;
+  right: 0;
+  width: var(--s);
+  height: var(--s);
+  cursor: nesw-resize;
+}
+.win-edge[data-edge="southwest"] {
+  bottom: 0;
+  left: 0;
+  width: var(--s);
+  height: var(--s);
+  cursor: nesw-resize;
+}
+.win-edge[data-edge="southeast"] {
+  bottom: 0;
+  right: 0;
+  width: var(--s);
+  height: var(--s);
+  cursor: nwse-resize;
+}
+
 @layer base {
   * {
     @apply border-border outline-ring/50;
@@ -346,9 +452,13 @@
     font-size: 16px;
     line-height: 24px;
     @apply font-sans;
+    /* 透明窗口：canvas 的默认底色由 color-scheme 决定（是不透明的），必须显式压成透明，
+     * 否则窗口外面那圈留白会被涂实，投影根本露不出来。真正的应用底色在 App.tsx 的卡片层。 */
+    background: transparent;
   }
   body {
-    @apply bg-background text-foreground;
+    @apply text-foreground;
+    background: transparent;
     cursor: default;
   }
   /* 输入区恢复选择 */

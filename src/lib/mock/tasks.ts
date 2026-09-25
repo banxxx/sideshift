@@ -13,7 +13,8 @@ import type {
     TaskLogLine,
     TrashEntry,
 } from "@/lib/types";
-import { outputNameOf } from "@/lib/format";
+import { outputNameOf, loaderLabel } from "@/lib/format";
+import { hasInstallerStage } from "@/lib/rail-view";
 import {
     mockDefaultOptions,
     mockManifest,
@@ -27,7 +28,10 @@ const tasks = new Map<string, ConversionTask>();
 const timers = new Map<string, ReturnType<typeof setInterval>>();
 let seq = 0;
 
-const stagePlan: Array<{ stage: ConversionTask["stage"]; until: number; logs: string[] }> = [
+/** 一段模拟阶段：走到 until 就换下一段，logs 是该段的样例日志 */
+type StageSeg = { stage: ConversionTask["stage"]; until: number; logs: string[] };
+
+const stagePlan: StageSeg[] = [
     { stage: "parser", until: 15, logs: ["读取清单 vault-hunters 2.4.1 · minecraft-1.20.1"] },
     {
         stage: "detector",
@@ -60,6 +64,46 @@ const stagePlan: Array<{ stage: ConversionTask["stage"]; until: number; logs: st
 
 function now(): string {
     return new Date().toTimeString().slice(0, 8);
+}
+
+/**
+ * 阶段 2.5 的第一拍：把官方安装器 jar 从取件计划里拎出来单独先取（30→34）。
+ * 站点仍是「下载」——本机安装不另起一站，它是下载站内部的一段。
+ */
+const loaderJar: StageSeg = {
+    stage: "downloader",
+    until: 34,
+    logs: ["安装器就位：forge-1.20.1-47.2.0-installer.jar · 4.9 MB"],
+};
+
+/**
+ * 「本机执行 installer」这一档模拟的是**跑一个外部进程**：分钟级、没有总量接口，
+ * 所以 activity 的两个分母一律留 0（实时条按不定态脉冲），进度只按 34→42 这八个点爬。
+ * 区间与真实后端同一口径；日志行给「装了多少 + 装出来的目录结构」两句，与 Rust 侧同源。
+ */
+const installer: StageSeg = {
+    stage: "installer",
+    until: 42,
+    logs: [
+        "本机安装 · Java 21 · 官方安装器已启动",
+        "安装器 · 已写出 1328 个文件 · 106.4 MB",
+        "本机安装完成 · 用时 158.2 秒 · 顶层 run.bat、run.sh",
+    ],
+};
+
+/**
+ * 开了「本机执行 installer」才把下载段拆成三拍（先取安装器 → 本机装 → 模组取件从 42 起脚）。
+ * 拆在这里而非区间常量里，是因为 advance 按「进度落在哪一段」取样例日志与实时条口径。
+ * Fabric 没有安装器可跑（它的 loader jar 是加载器本体，从版本表直取）⇒ 整档跳过。
+ */
+function stagePlanFor(task: ConversionTask): StageSeg[] {
+    if (!hasInstallerStage(task)) return stagePlan;
+    return [
+        ...stagePlan.slice(0, 2),
+        loaderJar,
+        installer,
+        ...stagePlan.slice(2),
+    ];
 }
 
 /** 实时条样例文件名（轮着当「正在下载哪一个」，与 stagePlan 的下载日志同一批名字） */
@@ -249,7 +293,9 @@ function advance(id: string) {
             return;
         }
         task.progress = Math.min(100, task.progress + 2);
-        const seg = stagePlan.find((s) => task.progress <= s.until)!;
+        const plan = stagePlanFor(task);
+        const segIdx = plan.findIndex((s) => task.progress <= s.until);
+        const seg = plan[segIdx];
         task.stage = seg.stage;
         if (seg.stage === "downloader") {
             // 取件构成：与真实后端同一形态（146 项里只有 24 项真联网）
@@ -278,9 +324,24 @@ function advance(id: string) {
                 rateBps: 2_400_000,
                 attempt: 1,
             };
+        } else if (seg.stage === "installer") {
+            // 安装器那边只有「已经写出多少」，没有总量接口 ⇒ 两个分母留 0，实时条按不定态脉冲
+            const from = plan[segIdx - 1]?.until ?? 0;
+            const p = (task.progress - from) / (seg.until - from);
+            task.activity = {
+                kind: "install",
+                subject: `${loaderLabel(task.pack.loader)} ${task.options.mcVersion}-${task.options.loaderVersion}`,
+                doneBytes: Math.round(p * 106_400_000),
+                totalBytes: 0,
+                itemsDone: Math.round(p * 1328),
+                itemsTotal: 0,
+                rateBps: 860_000,
+                attempt: 1,
+            };
         } else if (seg.stage === "builder") {
-            // 打包段 82→100：分母用产物体积，subject 随已写字节换目录
-            const p = (task.progress - 82) / 18;
+            // 打包段：开了本机安装时基座从 92 起算，没开仍是 82→100（分母用产物体积，subject 随已写字节换目录）
+            const from = plan[segIdx - 1]?.until ?? 0;
+            const p = (task.progress - from) / (seg.until - from);
             const bytes = 101_187_000;
             task.activity = {
                 kind: "zip",
@@ -451,6 +512,8 @@ export function mockReport(taskId: string): ConversionReport | undefined {
         fileCount: (task.counts?.keep ?? mockPlanCounts.keep) + (task.counts?.add ?? mockPlanCounts.add) + generated.length + 12,
         generatedFiles: generated,
         startJar: "fabric-server-launch.jar",
+        // 演示包是 Fabric：它没有安装器 jar 可在本机跑
+        installed: false,
         checks,
     };
 }
