@@ -277,7 +277,7 @@ impl Default for ConversionOptions {
             nogui: true,
             agree_eula: false,
             server_port: 25565,
-            motd: "A SideShift powered Minecraft server".into(),
+            motd: "A Minecraft server".into(),
             max_players: 20,
             gamemode: "survival".into(),
             difficulty: "easy".into(),

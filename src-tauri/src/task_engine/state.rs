@@ -35,6 +35,9 @@ pub struct Inner {
     pub env_evidence_file: Option<String>,
     /// 最近一次离线扫描的字节码结构事实（路径 → 事实）；与 env_evidence 同期写、同包作废
     pub env_code: env::CodeMap,
+    /// 联网反查仍在后台跑的那个包名（跑完或换包即清）。classify_pack 靠它区分
+    /// 「缓存命中、本轮已经结束」和「缓存命中、但在线层还在补」——后者还得继续挂「分类中」。
+    pub env_online_file: Option<String>,
 }
 
 pub struct AppState {

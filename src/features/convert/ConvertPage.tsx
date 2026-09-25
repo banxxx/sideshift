@@ -2,7 +2,8 @@
  * 转换配置页 Convert（SS.pen `dEsbp` 剔除态 / `pRF47` 新增态 / `sc3I9` 下拉展开态）
  *
  * checkout 式骨架：BodyRow gap20 = 左列（gap16，三张卡各 gap14）+ 右栏 280px 摘要卡。
- * 全局默认值来自设置页（api.defaultOptions），本页做的是“单包覆写”——离开即丢弃。
+ * 全局默认值来自设置页（api.defaultOptions），本页做的是“单包覆写”——只活在这一次选包里
+ * （切页往返由 pack-store 的草稿接回，换包/改了影响判定的全局设置即作废）。
  *
  * 这一页只做一件事：**配置一次新的转换**。回看某个任务真正用过的方案是任务详情「方案」签的活
  * （见 PlanReviewView），它读的是任务存档；这里的装载链全部围着「刚选完的包」现算。
@@ -16,9 +17,10 @@
  * 模组方案卡见 ModPlanCard，方案行与徽章见 PlanModRow，静态选项见 constants。
  */
 import { Archive, ChevronRight, Download, Folder, Layers } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { motion } from "motion/react";
 import * as api from "@/lib/api";
+import { usePackStore, type PlanDraft } from "@/lib/pack-store";
 import { useNavigation } from "@/lib/navigation";
 import { notify } from "@/lib/notify";
 import { formatSize, loaderLabel, outputNameOf, reviewFirst, truncateMiddle } from "@/lib/format";
@@ -54,13 +56,19 @@ import { KEEP_DIR_PRESETS, PREVIEW_ROWS, toOption } from "./constants";
 export function ConvertPage() {
     const { entry, navigate, switchPrimary } = useNavigation();
     const manifest = entry.params?.manifest as PackManifest | undefined;
+    const { getDraft, saveDraft } = usePackStore();
+    /** 这一套选包的方案草稿：只在这次挂载的最初一帧取一次（取不到就是首次进来）。
+     *  本页只挂导航栈栈顶，回首页即卸载 ⇒ 没有草稿就得整套重跑一遍自动分类。 */
+    const [draft] = useState(getDraft);
 
     const [options, setOptions] = useState<ConversionOptions | null>(null);
-    const [plan, setPlan] = useState<PlanMod[]>([]);
-    const [extras, setExtras] = useState<PlanMod[]>([]);
-    const [overrides, setOverrides] = useState<Record<string, ModDisposition>>({});
+    const [plan, setPlan] = useState<PlanMod[]>(() => draft?.plan ?? []);
+    const [extras, setExtras] = useState<PlanMod[]>(() => draft?.extras ?? []);
+    const [overrides, setOverrides] = useState<Record<string, ModDisposition>>(
+        () => draft?.overrides ?? {}
+    );
     /** 被停用的新增行 id：取消勾选=停用（行保留在清单，不参与构建），替代旧的「移除+撤销」链路 */
-    const [disabledIds, setDisabledIds] = useState<Set<string>>(() => new Set());
+    const [disabledIds, setDisabledIds] = useState<Set<string>>(() => new Set(draft?.disabledIds));
     const [tab, setTab] = useState<ModDisposition>("remove");
     const [mcOptions, setMcOptions] = useState<SelectOption[]>([]);
     const [loaderOptions, setLoaderOptions] = useState<SelectOption[]>([]);
@@ -82,8 +90,9 @@ export function ConvertPage() {
     /** 包内可保留目录树（目录勾选弹窗数据源） */
     const [packDirs, setPackDirs] = useState<PackDirNode[]>([]);
     const [dirModalOpen, setDirModalOpen] = useState(false);
-    /** 自动分类进行中：离线层是同步返回，在线层补全后走 classified 事件再刷一次 */
-    const [classifying, setClassifying] = useState(false);
+    /** 自动分类进行中：离线层是同步返回，在线层补全后走 classified 事件再刷一次。
+     *  带草稿回来时它=「离开时联网还没跑完」，下面那条挂载 effect 会据此跟后端复核一次。 */
+    const [classifying, setClassifying] = useState(draft?.onlinePending ?? false);
     /** 手动重跑的那一小段：列表已被清空、离线结论还没回来（只用来挑文案） */
     const [reclassifying, setReclassifying] = useState(false);
     /** 「清空我的修改」两段式确认（弹窗纪律：不用遮罩/确认框，第二次点击才执行） */
@@ -126,6 +135,9 @@ export function ConvertPage() {
     // 数据装载：包正躺在后端解析缓存里，按全局默认值 + 自动分类现算一份待确认的方案。
     // `defaultOptions`/`classifyPack`/`listPackDirs` 都只认「最近一次解析的包」，所以这条链只能服务
     // 刚选完的包；回看某个任务真正用过的方案走任务详情「方案」签（读存档，不碰这三个命令）。
+    // 自动分类只在「没有草稿」或「离开时联网还没跑完」时补一次：前者是首次进来确实没算过，
+    // 后者要跟后端复核（联网结论可能在人不在这一页时才到）。草稿完整时整套清单已经在状态里，
+    // 再跑一遍等于白付一次逐个开包内 jar 的离线探测 + 整屏重排（手动重跑另有「重新自动分类」按钮）。
     useEffect(() => {
         if (!manifest) return;
         void Promise.all([api.defaultOptions(manifest), api.listPackDirs()]).then(
@@ -141,11 +153,28 @@ export function ConvertPage() {
                 });
             }
         );
-        void runClassify(false);
+        if (!draft || draft.onlinePending) void runClassify(false);
         void api.listMcVersions().then((l) => setMcOptions(l.map(toOption)));
         void api.listJavaVersions().then((l) => setJavaOptions(l.map(toOption)));
         void api.getSettings().then(setSettings);
+        // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [manifest]);
+
+    // 离开页面时把这一套方案交给 store（下次进来第一帧就是它）：值走 ref 传，
+    // 免得每次勾选都惊动 App 级 context 让整棵页面树跟着重渲染。
+    const liveDraftRef = useRef<PlanDraft | null>(null);
+    useEffect(() => {
+        liveDraftRef.current = { plan, extras, overrides, disabledIds, onlinePending: classifying };
+    }, [plan, extras, overrides, disabledIds, classifying]);
+    useEffect(
+        () => () => {
+            const d = liveDraftRef.current;
+            // 空方案不存：开发期 StrictMode 的双挂载会立刻走一次 cleanup，那一次没有内容可留；
+            // 存进去只会把「还没算完」当成草稿
+            if (d && (d.plan.length > 0 || d.extras.length > 0)) saveDraft(d);
+        },
+        [saveDraft]
+    );
 
     // 在线反查的补全结论：后端换包后会停推，这里再按 fileName 拦一道，防迟到事件串台
     const packName = manifest?.fileName;

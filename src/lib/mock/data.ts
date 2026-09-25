@@ -237,7 +237,7 @@ export const mockDefaultOptions: ConversionOptions = {
     nogui: false,
     agreeEula: true,
     serverPort: 25565,
-    motd: "A SideShift powered Minecraft server",
+    motd: "A Minecraft server",
     maxPlayers: 20,
     gamemode: "survival",
     difficulty: "easy",

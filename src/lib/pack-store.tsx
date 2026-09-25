@@ -6,10 +6,23 @@
  * 任务存储恢复），行为不一致。提升到 App 级后，侧栏切换不再打断工作流。
  *
  * 刻意只存内存：应用重启回到全新 idle（上次磁盘上的包可能已被移动/删除）。
+ *
+ * 同一套选包还捎带存一份「转换页草稿」（planDraft）：ConvertPage 只挂栈顶，切回首页即卸载，
+ * 方案与手改会跟着清零 ⇒ 重进就得整套重跑自动分类。草稿让这一趟往返回到离开时的样子。
  */
-import { createContext, useCallback, useContext, useState, type ReactNode } from "react";
+import { createContext, useCallback, useContext, useRef, useState, type ReactNode } from "react";
 import * as api from "@/lib/api";
-import type { PackManifest } from "@/lib/types";
+import type { ModDisposition, PackManifest, PlanMod } from "@/lib/types";
+
+/** 转换页「模组方案」那一套状态的快照（离开页面时写、进页面时读一次） */
+export interface PlanDraft {
+    plan: PlanMod[];
+    extras: PlanMod[];
+    overrides: Record<string, ModDisposition>;
+    disabledIds: Set<string>;
+    /** 离开时联网反查还在跑（= 页面那侧的 classifying）：回来要跟后端复核一次，别把「分类中」挂住 */
+    onlinePending: boolean;
+}
 
 interface PackStore {
     manifest: PackManifest | null;
@@ -26,6 +39,13 @@ interface PackStore {
     parse: (path: string) => Promise<void>;
     pickByDialog: () => Promise<void>;
     reset: () => void;
+    /** 读当前包的转换页草稿；没有（首次进来/换过包/全局判定设置改过）返回 null。
+     *  非响应式：只在挂载那一帧读，页面活着的时候没人替它改。 */
+    getDraft: () => PlanDraft | null;
+    /** 写草稿（转换页卸载时调）；当前没有选包则丢弃 */
+    saveDraft: (value: PlanDraft) => void;
+    /** 作废草稿 */
+    clearDraft: () => void;
 }
 
 const Ctx = createContext<PackStore | null>(null);
@@ -38,12 +58,39 @@ export function PackStoreProvider({ children }: { children: ReactNode }) {
     // 初值取挂载时刻：应用重启后磁盘上恢复的历史任务一律算「上次构建」，不该出现在首页
     const [selectedAt, setSelectedAt] = useState(() => Date.now());
 
+    // 草稿用 ref 不用 state：它只在「离开转换页」那一刻写、在「进入转换页」那一帧读，
+    // 中间没有任何视图该为它重渲染（换页时也就少一次 App 级 context 刷新）。
+    // key = 文件名 + 选包时刻：重新拖入同名包是另一套构建，旧草稿必须对不上号。
+    const draftRef = useRef<{ key: string; value: PlanDraft } | null>(null);
+    const draftKey = manifest ? `${manifest.fileName}#${selectedAt}` : null;
+
+    const getDraft = useCallback(() => {
+        const d = draftRef.current;
+        return d && d.key === draftKey ? d.value : null;
+    }, [draftKey]);
+
+    // saveDraft 的 key 取的是「调用那一刻所在渲染」的归属：转换页退场那一拍（约 140ms）之后
+    // 用户才可能换包，届时这个闭包带着的是旧 key，写进去也只会被旧包那次读取对上——
+    // 新包读不到，正是想要的。
+    const saveDraft = useCallback(
+        (value: PlanDraft) => {
+            if (draftKey) draftRef.current = { key: draftKey, value };
+        },
+        [draftKey]
+    );
+
+    const clearDraft = useCallback(() => {
+        draftRef.current = null;
+    }, []);
+
     const parse = useCallback(async (path: string) => {
         setParsing(true);
         setError(null);
         setErrorName(null);
         // 每次选包（含解析失败）都重新计时：旧任务从此与这套构建无关
         setSelectedAt(Date.now());
+        // 换包 = 旧草稿作废（key 本来也对不上，这里只是别把上一个包的清单留在内存里）
+        draftRef.current = null;
         const fail = (msg: string) => {
             setManifest(null);
             setError(msg);
@@ -78,6 +125,7 @@ export function PackStoreProvider({ children }: { children: ReactNode }) {
         setErrorName(null);
         setParsing(false);
         setSelectedAt(Date.now());
+        draftRef.current = null;
     }, []);
 
     return (
@@ -91,6 +139,9 @@ export function PackStoreProvider({ children }: { children: ReactNode }) {
                 parse,
                 pickByDialog,
                 reset,
+                getDraft,
+                saveDraft,
+                clearDraft,
             }}
         >
             {children}

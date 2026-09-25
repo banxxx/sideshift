@@ -42,7 +42,7 @@ export function TrashList() {
      * `relative` 必需：退场层被注入绝对定位，坐标按最近定位祖先算，滚动容器不定位就会量到窗外。
      */
     return (
-        <div className="relative -mx-1 flex min-h-0 flex-1 flex-col gap-1.5 overflow-auto">
+        <div className="list-scroll relative -mx-1 flex min-h-0 flex-1 flex-col gap-1.5 overflow-auto">
             <AnimatePresence mode="popLayout" initial={false}>
                 {entries.length === 0 ? (
                     <motion.div

@@ -17,6 +17,7 @@ import {
     ModalShell,
     SearchBox,
     SegTabs,
+    Swap,
     TagChip,
     HOVER_FILL,
 } from "@/components/ui";
@@ -367,49 +368,56 @@ export function PlanListModal({
                 </div>
             </div>
 
-            {/* list：gap2；行 padding[8,4]；全部展示（滚动） */}
-            <div className="-mx-1 flex min-h-0 flex-1 flex-col gap-0.5 overflow-auto px-1">
-                {filtered.map((m) => {
-                    const checked = checkedOf(m);
-                    const pending = pendingOf(m);
-                    return (
-                        <ListRow
-                            key={m.id}
-                            className={cn(
-                                !readOnly && "cursor-pointer",
-                                pending && "bg-gold-dim"
-                            )}
-                            onClick={readOnly ? undefined : () => setRow(m)}
-                        >
-                            {/* 勾选框不接 onChange：点击冒泡到整行，避免一行两处状态源；
-                                颜色不跟勾选走（剔除清单的默认未勾选是常态，不该报金） */}
-                            <CheckBox checked={checked} readOnly={readOnly} onChange={() => {}} />
-                            <span className="flex min-w-0 flex-1 flex-col gap-0.5">
-                                <span className="truncate font-mono text-[12px] leading-[18px] font-medium text-text-1">
-                                    {m.name} {m.version}
+            {/* list：gap2；行 padding[8,4]；全部展示（滚动）。
+                切筛选档 = 同一位置换一批行 ⇒ 走全站那一档 Swap 节拍（进 180ms 落 6px / 出 90ms 溶解）。
+                key 只认 tagFilter：**打字筛（query）不演**，那是一行一行地少下去，演一次整块换批反而
+                读成「列表被重刷了」。Swap 自带 relative 外壳，所以这层滚动容器不用再加定位。
+                list-scroll：内容宽度必须恒定，否则从行少的档切走时底部会闪一条横向滚动条
+                （退场层带的是切换前量好的 px 宽度，口径见 App.css 的 .list-scroll）。 */}
+            <div className="list-scroll -mx-1 flex min-h-0 flex-1 flex-col overflow-auto px-1">
+                <Swap swapKey={tagFilter} className="gap-0.5">
+                    {filtered.map((m) => {
+                        const checked = checkedOf(m);
+                        const pending = pendingOf(m);
+                        return (
+                            <ListRow
+                                key={m.id}
+                                className={cn(
+                                    !readOnly && "cursor-pointer",
+                                    pending && "bg-gold-dim"
+                                )}
+                                onClick={readOnly ? undefined : () => setRow(m)}
+                            >
+                                {/* 勾选框不接 onChange：点击冒泡到整行，避免一行两处状态源；
+                                    颜色不跟勾选走（剔除清单的默认未勾选是常态，不该报金） */}
+                                <CheckBox checked={checked} readOnly={readOnly} onChange={() => {}} />
+                                <span className="flex min-w-0 flex-1 flex-col gap-0.5">
+                                    <span className="truncate font-mono text-[12px] leading-[18px] font-medium text-text-1">
+                                        {m.name} {m.version}
+                                    </span>
+                                    <span
+                                        className={cn(
+                                            "truncate text-[10px] leading-[14px] font-normal",
+                                            pending ? "text-gold" : "text-text-3"
+                                        )}
+                                    >
+                                        {pending ? copy.rowOff : rowOnSub(m, focus)}
+                                    </span>
                                 </span>
-                                <span
-                                    className={cn(
-                                        "truncate text-[10px] leading-[14px] font-normal",
-                                        pending ? "text-gold" : "text-text-3"
-                                    )}
-                                >
-                                    {pending ? copy.rowOff : rowOnSub(m, focus)}
-                                </span>
-                            </span>
-                            {pending ? (
-                                <TagChip square outline className="text-gold">
-                                    {copy.offBadge}
-                                </TagChip>
-                            ) : (
-                                <RowTagChip m={m} focus={focus} />
-                            )}
-                        </ListRow>
-                    );
-                })}
-                {filtered.length === 0 && (
-                    <span className="py-8 text-center text-[11px] text-text-3">无匹配模组</span>
-                )}
+                                {pending ? (
+                                    <TagChip square outline className="text-gold">
+                                        {copy.offBadge}
+                                    </TagChip>
+                                ) : (
+                                    <RowTagChip m={m} focus={focus} />
+                                )}
+                            </ListRow>
+                        );
+                    })}
+                    {filtered.length === 0 && (
+                        <span className="py-8 text-center text-[11px] text-text-3">无匹配模组</span>
+                    )}
+                </Swap>
             </div>
         </ModalShell>
     );

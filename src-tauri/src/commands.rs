@@ -236,6 +236,11 @@ fn code_of(inner: &task_engine::Inner) -> &env::CodeMap {
     }
 }
 
+/// 联网反查是否还在为当前包跑：与 env_evidence 同一套「只认 last_file」的口径
+fn online_running_of(inner: &task_engine::Inner) -> bool {
+    inner.env_online_file.is_some() && inner.env_online_file == inner.last_file
+}
+
 /// 最近一次解析包的方案（用户勾改在前端本地模型中，start_conversion 回传最终版）
 fn current_plan(state: &S<'_>) -> Vec<PlanMod> {
     let inner = lock(&state);
@@ -254,20 +259,53 @@ fn current_plan(state: &S<'_>) -> Vec<PlanMod> {
 /// 自动分类：先跑离线层（包内 jar 自证 + 本地索引）并立即返回，在线层（Modrinth 反查）
 /// 后台补完再用 `plan://classified` 事件推一次增量。用户手改永远在前端 overrides 里，
 /// 后端只交「自动结论」，不碰人工选择。
+///
+/// `force=false` 且这一包的端证据还在缓存里（= 同一个包第二次问）时直接复用取证结果：
+/// 离线探测整轮跳过（那是这页最贵的重复劳动），方案按当前设置现算。
+/// `force=true`（「重新自动分类」按钮）永远真重探一遍。
 #[tauri::command]
-pub async fn classify_pack(app: AppHandle, state: S<'_>) -> Result<PlanClassification, String> {
+pub async fn classify_pack(
+    app: AppHandle,
+    state: S<'_>,
+    force: bool,
+) -> Result<PlanClassification, String> {
     // 快照 inputs：guard 必须在这个块里结束，否则 MutexGuard 跨 await 让命令 future 不 Send
-    let (parsed, file_name, strip, online, cache_dir, concurrency) = {
+    let (parsed, file_name, strip, online, cache_dir, concurrency, cached) = {
         let inner = lock(&state);
+        let empty = env::EvidenceMap::new();
         match last_parsed_of(&inner) {
-            Some(p) => (
-                p,
-                inner.last_file.clone().unwrap_or_default(),
-                inner.settings.strip_client_only,
-                inner.settings.auto_classify_online,
-                PathBuf::from(&inner.settings.cache_dir),
-                inner.settings.concurrency.max(1) as usize,
-            ),
+            Some(p) => {
+                // 同一包第二次进来（切页再回、别的入口重问）：端证据已归属本包 ⇒ 整轮离线探测
+                // 没有新东西可挖——probe_jars 要逐个开包内 jar，裸 zip 还得为缺 sha1 的行整包算
+                // 哈希，而答案就是缓存里那批。方案仍然现算，所以设置页改 strip_client_only 照样
+                // 立刻生效：缓存的是取证结果，不是结论。
+                // force = 用户点「重新自动分类」，那条路必须真重探（也是联网失败后的重试出口）。
+                let reuse = !force
+                    && !inner.env_evidence.is_empty()
+                    && inner.env_evidence_file.is_some()
+                    && inner.env_evidence_file == inner.last_file;
+                let cached = reuse.then(|| {
+                    (
+                        detector::build_plan(
+                            &p,
+                            inner.settings.strip_client_only,
+                            evidence_of(&inner, &empty),
+                            code_of(&inner),
+                        ),
+                        // 在线层还在跑 ⇒ 结论仍会由 classified 事件再推一次，别提前收「分类中」
+                        online_running_of(&inner),
+                    )
+                });
+                (
+                    p,
+                    inner.last_file.clone().unwrap_or_default(),
+                    inner.settings.strip_client_only,
+                    inner.settings.auto_classify_online,
+                    PathBuf::from(&inner.settings.cache_dir),
+                    inner.settings.concurrency.max(1) as usize,
+                    cached,
+                )
+            }
             None => {
                 return Ok(PlanClassification {
                     plan: Vec::new(),
@@ -276,6 +314,12 @@ pub async fn classify_pack(app: AppHandle, state: S<'_>) -> Result<PlanClassific
             }
         }
     };
+    if let Some((plan, online_running)) = cached {
+        return Ok(PlanClassification {
+            plan,
+            online_pending: online && online_running,
+        });
+    }
 
     // 离线层 1：包内 jar 自证（Fabric/Quilt 的 environment + entrypoints）与自报身份/哈希
     // （重 CPU → _blocking）。不再被 mrpack env 挡住：jar 是最高可信层，本地扫描零请求成本，
@@ -329,14 +373,18 @@ pub async fn classify_pack(app: AppHandle, state: S<'_>) -> Result<PlanClassific
     let pending = env::apply_index(&index, &targets, &mut ev);
 
     let plan = detector::build_plan(&parsed, strip, &ev, &code);
+    // 离线那次推送：还有在线层要跑就说明本轮没结束（done=false，前端继续转圈）
+    let offline_final = !online || pending.is_empty();
     {
         let mut inner = lock(&state);
         inner.env_evidence = ev.clone();
         inner.env_code = code;
         inner.env_evidence_file = Some(file_name.clone());
+        // 本轮确实还要联网：立个标记，让之后的缓存命中路径知道「结论还没最终化」
+        if !offline_final {
+            inner.env_online_file = Some(file_name.clone());
+        }
     }
-    // 离线那次推送：还有在线层要跑就说明本轮没结束（done=false，前端继续转圈）
-    let offline_final = !online || pending.is_empty();
     emit_classified(
         &app,
         &file_name,
@@ -372,6 +420,10 @@ pub async fn classify_pack(app: AppHandle, state: S<'_>) -> Result<PlanClassific
                 // 反查期间用户可能换了包：不是同一个包就不落库、不推事件
                 if g.env_evidence_file.as_deref() != Some(file_name.as_str()) {
                     return;
+                }
+                // 本轮收尾：只摘自己的标记（换包后重跑的那一轮另立了标记，别替它清）
+                if g.env_online_file.as_deref() == Some(file_name.as_str()) {
+                    g.env_online_file = None;
                 }
                 g.env_evidence = ev.clone();
                 let plan = last_parsed_of(&g).map(|p| {

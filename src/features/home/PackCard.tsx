@@ -41,6 +41,12 @@ export function PackCard({
     const badge = BADGE[status];
     const parsing = status === "parsing";
     const failed = status === "error";
+    /** 读数区（分隔线 + 四格）该不该摆：解析中要摆骨架，有 manifest 要摆真值。
+     *  解析失败且没有任何读数时四格全是「–」——纯噪音，撤掉。
+     *  这张卡的外框由 HomePage 那一行的定高（h-[clamp(256px,36vh,288px)]）撑着，而静止态
+     *  内容就已经贴着 288：失败文案那 2 行没有地方去，就会画到下面的轨道上面去（定高容器
+     *  不会把兄弟往下推，只会溢出叠印）。撤掉 128px 的空读数区才是把预算还给文案。 */
+    const showMeta = parsing || !!manifest;
 
     return (
         <Panel className="min-w-0 flex-1">
@@ -66,32 +72,40 @@ export function PackCard({
                 </span>
             </div>
 
-            <Divider />
+            {showMeta && (
+                <>
+                    <Divider />
 
-            {/* 四格元数据：解析中显示骨架条 */}
-            <div className="flex flex-col gap-2">
-                <div className="flex gap-2">
-                    <MetaCell
-                        label="加载器"
-                        value={manifest?.loader}
-                        skeleton={parsing}
-                        valueClass="text-diamond"
-                    />
-                    <MetaCell label="Minecraft" value={manifest?.mcVersion} skeleton={parsing} />
-                </div>
-                <div className="flex gap-2">
-                    <MetaCell
-                        label="模组数量"
-                        value={manifest ? `${manifest.modCount} 个` : undefined}
-                        skeleton={parsing}
-                    />
-                    <MetaCell
-                        label="包体积"
-                        value={manifest ? formatSize(manifest.sizeBytes) : undefined}
-                        skeleton={parsing}
-                    />
-                </div>
-            </div>
+                    {/* 四格元数据：解析中显示骨架条 */}
+                    <div className="flex flex-col gap-2">
+                        <div className="flex gap-2">
+                            <MetaCell
+                                label="加载器"
+                                value={manifest?.loader}
+                                skeleton={parsing}
+                                valueClass="text-diamond"
+                            />
+                            <MetaCell
+                                label="Minecraft"
+                                value={manifest?.mcVersion}
+                                skeleton={parsing}
+                            />
+                        </div>
+                        <div className="flex gap-2">
+                            <MetaCell
+                                label="模组数量"
+                                value={manifest ? `${manifest.modCount} 个` : undefined}
+                                skeleton={parsing}
+                            />
+                            <MetaCell
+                                label="包体积"
+                                value={manifest ? formatSize(manifest.sizeBytes) : undefined}
+                                skeleton={parsing}
+                            />
+                        </div>
+                    </div>
+                </>
+            )}
 
             {/* 底部操作：错误态只留"重新选择"；其余态为 更换文件（描边）+ 主按钮 等宽平分 */}
             <div className="mt-auto flex w-full gap-2">

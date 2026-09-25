@@ -18,6 +18,7 @@ import * as api from "@/lib/api";
 import { formatSize } from "@/lib/format";
 import { notify, type NoticeKind } from "@/lib/notify";
 import { CARD_RISE, PAGE_RISE } from "@/lib/page-motion";
+import { usePackStore } from "@/lib/pack-store";
 import { switchTheme, useTheme, type Theme } from "@/lib/theme";
 import type { AppSettings, CacheUsage, CleanReport, UpdateChannel } from "@/lib/types";
 import {
@@ -102,6 +103,8 @@ export function SettingsPage() {
     const [sources, setSources] = useState<SelectOption[]>([]);
     const [usage, setUsage] = useState<CacheUsage | null>(null);
     const [cleaning, setCleaning] = useState<CleanKind | null>(null);
+    /** 改到影响判定口径的全局开关时，作废转换页那份跨页草稿（见 pack-store） */
+    const { clearDraft } = usePackStore();
     const [theme] = useTheme();
     const [update, setUpdate] = useState<UpdateState>("idle");
     /** 切到 Beta 的二次确认：改动的是"以后会装上什么包"，点一下就换太轻率 */
@@ -140,6 +143,11 @@ export function SettingsPage() {
         setSettings(next);
         try {
             await api.saveSettings(next);
+            // 这两项直接决定方案怎么判、联网那一轮还算不算在跑 ⇒ 改过就得作废转换页草稿，
+            // 下次进来重算。其余设置（输出目录/主题/更新渠道…）不参与判定，不该顺手抹掉手改
+            if (p.stripClientOnly !== undefined || p.autoClassifyOnline !== undefined) {
+                clearDraft();
+            }
             return true;
         } catch (e) {
             notify(`设置未能保存：${errOf(e)}`, "error");

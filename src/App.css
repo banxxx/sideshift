@@ -289,6 +289,15 @@
   scrollbar-gutter: stable;
 }
 
+/* 弹窗里换批清单的滚动区（装了 Swap 的那一层）必须钉住内容宽度：
+ * Swap 用 popLayout，退场层脱离文档流时被写上了**切换前量出来的 px 宽度**。行少的档没有纵向
+ * 滚动条、行多的档有 ⇒ 切换瞬间可用宽度少 10px ⇒ 那张残影层比容器宽出 10px，底部就闪一条横向
+ * 滚动条，90ms 后残影摘掉又消失。宽度恒定 ⇒ 量到的宽度永远等于当下的可用宽度，闪动从根上没了。
+ * 与 .page-scroll 同一取舍：行少时右侧也常驻这 10px 空位。 */
+.list-scroll {
+  scrollbar-gutter: stable;
+}
+
 /* ============ Shift Rail 进行中腿 ============ */
 /* accent 实底 + 一圈很淡的外发光，上面跑一条「暗→亮→暗」的高光带（sheen）。
  * 位移用 background-position 而不是 transform：width 过渡占着几何，两者会互相抢。 */

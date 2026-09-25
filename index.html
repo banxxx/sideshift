@@ -17,9 +17,173 @@
         if (dark) document.documentElement.classList.add("dark");
       })();
     </script>
+    <style>
+      /* ================= 启动页「体素」（参数来自 .scratch/splash-proto.html 的导出配置）
+       *
+       * 为什么内联在这里：主包 ~632KB 执行完才有 App.css / Tailwind，而启动页必须赶上
+       * HTML 首帧。所以下面不引用任何令牌，颜色是 src/App.css 的字面量副本
+       * （改 App.css 的 --bg-app / --surface-2 / --accent 时同步这里，两处口径）：
+       *   亮 #f5f6f8 #eef0f3 #4f5de5 ／ 暗 #121317 #24262e #8b95ff
+       *
+       * 图形只用 public/logo.svg 的切片，不画第二份几何（全应用图形单源）：
+       * viewBox 已裁到图形本身，所以背景尺寸=方块尺寸时是 1:1 映射，
+       * 方块高等分四条、每条往上挪 1/4 就是四条 chunk。
+       *
+       * 收场由 src/lib/splash.ts 挂 .sp-out，React 首屏画完两帧后触发。 */
+      #splash {
+        --sp-size: 64px;
+        --sp-in: 900ms;
+        --sp-ease: cubic-bezier(0.4, 0, 0.2, 1);
+        --sp-stag: 80ms;
+        --sp-loop: 1600ms;
+        position: fixed;
+        inset: 0;
+        z-index: 9999;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        background: #f5f6f8;
+      }
+      .dark #splash {
+        background: #121317;
+      }
+      .sp-wrap {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: 22px;
+      }
+      .sp-mark {
+        position: relative;
+        width: var(--sp-size);
+        height: var(--sp-size);
+        /* 四条叠完之后整块轻轻起伏，读作「还在装」 */
+        animation: sp-idle var(--sp-loop) cubic-bezier(0.45, 0, 0.55, 1)
+          calc(240ms + var(--sp-in) + var(--sp-stag) * 3) infinite both;
+      }
+      @keyframes sp-idle {
+        0%,
+        100% {
+          transform: none;
+        }
+        50% {
+          transform: translateY(-3px);
+        }
+      }
+      .sp-b {
+        position: absolute;
+        left: 0;
+        width: var(--sp-size);
+        height: calc(var(--sp-size) / 4);
+        background-image: url("/logo.svg");
+        background-repeat: no-repeat;
+        background-size: var(--sp-size) var(--sp-size);
+        will-change: transform, opacity;
+        /* 下截先落，四条全往同一边错 18px（样片 alt_offset=off） */
+        animation: sp-drop var(--sp-in) var(--sp-ease) both;
+      }
+      .sp-b1 {
+        top: 0;
+        background-position: 0 0;
+        animation-delay: calc(240ms + var(--sp-stag) * 3);
+      }
+      .sp-b2 {
+        top: calc(var(--sp-size) / 4);
+        background-position: 0 calc(var(--sp-size) * -1 / 4);
+        animation-delay: calc(240ms + var(--sp-stag) * 2);
+      }
+      .sp-b3 {
+        top: calc(var(--sp-size) / 2);
+        background-position: 0 calc(var(--sp-size) * -1 / 2);
+        animation-delay: calc(240ms + var(--sp-stag));
+      }
+      .sp-b4 {
+        top: calc(var(--sp-size) * 3 / 4);
+        background-position: 0 calc(var(--sp-size) * -3 / 4);
+        animation-delay: 240ms;
+      }
+      @keyframes sp-drop {
+        0% {
+          opacity: 0;
+          /* 从上方 40px 落下、缩到 0.88，落定才放大归位 */
+          transform: translate(18px, -40px) scale(0.88);
+        }
+        55% {
+          opacity: 1;
+        }
+        100% {
+          opacity: 1;
+          transform: none;
+        }
+      }
+      .sp-prog {
+        position: relative;
+        width: 132px;
+        height: 4px;
+        border-radius: 1px;
+        overflow: hidden;
+        background: #eef0f3;
+      }
+      .dark #splash .sp-prog {
+        background: #24262e;
+      }
+      /* 一条光带被槽裁住：出右沿的那一刻就是入左沿的那一刻。
+         行程 -100%→333.333%（百分比按自身宽度算）= 槽宽 + 一条带宽 ⇒ 换圈处没有跳变；
+         linear ⇒ 不在首尾减速。 */
+      .sp-prog i {
+        position: absolute;
+        left: 0;
+        top: 0;
+        width: 30%;
+        height: 100%;
+        border-radius: 999px;
+        background: linear-gradient(90deg, transparent, #4f5de5, transparent);
+        animation: sp-run var(--sp-loop) linear infinite;
+      }
+      .dark #splash .sp-prog i {
+        background: linear-gradient(90deg, transparent, #8b95ff, transparent);
+      }
+      @keyframes sp-run {
+        from {
+          transform: translateX(-100%);
+        }
+        to {
+          transform: translateX(333.333%);
+        }
+      }
+      /* 退场：两段共 60ms，先让内容上移淡掉、再抽掉整张底 */
+      #splash.sp-out {
+        animation: sp-fade 27ms ease 33ms both;
+      }
+      #splash.sp-out .sp-wrap {
+        animation: sp-rise 33ms ease both;
+      }
+      @keyframes sp-rise {
+        to {
+          opacity: 0;
+          transform: translateY(-10px) scale(0.97);
+        }
+      }
+      @keyframes sp-fade {
+        to {
+          opacity: 0;
+        }
+      }
+    </style>
   </head>
 
   <body>
+    <div id="splash" aria-hidden="true">
+      <div class="sp-wrap">
+        <div class="sp-mark">
+          <i class="sp-b sp-b1"></i>
+          <i class="sp-b sp-b2"></i>
+          <i class="sp-b sp-b3"></i>
+          <i class="sp-b sp-b4"></i>
+        </div>
+        <div class="sp-prog"><i></i></div>
+      </div>
+    </div>
     <div id="root"></div>
     <script type="module" src="/src/main.tsx"></script>
   </body>
