@@ -18,6 +18,11 @@ use crate::models::DownloadSource;
 
 const USER_AGENT: &str = "SideShift/0.1 (desktop pack converter)";
 const RETRIES: u32 = 3;
+/// 元数据查询（JSON / `.sha1`）的单次请求上限。客户端那个 120s 是**整条下载**的预算
+/// （几十 MB 的模组包合理，端判定反查不合理）：那一路一次只取几 KB，挂住一个请求
+/// 不该把整轮串行队列拖到分钟级，所以每个查询请求单独掐。
+/// 镜像候选链各试一次 ⇒ 一个 `get_json` 最坏两个 `METADATA_TIMEOUT`
+const METADATA_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
 
 /// 单次下载尝试的失败分类
 enum Attempt {
@@ -520,6 +525,7 @@ impl Downloader {
         let resp = self
             .client
             .get(url)
+            .timeout(METADATA_TIMEOUT)
             .send()
             .await
             .map_err(|e| DownloadError::Http {
@@ -563,6 +569,7 @@ impl Downloader {
         let resp = self
             .client
             .post(url)
+            .timeout(METADATA_TIMEOUT)
             .json(body)
             .send()
             .await
@@ -601,6 +608,7 @@ impl Downloader {
         let resp = self
             .client
             .get(url)
+            .timeout(METADATA_TIMEOUT)
             .header("x-api-key", key)
             .send()
             .await

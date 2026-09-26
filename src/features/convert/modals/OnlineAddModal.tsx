@@ -3,15 +3,18 @@ import { ChevronLeft, ChevronRight, ExternalLink, Puzzle } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import * as api from "@/lib/api";
 import { formatSize, loaderLabel } from "@/lib/format";
-import { tSource, useT } from "@/lib/i18n";
+import { activeLocale, tSource, useT } from "@/lib/i18n";
+import { notify } from "@/lib/notify";
 import type {
     LoaderKind,
     ModSearchResult,
+    ModTranslation,
     ModVersionEntry,
     VersionOption,
 } from "@/lib/types";
 import {
     Btn,
+    Collapse,
     ListRow,
     ModalShell,
     SearchBox,
@@ -59,6 +62,15 @@ export function OnlineAddModal({
     const [versions, setVersions] = useState<ModVersionEntry[]>([]);
     const [versionsLoading, setVersionsLoading] = useState(false);
     const [versionsError, setVersionsError] = useState<string | null>(null);
+    /**
+     * 详情页那栏中文译文（第三方镜像的机翻，点「翻译」才请求）：名与简介各一档覆盖率，
+     * 镜像里可能只有其中一个。连着它属于哪一本一起记——回得慢时用户可能已经点进别的模组，
+     * 对不上 slug 就当没有，别把上一本的译文挂过来。「拿到了」与「正在显示」分开记
+     * ⇒ 切回原文后再点不发第二次请求
+     */
+    const [zh, setZh] = useState<{ slug: string; tr: ModTranslation } | null>(null);
+    const [zhOn, setZhOn] = useState(false);
+    const [zhLoading, setZhLoading] = useState(false);
     const [result, setResult] = useState<{ total: number; results: ModSearchResult[] }>({
         total: 0,
         results: [],
@@ -169,11 +181,54 @@ export function OnlineAddModal({
         setVersions([]);
         setVersionsError(null);
         setVersionsLoading(true);
+        // 换一本 = 换一句译文：上一本的译文与显示态都不带过来
+        setZh(null);
+        setZhOn(false);
+        setZhLoading(false);
         void api
             .listModVersions(mod.source, mod.id)
             .then(setVersions)
             .catch((e: unknown) => setVersionsError(e instanceof Error ? e.message : String(e)))
             .finally(() => setVersionsLoading(false));
+    };
+
+    /* 「翻译」这枚钮的门槛：机翻出来的是简体，繁体档给它会露出错体 ⇒ 只在简体中文档出现；
+       镜像的 detail 只认 slug（CurseForge 的数字 id 实测查不到），没有 slug 就没有这条线 */
+    const canTranslate = activeLocale() === "zh-CN" && !!detail?.slug;
+    /** 当前在显示译文的那一份（切回原文时还在，只是不显示，再点不发二次请求） */
+    const zhNow = zh && zh.slug === detail?.slug && zhOn ? zh.tr : null;
+
+    const toggleZh = () => {
+        const mod = detail;
+        const slug = mod?.slug?.trim();
+        if (!mod || !slug) return;
+        if (zh && zh.slug === slug) {
+            setZhOn(!zhOn);
+            return;
+        }
+        setZhLoading(true);
+        void api
+            .translateModZh(mod.source, slug)
+            .then((tr) => {
+                setZhLoading(false);
+                if (!tr) {
+                    // 收录有这一本但名与简介都还没译文（镜像那边是空串）：不切态，
+                    // 别演成「翻译成功但内容与原文一样」
+                    notify(t("convert-modals.no-zh", "这个模组还没有中文译文"));
+                    return;
+                }
+                setZh({ slug, tr });
+                setZhOn(true);
+            })
+            .catch((e: unknown) => {
+                setZhLoading(false);
+                notify(
+                    t("convert-modals.zh-load", "中文译文获取失败 · {{error}}", {
+                        error: e instanceof Error ? e.message : String(e),
+                    }),
+                    "error"
+                );
+            });
     };
 
     const close = () => {
@@ -235,6 +290,7 @@ export function OnlineAddModal({
 
     /* ---- 二级视图：模组详情 + 版本列表（整行点击下载） ---- */
     if (view === "detail" && detail) {
+        const zhDesc = zhNow?.descriptionZh;
         return (
             <ModalShell
                 open={open}
@@ -245,7 +301,7 @@ export function OnlineAddModal({
                 height={464}
                 icon={Puzzle}
                 iconNode={<ModIcon url={detail.iconUrl} className="size-10" puzzleClass="size-5" />}
-                title={detail.name}
+                title={zhNow?.titleZh || detail.name}
                 titleTag={modTag ? <SideChip sides={modTag} warnClient /> : undefined}
                 sub={t("convert-modals.src-author", "{{src}} · 作者 {{author}} · {{downloads}} 次下载", {
                     src: srcName,
@@ -253,9 +309,21 @@ export function OnlineAddModal({
                     downloads: formatCount(detail.downloads),
                 })}
             >
-                <p className="shrink-0 text-[13px] leading-[20px] font-normal text-text-2">
-                    {detail.description}
-                </p>
+                {/* 简介一栏就地换译文：两条各一个 Collapse 反向开关、同一条曲线，所以高度沿同一条
+                    插值走过去，不会「先塌一下再撑开」。外层普通 div 让父级那格 gap 只算一次（两格都在
+                    时不会多出 12px）。镜像只翻出名、简介没翻时这一栏原样不动，只有标题跟着换 */}
+                <div className="flex shrink-0 flex-col">
+                    <Collapse when={!zhDesc}>
+                        <p className="text-[13px] leading-[20px] font-normal text-text-2">
+                            {detail.description}
+                        </p>
+                    </Collapse>
+                    <Collapse when={!!zhDesc}>
+                        <p className="text-[13px] leading-[20px] font-normal text-text-2">
+                            {zhDesc}
+                        </p>
+                    </Collapse>
+                </div>
                 <div className="flex h-[30px] w-full shrink-0 items-center gap-2">
                     <div className="flex h-7 items-center gap-2">
                         <SearchSelect
@@ -274,6 +342,22 @@ export function OnlineAddModal({
                             options={loOpts}
                             onChange={(v) => setLoSel(v as LoaderKind | "")}
                         />
+                        {canTranslate && (
+                            <Btn
+                                size="xs"
+                                disabled={zhLoading}
+                                onClick={toggleZh}
+                                /* 挨着两枚 chip 下拉，就照 chip 那一族的样子画（h7 / rounded-md / bg-surface /
+                                   11px 主文本色）；只用 Btn 的默认 outline 会比它们轻一档，读起来不像同一排控件 */
+                                className="rounded-md bg-surface px-2 text-text-1"
+                            >
+                                {zhLoading
+                                    ? t("convert-modals.zh-loading", "翻译中…")
+                                    : zhNow
+                                      ? t("convert-modals.zh-original", "原文")
+                                      : t("convert-modals.zh-translate", "翻译")}
+                            </Btn>
+                        )}
                     </div>
                 </div>
                 <div className="-mx-1 flex min-h-0 flex-1 flex-col gap-0.5 overflow-auto px-1">

@@ -17,6 +17,7 @@
   "lib.install": "安裝",
   "lib.installing": "安裝中",
   "lib.jar-metadata": "jar 自證",
+  "lib.mirror-project": "鏡像專案",
   "lib.mod-files": "模組檔案",
   "lib.modpack-declared": "整合包聲明",
   "lib.modpack-local": "整合包與本地取件",

@@ -153,15 +153,23 @@ export function ModPlanCard({
                         className="flex min-h-0 shrink flex-col gap-2.5 overflow-hidden"
                     >
                         {rows.length === 0 ? (
-                            <p className="flex h-[140px] w-full items-center justify-center px-6 text-center text-[11px] leading-[16px] text-text-3">
-                                {classifying
-                                    ? totalRows === 0
-                                        ? readingLabel
-                                        : t("convert.results-appear", "判定结果会逐条出现在这里")
-                                    : totalRows === 0 && emptyLabel
-                                      ? emptyLabel
-                                      : t("convert.mods-group", "该分类下暂无模组")}
-                            </p>
+                            /* 分类中不给任何行：离线那一批会在联网轮落地时被成批改写，
+                               先显示出来就是先给一遍会被推翻的结论（而且当场可改判）。
+                               方案还没读到时说「正在读取…」；已读到但联网没跑完时留白——
+                               卡底那句「自动分类中」不在这儿重复一遍，卡高固定 260 不会跳 */
+                            classifying ? (
+                                totalRows === 0 ? (
+                                    <p className="flex h-[140px] w-full items-center justify-center px-6 text-center text-[11px] leading-[16px] text-text-3">
+                                        {readingLabel}
+                                    </p>
+                                ) : null
+                            ) : (
+                                <p className="flex h-[140px] w-full items-center justify-center px-6 text-center text-[11px] leading-[16px] text-text-3">
+                                    {totalRows === 0 && emptyLabel
+                                        ? emptyLabel
+                                        : t("convert.mods-group", "该分类下暂无模组")}
+                                </p>
+                            )
                         ) : (
                             /* 逐行进出：新进入可见列表的行从右侧一档一档插进来，
                                改判离开的行往左退场，其余行由 layout 弹簧补位。
@@ -278,11 +286,11 @@ export function ModPlanCard({
                             <span className="shrink-0 text-[11px] leading-[16px] text-text-3">
                                 {totalRows === 0
                                     ? readingLabel
-                                    : t("convert.auto-classifying", "自动分类中 · 判定完成的模组逐条归组")}
+                                    : t("convert.auto-classifying", "自动分类中 · 完成后一次性给出方案")}
                             </span>
-                            {/* 不确定式扫描条（复用 Shift Rail 的 sheen 语言）：在线反查按批回结论，
-                                按批算百分比会一步跳到 100%，所以这里只说「还在跑」，
-                                进度交给上面逐行落地的动效表达 */}
+                            {/* 不确定式扫描条（复用 Shift Rail 的 sheen 语言）：分类期间屏上没有任何行，
+                                这一条是整卡唯一的进度信号。在线反查按批回结论，按批算百分比会一步跳到
+                                100%，所以这里只说「还在跑」，不报数也不报比例 */}
                             <span className="rail-flow h-1.5 min-w-0 flex-1 rounded-full" />
                         </div>
                     )}

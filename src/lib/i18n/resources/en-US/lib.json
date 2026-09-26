@@ -24,6 +24,7 @@
   "lib.installing": "Installing",
   "lib.jar-metadata": "Jar metadata",
   "lib.minutes-seconds": "{{minutes}}m {{seconds}}s",
+  "lib.mirror-project": "Mirror project",
   "lib.mod-files": "Mod files",
   "lib.modpack": "Modpack",
   "lib.modpack-declared": "Modpack declared",

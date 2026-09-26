@@ -21,6 +21,8 @@ export const mockDefaultSettings: AppSettings = {
     cacheDir: "D:\\SideShift\\cache",
     stripClientOnly: true,
     autoClassifyOnline: true,
+    // 与 Rust 一致：默认关。开着才能演「先自查存活 → 镜像答上 → 官方腿一条不发」这条链
+    envLookupMirror: false,
     verifyAfterBuild: false,
     downloadSource: "official",
     concurrency: 6,

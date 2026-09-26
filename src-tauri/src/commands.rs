@@ -273,7 +273,7 @@ pub async fn classify_pack(
     force: bool,
 ) -> Result<PlanClassification, String> {
     // 快照 inputs：guard 必须在这个块里结束，否则 MutexGuard 跨 await 让命令 future 不 Send
-    let (parsed, file_name, strip, online, cache_dir, concurrency, cached) = {
+    let (parsed, file_name, strip, online, mirror, cache_dir, concurrency, cached) = {
         let inner = lock(&state);
         let empty = env::EvidenceMap::new();
         match last_parsed_of(&inner) {
@@ -304,6 +304,7 @@ pub async fn classify_pack(
                     inner.last_file.clone().unwrap_or_default(),
                     inner.settings.strip_client_only,
                     inner.settings.auto_classify_online,
+                    inner.settings.env_lookup_mirror,
                     PathBuf::from(&inner.settings.cache_dir),
                     inner.settings.concurrency.max(1) as usize,
                     cached,
@@ -409,15 +410,27 @@ pub async fn classify_pack(
                 .lock()
                 .map(|g| g.env_evidence.clone())
                 .unwrap_or_default();
-            let complete = env::resolve_online(
-                &dl,
-                &mut index,
-                &cache_dir,
-                &targets,
-                &pending,
-                &mut ev,
+            // 整轮墙钟预算：单次请求已经各掐 10s（downloader::client::METADATA_TIMEOUT），
+            // 这一档掐的是"一百多个各慢一点"累出来的总账。到点就掐——`resolve_online` 按批
+            // 落盘、结论又是就地写进 `ev` 的，所以已拿到的那部分照常生效（`out` 借用留在原地），
+            // 只是不再有第二次机会补剩下的行；complete=false 让前端说「可重新自动分类」。
+            let complete = match tokio::time::timeout(
+                env::ONLINE_BUDGET,
+                env::resolve_online(
+                    &dl,
+                    &mut index,
+                    &cache_dir,
+                    &targets,
+                    &pending,
+                    &mut ev,
+                    mirror,
+                ),
             )
-            .await;
+            .await
+            {
+                Ok(ok) => ok,
+                Err(_) => false,
+            };
             let (plan, file) = {
                 let mut g = lock(&state);
                 // 反查期间用户可能换了包：不是同一个包就不落库、不推事件
@@ -469,11 +482,12 @@ fn emit_classified(
 /// 读文件 + 可能解几千个 class，不能占住 async 运行时
 #[tauri::command]
 pub async fn inspect_added_mod(state: S<'_>, path: String) -> Result<AddedModSide, String> {
-    let (cache_dir, online, concurrency) = {
+    let (cache_dir, online, mirror, concurrency) = {
         let inner = lock(&state);
         (
             PathBuf::from(&inner.settings.cache_dir),
             inner.settings.auto_classify_online,
+            inner.settings.env_lookup_mirror,
             inner.settings.concurrency.max(1) as usize,
         )
     };
@@ -496,6 +510,7 @@ pub async fn inspect_added_mod(state: S<'_>, path: String) -> Result<AddedModSid
         &file_name,
         &probe,
         online,
+        mirror,
     )
     .await;
     let (client_side, server_side, env_source) = match ev {
@@ -517,6 +532,52 @@ pub async fn inspect_added_mod(state: S<'_>, path: String) -> Result<AddedModSid
         size_bytes,
         mod_id: probe.mod_id,
         title: probe.title,
+    })
+}
+
+/// 「从网络添加」的单个构建补端。CurseForge 的响应体里没有任何端声明（Modrinth 有，
+/// 所以只有 CF 那一档会走到这里），但它给了构建字节的 sha1 —— 同一份 jar 在两个平台哈希相同，
+/// 于是拿这份哈希走与本地 jar 完全一致的阶梯：本地索引 → Modrinth 按哈希反查 → 项目/显示名。
+/// 只读索引和发请求，不碰磁盘上的 jar，所以不需要 `spawn_blocking`。
+/// 三层都没答上（含「联网反查」关着且索引没答过）→ `Unknown`，前端保持「无依据」，绝不猜
+#[tauri::command]
+pub async fn inspect_added_build(
+    state: S<'_>,
+    sha1: String,
+    file_name: String,
+    title: Option<String>,
+) -> Result<AddedModSide, String> {
+    let (cache_dir, online, mirror, concurrency) = {
+        let inner = lock(&state);
+        (
+            PathBuf::from(&inner.settings.cache_dir),
+            inner.settings.auto_classify_online,
+            inner.settings.env_lookup_mirror,
+            inner.settings.concurrency.max(1) as usize,
+        )
+    };
+    let ev = env::resolve_added_build(
+        &Downloader::new(cache_dir.clone(), concurrency),
+        &cache_dir,
+        &file_name,
+        Some(&sha1),
+        title.as_deref(),
+        online,
+        mirror,
+    )
+    .await;
+    Ok(match ev {
+        Some(e) => AddedModSide {
+            client_side: e.client,
+            server_side: e.server,
+            env_source: e.source,
+            ..Default::default()
+        },
+        // EnvSource 的 derive default 是 Mrpack（阶梯里的一个真档位），不是「无依据」
+        None => AddedModSide {
+            env_source: EnvSource::Unknown,
+            ..Default::default()
+        },
     })
 }
 
@@ -600,6 +661,23 @@ pub async fn list_mod_categories(
 ) -> Result<Vec<String>, String> {
     downloader_of(&state)
         .list_mod_categories(source)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+/// 详情页那枚「翻译」按钮要的中文译文（麦块镜像 `detail/{slug}` 的 `title_zh` + `description_zh`，
+/// 机器翻译件）。只在用户点击时发这一发，不进端判定的阶梯与预算，也不看「端信息反查源」那档设置——
+/// 那档管的是自动分类查谁，这里查的是另一件事，关掉它不该让界面翻不了。
+/// `Ok(None)` = 镜像名与简介都还没译文（不在收录、或长尾空串）⇒ 前端不切态、原样留着；
+/// `Err` 只有网络故障一种，前端按「这次没翻成」提示，同样不动原文
+#[tauri::command]
+pub async fn mod_translate_zh(
+    state: S<'_>,
+    source: ModSource,
+    slug: String,
+) -> Result<Option<ModTranslation>, String> {
+    downloader_of(&state)
+        .translate_zh(source, &slug)
         .await
         .map_err(|e| e.to_string())
 }

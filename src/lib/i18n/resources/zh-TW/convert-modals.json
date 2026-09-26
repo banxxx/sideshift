@@ -73,5 +73,10 @@
   "convert-modals.undecided-review": "無法判定 · 請人工確認：伺服器端需要就勾回保留{{hint}}",
   "convert-modals.unselect": "取消全選",
   "convert-modals.version-load": "版本載入失敗 · {{error}}",
-  "home.loader": "載入器"
+  "home.loader": "載入器",
+  "convert-modals.no-zh": "這個模組還沒有中文譯文",
+  "convert-modals.zh-load": "中文譯文取得失敗 · {{error}}",
+  "convert-modals.zh-loading": "翻譯中…",
+  "convert-modals.zh-original": "原文",
+  "convert-modals.zh-translate": "翻譯"
 }

@@ -24,6 +24,9 @@ export interface ModSearchPage {
 /** 在线搜索的一个模组结果（对应 Online Add 行，模组级、无版本概念） */
 export interface ModSearchResult {
     id: string;
+    /** 平台 URL slug：Modrinth 与 id 同值，CurseForge 另给（那边的 id 是数字）。
+     *  「翻译」按钮要的那条 `detail/{slug}` 只认它，缺了就没有这枚钮 */
+    slug?: string;
     name: string;
     /** 一句话简介 */
     description: string;
@@ -43,6 +46,13 @@ export interface ModSearchResult {
 
 /** 搜索源：两家都真接；CurseForge 要用户自己的 API Key（Rust 缺 Key 时报可读错误） */
 export type ModSourceKind = "modrinth" | "curseforge";
+
+/** 详情页「翻译」那份中文译文（麦块镜像的机翻件）：名与简介各自可缺，
+ * `title_zh` 覆盖率明显低于 `description_zh`（实测头部约 55% 对 100%） */
+export interface ModTranslation {
+    titleZh?: string;
+    descriptionZh?: string;
+}
 
 /** 在线搜索筛选参数 */
 export interface ModSearchQuery {

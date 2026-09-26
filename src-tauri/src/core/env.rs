@@ -31,7 +31,10 @@ mod jar;
 pub use code::{CodeFacts, CodeMap};
 pub use evidence::{rank, Evidence, EvidenceMap};
 pub use ident::targets_for;
-pub use index::{apply_index, apply_probes, resolve_local_jar, resolve_online, EnvIndex};
+pub use index::{
+    apply_index, apply_probes, resolve_added_build, resolve_local_jar, resolve_online, EnvIndex,
+    ONLINE_BUDGET,
+};
 pub use jar::{probe_jars, probe_local_jar, ProbeReq};
 
 /// 测试夹具：造 zip / class 字节。jar 层与 code 层的用例都要用，放这一处避免各写一份

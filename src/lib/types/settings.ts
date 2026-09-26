@@ -24,12 +24,19 @@ export interface AppSettings {
     stripClientOnly: boolean;
     /** 构建后自检：打包完成时对产物离线对账（模组/jar/依赖/启动件/包根/保留目录），不起服务端进程 */
     verifyAfterBuild: boolean;
-    /** 下载源：版本表与加载器 jar 的镜像档位（模组文件与端信息反查都在 Modrinth，无镜像） */
+    /** 下载源：版本表与加载器 jar 的镜像档位（模组文件与端信息反查都在 Modrinth，这一档管不到它们） */
     downloadSource: DownloadSource;
     /** 并发下载数 1–16（同时决定反查端信息的并发请求数） */
     concurrency: number;
-    /** 自动分类时允许联网反查 Modrinth（关掉了只剩包内自证 + 本地索引 + 名称兜底） */
+    /** 自动分类时允许联网反查端信息（关掉了只剩包内自证 + 本地索引 + 名称兜底） */
     autoClassifyOnline: boolean;
+    /**
+     * 联网那一轮改问国内镜像（麦块开放 API 的 Modrinth 项目快照，Rust: `env_lookup_mirror`）。
+     * 默认关：判据来自一个无 SLA 的第三方快照，实测收录也不全。
+     * **单一源**：开着时只发麦块，官方三条腿（含它没有对应端点的 sha1 批量那条）一条都不发，
+     * 存活自查不过就如实报「联网反查未全部完成」；关掉时零镜像流量。
+     */
+    envLookupMirror: boolean;
     /**
      * 更新渠道。`null` 是有意义的一档：**跟随这一枚包自己的版本号**——
      * 版本号带预发布位的包收 Beta，纯版本号收正式版。在设置里选过一次就变成显式值。

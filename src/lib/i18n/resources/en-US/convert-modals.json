@@ -47,6 +47,7 @@
   "convert-modals.mods-server": "Mods not in the server pack (incl. undecided)",
   "convert-modals.needs-review": " · needs review",
   "convert-modals.next": "Next",
+  "convert-modals.no-zh": "No Chinese translation yet",
   "convert-modals.players-install": " · players must install too",
   "convert-modals.previous": "Previous",
   "convert-modals.re-kept": "Each can be re-kept",
@@ -83,5 +84,9 @@
   "convert-modals.unselect": "Unselect all",
   "convert-modals.unselect-2": "Unselect all",
   "convert-modals.version-load": "Version load failed · {{error}}",
-  "convert-modals.versions": "All versions"
+  "convert-modals.versions": "All versions",
+  "convert-modals.zh-load": "Translation failed · {{error}}",
+  "convert-modals.zh-loading": "Translating…",
+  "convert-modals.zh-original": "Original",
+  "convert-modals.zh-translate": "Translate"
 }

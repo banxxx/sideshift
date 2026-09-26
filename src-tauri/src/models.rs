@@ -50,7 +50,7 @@ pub enum ModDisposition {
 }
 
 /// 端信息的证据来源（前端据此显示「依据什么判定」）。
-/// 可信度顺序见 `env::rank`：jar 自证 > 平台按构建 > 平台按项目 > 整合包声明 > 名称启发
+/// 可信度顺序见 `env::rank`：jar 自证 > 平台按构建 > 平台按项目 > 镜像项目 > 整合包声明 > 名称启发
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, Default, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub enum EnvSource {
@@ -62,6 +62,9 @@ pub enum EnvSource {
     ModrinthHash,
     /// Modrinth 项目级 client_side/server_side（未下载模组的回落）
     ModrinthProject,
+    /// 国内镜像（麦块开放 API）的项目级声明：内容同 ModrinthProject，但它是第三方快照，
+    /// 可能滞后 ⇒ 只排在官方项目层之下、打包者声明之上
+    MirrorProject,
     /// 模组名关键字表，仅兜底
     NameHeuristic,
     /// 无任何证据
@@ -562,6 +565,10 @@ pub enum ModSource {
 #[serde(rename_all = "camelCase")]
 pub struct ModSearchResult {
     pub id: String,
+    /// 平台 URL slug：Modrinth 的 `id` 本来就是它，CurseForge 另给一栏（`id` 是数字 mod id）。
+    /// 只有 slug 能进麦块的 `detail/{slug}`，所以中文简介那条线吃这个而不是 `id`。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub slug: Option<String>,
     pub name: String,
     pub description: String,
     pub author: String,
@@ -626,7 +633,7 @@ pub struct ModVersionEntry {
     pub server_side: Option<SideFlag>,
 }
 
-/// 「从本地添加」单个 jar 的取证结果（在线/离线各层跑完后的两侧支持度）
+/// 手动添加那一行的取证结果（本地 jar 与在线构建共用；两侧支持度来自阶梯跑完的那一层）
 #[derive(Serialize, Deserialize, Clone, Debug, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct AddedModSide {
@@ -647,6 +654,18 @@ pub struct AddedModSide {
     /// 自报显示名：文件名被改成中文时这才是可读名字
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub title: Option<String>,
+}
+
+/// 详情页「翻译」按钮那份中文译文（麦块镜像的 `detail/{slug}`，机器翻译件）。
+/// 两个字段各有一档覆盖率：`description_zh` 头部实测基本全有，`title_zh` 只有五成上下，
+/// 所以「有译文」的判据是**两者都空才算没有**，且调用方要能只拿到其中一个
+#[derive(Serialize, Deserialize, Clone, Debug, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct ModTranslation {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub title_zh: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description_zh: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
@@ -689,6 +708,12 @@ pub struct AppSettings {
     /// 旧 settings.json 无此字段 → default_fn 补 true，不能让整体反序列化失败丢用户设置
     #[serde(default = "default_online_classify")]
     pub auto_classify_online: bool,
+    /// 端信息反查走国内镜像（麦块开放 API 的 Modrinth 项目快照）而不是 Modrinth 官方。
+    /// **默认关**：判据来自一个无 SLA 的第三方快照，覆盖率实测也不是满的（收录外的 slug 返回 404）。
+    /// 开着时联网那一轮**只发麦块**：官方三条腿（含它没有对应端点的 sha1 批量那条）一条都不发，
+    /// 存活自查不过就直接记「这一轮没跑完」，不再悄悄回落官方。
+    #[serde(default)]
+    pub env_lookup_mirror: bool,
     /// 更新渠道。`None` 不是"没选过"的临时状态而是真语义：**跟随这一枚包自己的版本号**——
     /// 带预发布位的包收 Beta，纯版本号收正式版，所以新装用户一个 setting 都没动也不会站错队。
     /// 用户在设置页选过一次之后就是显式值，从此不再看自己的版本号（这正是他要的手动切换）。
@@ -869,6 +894,8 @@ impl Default for AppSettings {
             download_source: DownloadSource::Official,
             concurrency: 6,
             auto_classify_online: true,
+            // 第三方镜像默认关：见字段注释（覆盖率与新鲜度都不由我们保证）
+            env_lookup_mirror: false,
             update_channel: None,
             curseforge_api_key: None,
             install_loader_locally: true,

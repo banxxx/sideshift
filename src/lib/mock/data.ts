@@ -254,6 +254,8 @@ export function mockSearch(query: ModSearchQuery): ModSearchPage {
         pageSize,
         results: filtered.slice(start, start + pageSize).map((m) => ({
             ...m,
+            // Modrinth 的 id 本来就是 slug（CurseForge 才另给一栏），「翻译」按钮认的是这个
+            slug: m.id,
             clientSide: m.clientSide as SideFlag,
             serverSide: m.serverSide as SideFlag,
             iconUrl: undefined,

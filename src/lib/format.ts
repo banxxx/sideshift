@@ -81,6 +81,7 @@ export function evidenceLabel(source: EnvSource = "unknown"): string {
         jarMetadata: t("lib.jar-metadata", "jar 自证"),
         modrinthHash: t("lib.platform-build", "平台构建"),
         modrinthProject: t("lib.platform-project", "平台项目"),
+        mirrorProject: t("lib.mirror-project", "镜像项目"),
         nameHeuristic: t("lib.name-guess", "名称推断"),
         unknown: t("lib.basis", "无依据"),
     };

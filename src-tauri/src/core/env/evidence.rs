@@ -23,14 +23,17 @@ pub type EvidenceMap = HashMap<String, Evidence>;
 /// **mrpack 的 `files[].env` 排在 jar 自证与平台反查之后**：它是打包者抄下来的第二手声明，
 /// 第三方工具还普遍把整表刷成 required/required（一个支持度都没说）。jar 内的
 /// `environment` 是加载器运行时强制执行的，平台侧声明则由模组作者在自己项目上维护。
+/// 镜像档（`MirrorProject`）内容就是 Modrinth 的项目级声明，但它是第三方快照、可能滞后，
+/// 所以永远排在官方项目层之下：官方答上过的那一行，镜像结论压不动它。
 pub fn rank(s: EnvSource) -> u8 {
     match s {
         EnvSource::JarMetadata => 0,
         EnvSource::ModrinthHash => 1,
         EnvSource::ModrinthProject => 2,
-        EnvSource::Mrpack => 3,
-        EnvSource::NameHeuristic => 4,
-        EnvSource::Unknown => 5,
+        EnvSource::MirrorProject => 3,
+        EnvSource::Mrpack => 4,
+        EnvSource::NameHeuristic => 5,
+        EnvSource::Unknown => 6,
     }
 }
 

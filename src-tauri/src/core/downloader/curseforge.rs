@@ -224,6 +224,7 @@ impl Downloader {
                     continue;
                 }
                 results.push(ModSearchResult {
+                    slug: m["slug"].as_str().map(String::from),
                     name: m["name"].as_str().unwrap_or_default().to_string(),
                     description: m["summary"].as_str().unwrap_or_default().to_string(),
                     author: m["authors"]
@@ -451,6 +452,7 @@ mod tests {
         assert_eq!(num(&v["pagination"]["totalCount"]), 4321);
         // 编译期口径：这些字段在 CF 侧恒为 None / 固定值
         let r = ModSearchResult {
+            slug: m["slug"].as_str().map(String::from),
             id: ident(&m["id"]),
             name: m["name"].as_str().unwrap_or_default().to_string(),
             description: m["summary"].as_str().unwrap_or_default().to_string(),
@@ -464,6 +466,8 @@ mod tests {
             server_side: None,
         };
         assert_eq!(r.client_side, None::<SideFlag>);
+        // slug 是中文简介那条线的入场券（麦块 detail/{slug} 只认它，不认数字 id）
+        assert_eq!(r.slug.as_deref(), Some("yacl"));
         assert_eq!(r.source, ModSource::Curseforge);
     }
 }

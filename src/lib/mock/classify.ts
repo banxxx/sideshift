@@ -6,6 +6,7 @@ import type {
     AddedModSide,
     ConversionOptions,
     DownloadEstimate,
+    ModTranslation,
     PlanClassification,
     PlanMod,
 } from "@/lib/types";
@@ -78,4 +79,35 @@ export function mockInspectAdded(path: string): AddedModSide {
         return { clientSide: "optional", serverSide: "required", envSource: "modrinthHash", sizeBytes };
     }
     return { envSource: "unknown", sizeBytes };
+}
+
+/**
+ * 在线构建补端（浏览器 dev 兜底）：这一条路没有 jar 字节可解，所以作者自证那一档
+ * （`jarMetadata`）不可能出现——只借上面那张文件名表答「平台构建」或干脆没答案
+ */
+export function mockInspectAddedBuild(sha1: string, fileName: string): AddedModSide {
+    const hit = mockInspectAdded(fileName);
+    if (!sha1 || hit.envSource === "unknown") return { envSource: "unknown" };
+    return {
+        clientSide: hit.clientSide,
+        serverSide: hit.serverSide,
+        envSource: "modrinthHash",
+    };
+}
+
+/**
+ * 中文译文（浏览器 dev 兜底）：四行 desc-only + 一行 name-only 都是 2026-09-27 从镜像真取回来的，
+ * 另外 ferritecore / voxelmap 在收录里两个字段都是空串（长尾译文还没跑）。留着这两类，
+ * 「只翻出名」「只翻出简介」「压根没译文」三条分支在 dev 里都走得到
+ */
+const MOCK_ZH: Record<string, ModTranslation> = {
+    sodium: { descriptionZh: "一个高性能的 Minecraft 渲染引擎替代方案，能显著提升帧率并减少微卡顿。" },
+    krypton: { descriptionZh: "一个用于优化 Minecraft 网络堆栈的模组" },
+    spark: { descriptionZh: "spark 是一个 Minecraft 客户端、服务器和代理的性能分析工具。" },
+    moreculling: { descriptionZh: "一个改进多种剔除处理方式以提升性能的模组。" },
+    entity: { titleZh: "实体小地图", descriptionZh: "一个很酷的实体雷达，可以缩放，用来找玩家和其他实体。" },
+};
+
+export function mockTranslateModZh(slug: string): ModTranslation | null {
+    return MOCK_ZH[slug.trim().toLowerCase()] ?? null;
 }

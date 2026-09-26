@@ -84,6 +84,16 @@ const LOCALE_TABS: SelectOption[] = LOCALE_OPTIONS.map(({ value, label }) => ({
 const localeOptions = (t: TranslateFn): SelectOption[] =>
     LOCALE_TABS.map((o) => (o.value === "auto" ? { ...o, label: t("settings.system-default", "跟随系统") } : o));
 
+/**
+ * 端信息反查的两档源。**只是「先问谁」**：选麦块时查不到的行照旧回落官方，一档都没答上才算无依据。
+ * 表建在函数里、每档一条 `t(字面量)`，否则切语言不跟着换、`i18n check` 也扫不到。
+ */
+const envLookupOptions = (t: TranslateFn): SelectOption[] => [
+    // 「官方源」与上面「下载源」那档用的是同一个键：同一份中文只登记一次，译文也不会两处岔开
+    { value: "official", label: t("backend.official-source", "官方源") },
+    { value: "minekuai", label: t("settings.source-minekuai", "麦块 API") },
+];
+
 /** 生效档 → 自称（「跟随系统」那行的说明要说出现在实际是哪一档） */
 const endonymOf = (lng: Locale) =>
     LOCALE_OPTIONS.find((o) => o.value === LOCALE_TO_WIRE[lng])?.label ?? lng;
@@ -549,6 +559,18 @@ export function SettingsPage() {
                             value={settings.downloadSource}
                             options={sources}
                             onChange={(v) => void patch({ downloadSource: v as AppSettings["downloadSource"] })}
+                            className="w-[196px]"
+                        />
+                    </SettingRow>
+                    <SettingRow
+                        label={t("settings.env-lookup-source", "端信息反查源")}
+                        desc={t("settings.env-lookup-source-desc", "联网那一轮只问选定的这一个源，不互相回落；麦块没有按文件哈希反查的接口，选它时精确到文件的结论拿不到")}
+                    >
+                        <SearchSelect
+                            plain
+                            value={settings.envLookupMirror ? "minekuai" : "official"}
+                            options={envLookupOptions(t)}
+                            onChange={(v) => void patch({ envLookupMirror: v === "minekuai" })}
                             className="w-[196px]"
                         />
                     </SettingRow>

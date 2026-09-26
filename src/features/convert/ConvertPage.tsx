@@ -116,15 +116,19 @@ export function ConvertPage() {
             setPlan([]);
         }
         try {
-            const res = await api.classifyPack();
+            // force = 「重新自动分类」按钮专用：不传的话后端认定这一包的端证据还在缓存里，
+            // 直接现算方案返回（离线探测与联网轮都不跑），按钮就成了「重读上次结果」。
+            // 自动那一趟（manual=false）保持复用——每次进页白付一遍逐 jar 扫描不值。
+            const res = await api.classifyPack(manual);
             setReclassifying(false);
             setPlan(res.plan);
             setClassifying(res.onlinePending);
             if (manual) {
                 const remove = res.plan.filter((m) => m.disposition === "remove").length;
+                // 联网还没跑完时不报数：那一批发出去会把「剔除 N 项」当成结论，可方案还没落定
                 notify(
                     res.onlinePending
-                        ? t("convert.offline-pass", "离线层判定剔除 {{count}} 项 · 联网反查进行中", { count: remove })
+                        ? t("convert.offline-pass", "离线层判定完成 · 联网反查进行中")
                         : t("convert.reclassified-removed", "已重新自动分类：剔除 {{removed}} · 保留 {{kept}}", {
                               removed: remove,
                               kept: res.plan.length - remove,
@@ -239,7 +243,7 @@ export function ConvertPage() {
                 // 离线那次推送只是先给结论，本轮结束（done）才停「分类中」
                 if (!e.done) return;
                 setClassifying(false);
-                if (!e.complete) notify(t("convert.online-lookup", "联网反查未全部完成，剩余行沿用离线结论"), "warn");
+                if (!e.complete) notify(t("convert.online-lookup", "联网反查未全部完成，剩余行沿用离线结论；点「重新自动分类」可再试"), "warn");
             })
             .then((f) => {
                 if (alive) off = f;
@@ -295,51 +299,40 @@ export function ConvertPage() {
         });
     }, [plan, extras, overrides, disabledIds]);
 
-    /** 参与构建的行（停用行除外）：计数、预下载聚合、下发后端的方案都用它 */
+    /** 参与构建的行（停用行除外）：下发后端的方案与本地聚合都用它；展示口径见下面 `visibleMods` */
     const activeMods = useMemo(() => mods.filter((m) => !m.disabled), [mods]);
 
-    /** 分类期间的「待定」行 = 服务端轴还没有端证据、用户也没手动处置过的行。
-     *  离线层面对 Forge 包（mods.toml 无端字段）和打包者乱填 env 的 mrpack，整包都答不上，
-     *  旧口径会把它们全渲染成「剔除 + 需人工确认」，联网结论到达后再成批翻回保留 = 一闪而过的假结论。
-     *  现在待定行不进任何计数、不进清单，只由卡底的分类进度交代；serverSide 一有值就自动落地。 */
-    const pendingIds = useMemo(() => {
-        if (!classifying) return new Set<string>();
-        return new Set(
-            mods.filter(
-                (m) =>
-                    m.disposition !== "add" &&
-                    m.serverSide === undefined &&
-                    (m.envSource ?? "unknown") === "unknown" &&
-                    !(m.id in overrides)
-            ).map((m) => m.id)
-        );
-    }, [classifying, mods, overrides]);
+    /** 分类期间（离线那一趟 + 后台联网那一轮）一行都不给：页签计数、预览行、依赖警告、摘要计数
+     *  全部为空，只由卡底那条 rail 交代进度。
+     *  旧口径只拦「还没有端证据」的行，离线结论照旧先成批显示——Forge 包整包都是离线结论，
+     *  联网落地时又成批改回去，那些行既是一次性假结论，又能被人当场改判，
+     *  改完再被自动结论覆盖，等于自己跟自己打架。判定没跑完就没有结论可展示。
+     *  只管「给不给人看」：构建载荷与下载预估仍吃上面的 activeMods——方案内容本身没变，
+     *  只是还没到能确认的时机。 */
+    const visibleMods = useMemo(() => (classifying ? [] : mods), [classifying, mods]);
 
-    /** 已判定行：页签计数 / 预览行 / 依赖警告只看这一批 */
-    const settledMods = useMemo(
-        () => activeMods.filter((m) => !pendingIds.has(m.id)),
-        [activeMods, pendingIds]
+    /** 展示用的生效行（停用行不计）：页签计数 / 依赖警告都只看这一批 */
+    const visibleActive = useMemo(
+        () => visibleMods.filter((m) => !m.disabled),
+        [visibleMods]
     );
 
-    /** 卡内预览行（页签里可见的最多 5 行）：待人工确认的行置顶（与「全部清单」弹窗同一口径），待定行不出现。
+    /** 卡内预览行（页签里可见的最多 5 行）：待人工确认的行置顶（与「全部清单」弹窗同一口径）。
      *  提到 hooks 区计算，让模组方案卡那套入场节拍只盯着「谁进了可见列表」。 */
     const previewRows = useMemo(
-        () =>
-            reviewFirst(
-                mods.filter((m) => m.disposition === tab && !pendingIds.has(m.id))
-            ).slice(0, PREVIEW_ROWS),
-        [mods, tab, pendingIds]
+        () => reviewFirst(visibleMods.filter((m) => m.disposition === tab)).slice(0, PREVIEW_ROWS),
+        [visibleMods, tab]
     );
 
     const counts = useMemo(
         () => ({
-            remove: settledMods.filter((m) => m.disposition === "remove").length,
-            keep: settledMods.filter((m) => m.disposition === "keep").length,
+            remove: visibleActive.filter((m) => m.disposition === "remove").length,
+            keep: visibleActive.filter((m) => m.disposition === "keep").length,
             // add = 生效新增数（停用不计）；addTotal = 清单行数（弹窗「查看全部」口径）
-            add: settledMods.filter((m) => m.disposition === "add").length,
-            addTotal: mods.filter((m) => m.disposition === "add").length,
+            add: visibleActive.filter((m) => m.disposition === "add").length,
+            addTotal: visibleMods.filter((m) => m.disposition === "add").length,
         }),
-        [settledMods, mods]
+        [visibleActive, visibleMods]
     );
 
     /** 本地兜底聚合（后端答不上来时展示）：联网行按源 fileSize 求和 */
@@ -372,9 +365,11 @@ export function ConvertPage() {
         return `${rows}#${options?.mcVersion}#${options?.loaderVersion}#${(options?.keepDirs ?? []).join(",")}`;
     }, [activeMods, options?.mcVersion, options?.loaderVersion, options?.keepDirs]);
 
-    // 350ms 防抖向后端要真实预估；加载器版本未定时不发请求（构建期必失败，数字无意义）
+    // 350ms 防抖向后端要真实预估；加载器版本未定时不发请求（构建期必失败，数字无意义）。
+    // 分类中也不发：那批行马上会被联网结论改写，拿回来的数字是过期结论；
+    // 落定时 classifying 跟着进依赖，这一趟才补上要的那一次。
     useEffect(() => {
-        if (!options || !options.loaderVersion.trim()) {
+        if (classifying || !options || !options.loaderVersion.trim()) {
             setRemoteEstimate(null);
             return;
         }
@@ -390,20 +385,20 @@ export function ConvertPage() {
             clearTimeout(timer);
         };
         // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [estimateKey]);
+    }, [estimateKey, classifying]);
 
     const estimate = remoteEstimate ?? localEstimate;
 
     /** 反向依赖警告：生效行依赖了被剔除或被停用的行（mrpack depends 元数据，按缺失项聚合）。
-     *  待定行不参与——它们只是还没判完，报「依赖被剔除的 X」是假告警 */
+     *  分类中整批不报（visible* 已经空了）：那时「被剔除的 X」多半只是离线结论，告的是假警 */
     const depWarnings = useMemo(() => {
-        const byId = new Map(mods.map((m) => [m.id, m]));
+        const byId = new Map(visibleMods.map((m) => [m.id, m]));
         const groups = new Map<string, { missing: PlanMod; hosts: PlanMod[] }>();
-        for (const m of settledMods) {
+        for (const m of visibleActive) {
             if (m.disposition === "remove") continue;
             for (const d of m.depends ?? []) {
                 const t = byId.get(d);
-                if (t && !pendingIds.has(d) && (t.disposition === "remove" || t.disabled)) {
+                if (t && (t.disposition === "remove" || t.disabled)) {
                     const g = groups.get(d) ?? { missing: t, hosts: [] };
                     g.hosts.push(m);
                     groups.set(d, g);
@@ -411,7 +406,7 @@ export function ConvertPage() {
             }
         }
         return [...groups.values()];
-    }, [mods, settledMods, pendingIds]);
+    }, [visibleMods, visibleActive]);
 
     /** 本地 .jar 添加的模组 id（徽章显示「本地」而非「推荐」） */
     const localIds = useMemo(
@@ -533,8 +528,8 @@ export function ConvertPage() {
         const sides = {
             clientSide: buildSides ? version.clientSide : mod.clientSide,
             serverSide: buildSides ? version.serverSide : mod.serverSide,
-            // 两侧支持度只有 Modrinth 声明；CurseForge 一家不给，依据就写「无依据」，
-            // 不能挂一枚「平台项目」徽章说我们查过（等 jar 到手才有离线取证那一层）
+            // 源给了多少就写多少：两侧支持度只有 Modrinth 声明，CurseForge 一家不给 ⇒
+            // 这里先如实落「无依据」，行落地后由下面那趟按构建 sha1 补查，问到才换标签
             envSource: (
                 mod.source === "curseforge"
                     ? "unknown"
@@ -596,6 +591,30 @@ export function ConvertPage() {
             return next;
         });
         setTab("add");
+        // 端补查：源本身没答上两侧时（CurseForge 一家不声明；Modrinth 偶发构建级与项目级都空），
+        // 拿这份构建的 sha1 走与本地 jar 同一条取证阶梯——同一份 jar 两个平台哈希逐字相同，
+        // 问到的是 Modrinth 的构建/项目层。行先落地、答上再补标签；没答上**保持原样**，
+        // 别把已有的依据口径盖成没依据。用户在这期间换了构建 ⇒ sha1 对不上，本次结果直接丢弃
+        const sha1 = version.sha1;
+        if (!sides.clientSide && !sides.serverSide && sha1 && version.fileName) {
+            void api
+                .inspectAddedBuild(sha1, version.fileName, mod.name)
+                .then((side) => {
+                    if (side.envSource === "unknown") return;
+                    setExtras((e) =>
+                        e.map((m) =>
+                            m.id === mod.id && m.pinned?.sha1 === sha1
+                                ? {
+                                      ...m,
+                                      clientSide: side.clientSide,
+                                      serverSide: side.serverSide,
+                                      envSource: side.envSource,
+                                  }
+                                : m
+                        )
+                    );
+                });
+        }
     };
 
     const start = async () => {
@@ -743,11 +762,15 @@ export function ConvertPage() {
                         <CountRow label={t("convert.server-mods", "保留服务端模组")} count={counts.keep} tone="emerald" />
                         <CountRow label={t("convert.server-mods-added", "新增服务端模组")} count={counts.add} tone="accent" />
                         <Divider />
+                        {/* 分类中这一行只说「还没算」：行没落定，下载量算出来也是个会被推翻的数 */}
                         <NoteRow icon={Download}>
-                            {estimate.downloadBytes > 0
-                                ? t("convert.estimated-download", "预计下载 {{size}}", { size: formatSize(estimate.downloadBytes) })
-                                : t("convert.downloads-needed", "无需联网下载 · 全部来自整合包与本地")}
-                            {!estimate.complete &&
+                            {classifying
+                                ? t("convert.estimating-wait", "分类落定后给出下载预估")
+                                : estimate.downloadBytes > 0
+                                  ? t("convert.estimated-download", "预计下载 {{size}}", { size: formatSize(estimate.downloadBytes) })
+                                  : t("convert.downloads-needed", "无需联网下载 · 全部来自整合包与本地")}
+                            {!classifying &&
+                                !estimate.complete &&
                                 estimate.downloadBytes > 0 &&
                                 t("convert.estimated", "（估算）")}
                         </NoteRow>

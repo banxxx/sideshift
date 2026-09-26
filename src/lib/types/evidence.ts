@@ -26,6 +26,8 @@ export type EnvSource =
     | "modrinthHash"
     /** Modrinth 项目级 client_side/server_side */
     | "modrinthProject"
+    /** 国内镜像（麦块开放 API）的项目级声明：内容同上一条，但是第三方快照、可能滞后 */
+    | "mirrorProject"
     /** 模组名关键字表，纯兜底 */
     | "nameHeuristic"
     /** 无任何证据：默认保留 */

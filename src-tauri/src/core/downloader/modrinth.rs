@@ -59,8 +59,9 @@ impl ModrinthEnv {
 }
 
 impl Downloader {
-    /// Modrinth 响应里的端声明字段（项目级有 client_side/server_side，构建级只有 environment）
-    fn modrinth_env(v: &Value) -> ModrinthEnv {
+    /// Modrinth 响应里的端声明字段（项目级有 client_side/server_side，构建级只有 environment）。
+    /// 镜像侧（`minekuai.rs`）字段名与它逐字相同，共用这一份解析，别处不另写一套映射
+    pub(crate) fn modrinth_env(v: &Value) -> ModrinthEnv {
         let s = |k: &str| v[k].as_str().map(String::from);
         ModrinthEnv {
             client_side: s("client_side"),
@@ -168,6 +169,9 @@ impl Downloader {
                 let client_side = sides.map(|(c, _)| c);
                 let server_side = sides.map(|(_, s)| s);
                 results.push(ModSearchResult {
+                    // Modrinth 的搜索命中里 slug 就是项目标识：id 与 slug 同值，
+                    // 分成两个字段是为了让「数字 id 的那家」（CurseForge）也能走 detail/{slug}
+                    slug: h["slug"].as_str().map(String::from),
                     id: h["slug"].as_str().unwrap_or_default().to_string(),
                     name: h["title"].as_str().unwrap_or_default().to_string(),
                     description: h["description"].as_str().unwrap_or_default().to_string(),
