@@ -39,6 +39,7 @@ import {
     stageTrack,
     toneDot,
     toneText,
+    verbLabel,
 } from "@/lib/rail-view";
 import {
     formatClock,
@@ -49,6 +50,7 @@ import {
     outputNameOf,
     truncateMiddle,
 } from "@/lib/format";
+import { t, tSource, useT } from "@/lib/i18n";
 import type { ActivityInfo, ConversionReport, ConversionTask } from "@/lib/types";
 import { TaskErrorCard } from "@/features/task/TaskErrorCard";
 import { ActivitySubBar, activityMeasure, activityVerb } from "@/features/task/ActivityBar";
@@ -91,12 +93,6 @@ const LOG_RENDER_CAP = 400;
  */
 type TaskTab = "overview" | "result" | "plan";
 
-const TAB_LABEL: Record<TaskTab, string> = {
-    overview: "概况",
-    result: "结果",
-    plan: "方案",
-};
-
 /** 状态 → 可见页签集合；集合外的 key 一律回落概况，列表带进来的落点不会和状态打架 */
 function tabsOf(status: ConversionTask["status"]): TaskTab[] {
     return status === "success"
@@ -105,6 +101,13 @@ function tabsOf(status: ConversionTask["status"]): TaskTab[] {
 }
 
 export function TaskDetailPage() {
+    const t = useT();
+    // 页签文案过 `t`、key 保持 id：表建在组件里，切语言时随重渲染重建
+    const tabLabel: Record<TaskTab, string> = {
+        overview: t("tasks.overview", "概况"),
+        result: t("tasks.results", "结果"),
+        plan: t("tasks.plan", "方案"),
+    };
     const { entry, switchPrimary } = useNavigation();
     const taskId = entry.params?.taskId as string | undefined;
     /** 列表主按钮带着落点来（已完成→结果，其余→概况） */
@@ -212,11 +215,11 @@ export function TaskDetailPage() {
     if (!taskId || missing) {
         return (
             <div className="flex flex-col gap-5 py-6">
-                <PageHeader title="任务详情" />
+                <PageHeader title={t("tasks.task-details", "任务详情")} />
                 <Panel className="items-center py-16">
-                    <p className="text-[13px] text-text-2">任务不存在或已过期。</p>
+                    <p className="text-[13px] text-text-2">{t("tasks.task-found", "任务不存在或已过期。")}</p>
                     <Btn variant="primary" size="sm" className="mt-1" onClick={() => switchPrimary("tasks")}>
-                        返回任务列表
+                        {t("tasks.back-tasks", "返回任务列表")}
                     </Btn>
                 </Panel>
             </div>
@@ -226,7 +229,7 @@ export function TaskDetailPage() {
     if (!task) {
         return (
             <div className="flex flex-col gap-5 py-6">
-                <PageHeader title="任务详情" sub="正在读取任务状态…" />
+                <PageHeader title={t("tasks.task-details", "任务详情")} sub={t("tasks.loading-task", "正在读取任务状态…")} />
                 <Panel className="items-center py-16">
                     <span className="h-4 w-40 animate-pulse rounded bg-stroke" />
                 </Panel>
@@ -270,13 +273,16 @@ export function TaskDetailPage() {
     /** 打开产物所在目录：静默失败会被当成「按钮坏了」，一律把错误外显到全局提示区 */
     const openOutput = async () => {
         if (!outPath) {
-            notify("这条记录没有产物路径信息，无法定位输出目录", "warn");
+            notify(t("tasks.output-path", "这条记录没有产物路径信息，无法定位输出目录"), "warn");
             return;
         }
         try {
             await api.openDir(api.dirOf(outPath));
         } catch (e) {
-            notify(`打开输出目录失败：${e instanceof Error ? e.message : String(e)}`, "error");
+            notify(
+                t("tasks.couldn-open", "打开输出目录失败：{{reason}}", { reason: e instanceof Error ? e.message : String(e) }),
+                "error"
+            );
         }
     };
 
@@ -287,14 +293,17 @@ export function TaskDetailPage() {
             setPlanCopied(true);
             window.setTimeout(() => setPlanCopied(false), 2000);
         } catch (e) {
-            notify(`复制方案失败：${e instanceof Error ? e.message : String(e)}`, "error");
+            notify(
+                t("tasks.couldn-copy", "复制方案失败：{{reason}}", { reason: e instanceof Error ? e.message : String(e) }),
+                "error"
+            );
         }
     };
 
     const retry = async () => {
         const res = await api.retryTask(task.id);
         if (!res) return;
-        if (res.queued) notify("已有转换正在进行，重试任务已加入队列", "info");
+        if (res.queued) notify(t("tasks.conversion-running", "已有转换正在进行，重试任务已加入队列"), "info");
         // 同一 id 原地重跑：回到概况、清掉上一轮的报告，重新起轮询而不是再压一层导航栈
         changeTab("overview");
         setReport(null);
@@ -304,7 +313,7 @@ export function TaskDetailPage() {
 
     const cancel = async () => {
         await api.cancelTask(task.id);
-        notify("任务已取消，已下载的文件保留在缓存", "info");
+        notify(t("tasks.task-canceled-downloaded", "任务已取消，已下载的文件保留在缓存"), "info");
     };
 
     const copyDiagnostics = async () => {
@@ -343,7 +352,7 @@ export function TaskDetailPage() {
                     sub={subLine(task, elapsed)}
                     right={
                         <SegTabs
-                            items={items.map((k) => ({ key: k, label: TAB_LABEL[k] }))}
+                            items={items.map((k) => ({ key: k, label: tabLabel[k] }))}
                             value={active}
                             onChange={changeTab}
                         />
@@ -411,7 +420,7 @@ export function TaskDetailPage() {
                                     <Panel gap={12}>
                                         <PanelHead
                                             inline
-                                            title="转换进度"
+                                            title={t("tasks.conversion-progress", "转换进度")}
                                             right={
                                                 <ToneChip
                                                     tone={chip.tone}
@@ -456,10 +465,10 @@ export function TaskDetailPage() {
                                                 >
                                                     {act
                                                         ? `${activityVerb(act.kind)} · ${act.subject}`
-                                                        : (lastLog?.message ?? "等待日志…")}
+                                                        : (lastLog ? tSource(lastLog.message) : t("tasks.waiting-log", "等待日志…"))}
                                                 </span>
                                                 <Tip
-                                                    label={act?.subject ?? lastLog?.message}
+                                                    label={act?.subject ?? (lastLog ? tSource(lastLog.message) : undefined)}
                                                     align="start"
                                                     wide
                                                 />
@@ -513,7 +522,7 @@ export function TaskDetailPage() {
                                     {/* ---- 日志：定高 260 + 框内滚动，卡高不随日志条数变化 ---- */}
                                     <Panel gap={12}>
                                         <PanelHead
-                                            title="日志"
+                                            title={t("tasks.logs", "日志")}
                                             right={
                                                 <LogCopyButton
                                                     logs={task.logs}
@@ -527,15 +536,31 @@ export function TaskDetailPage() {
                                         >
                                             {task.logs.length === 0 && (
                                                 <span className="font-mono text-[10px] leading-[14px] text-text-3">
-                                                    等待开始转换…
+                                                    {t("tasks.waiting-start", "等待开始转换…")}
                                                 </span>
                                             )}
                                             {hiddenLogs > 0 && (
                                                 <span className="font-mono text-[10px] leading-[14px] text-text-3">
-                                                    （仅显示最近 {LOG_RENDER_CAP} 条 · 已省略 {hiddenLogs}{" "}
-                                                    条，复制可取全部 {task.logs.length} 条）
+                                                    {t(
+                                                        "tasks.showing-last", "（仅显示最近 {{cap}} 条 · 已省略 {{hidden}} 条，复制可取全部 {{total}} 条）",
+                                                        {
+                                                            cap: LOG_RENDER_CAP,
+                                                            hidden: hiddenLogs,
+                                                            total: task.logs.length,
+                                                        }
+                                                    )}
                                                 </span>
                                             )}
+                                            {/* 日志正文走 `tSource`：按「中文 → 键」表就地查目录，带数字/文件名的动态句表里没有，
+                                照旧出中文（诊断产物，口径见 src-tauri/src/l18n 之外的说明）。
+                                下面登记的是后端写死的那几句固定日志。 */}
+                                            {/*i18n:
+                                                任务已取消，取件中止
+                                                本次无需联网：全部文件来自整合包、本地文件或下载缓存
+                                                方案里指定的那枚 Java 已不在本机，改用自动挑到的那一枚
+                                                重新排队：沿用上次方案（日志保留上一轮的记录）
+                                                任务已被用户取消
+                                            */}
                                             {visibleLogs.map((l, i) => (
                                                 <div key={i} className="flex w-full gap-2">
                                                     <span className="shrink-0 font-mono text-[10px] leading-[14px] font-normal text-amethyst">
@@ -551,7 +576,7 @@ export function TaskDetailPage() {
                                                                   : "text-text-2"
                                                         )}
                                                     >
-                                                        {l.message}
+                                                        {tSource(l.message)}
                                                     </span>
                                                 </div>
                                             ))}
@@ -593,14 +618,18 @@ export function TaskDetailPage() {
                 {/* 右栏：任务信息 + 本页唯一的动作区 */}
                 <aside className="w-[280px] shrink-0">
                     <Panel gap={10}>
-                        <PanelHead title="任务信息" />
-                        <InfoRow label="开始时间" value={formatStamp(started)} />
-                        <InfoRow label="已用时长" value={formatDuration(elapsed)} />
+                        <PanelHead title={t("tasks.task-info", "任务信息")} />
+                        <InfoRow label={t("tasks.started", "开始时间")} value={formatStamp(started)} />
+                        <InfoRow label={t("tasks.elapsed", "已用时长")} value={formatDuration(elapsed)} />
                         <InfoRow
-                            label="转换方案"
+                            label={t("tasks.conversion-plan", "转换方案")}
                             value={
                                 counts
-                                    ? `剔除 ${counts.remove} · 保留 ${counts.keep} · 新增 ${counts.add}`
+                                    ? t("tasks.remove-removed", "剔除 {{remove}} · 保留 {{keep}} · 新增 {{add}}", {
+                                          remove: counts.remove,
+                                          keep: counts.keep,
+                                          add: counts.add,
+                                      })
                                     : "—"
                             }
                         />
@@ -617,7 +646,7 @@ export function TaskDetailPage() {
                                     className="font-medium"
                                     onClick={() => void cancel()}
                                 >
-                                    取消转换
+                                    {t("tasks.cancel-conversion", "取消转换")}
                                 </Btn>
                             )}
                             {task.status === "failed" && (
@@ -628,7 +657,7 @@ export function TaskDetailPage() {
                                     className="font-semibold"
                                     onClick={() => void retry()}
                                 >
-                                    重试转换
+                                    {t("tasks.retry-conversion", "重试转换")}
                                 </Btn>
                             )}
                             {task.status === "cancelled" && (
@@ -639,7 +668,7 @@ export function TaskDetailPage() {
                                     className="font-semibold"
                                     onClick={() => void retry()}
                                 >
-                                    重新转换
+                                    {t("tasks.reconvert", "重新转换")}
                                 </Btn>
                             )}
                             {task.status === "success" && (
@@ -650,7 +679,7 @@ export function TaskDetailPage() {
                                         className="font-semibold"
                                         onClick={() => void openOutput()}
                                     >
-                                        打开输出位置
+                                        {t("tasks.open-output", "打开输出位置")}
                                     </Btn>
                                     <Btn
                                         size="sm"
@@ -658,22 +687,22 @@ export function TaskDetailPage() {
                                         className="bg-surface text-text-1"
                                         onClick={() => void copyPlan()}
                                     >
-                                        {planCopied ? "已复制方案" : "复制转换方案"}
+                                        {planCopied ? t("tasks.plan-copied", "已复制方案") : t("tasks.copy-plan", "复制转换方案")}
                                     </Btn>
                                 </>
                             )}
                         </Swap>
                         {/* 回退固定占动作组最后一条 */}
                         <Btn size="sm" full onClick={() => switchPrimary("tasks")}>
-                            返回任务列表
+                            {t("tasks.back-tasks", "返回任务列表")}
                         </Btn>
 
                         <p className="w-full text-center text-[10px] leading-[14px] font-normal text-text-3">
                             {task.status === "failed"
-                                ? "已下载文件保留在缓存 · 可在设置中切换下载镜像源"
+                                ? t("tasks.downloaded-files", "已下载文件保留在缓存 · 可在设置中切换下载镜像源")
                                 : task.status === "cancelled"
-                                  ? "已下载文件保留在缓存 · 重新转换可续用"
-                                  : "已下载文件保留在缓存，重试无需重新下载"}
+                                  ? t("tasks.downloaded-files-kept", "已下载文件保留在缓存 · 重新转换可续用")
+                                  : t("tasks.downloaded-files-kept-cache", "已下载文件保留在缓存，重试无需重新下载")}
                         </p>
                     </Panel>
                 </aside>
@@ -689,17 +718,22 @@ function subLine(task: ConversionTask, elapsed: number): string {
     const base = `${loaderLabel(task.pack.loader)} · Minecraft ${task.options.mcVersion}`;
     switch (task.status) {
         case "running":
-            return `${base} · 转换进行中 · ${hm(task.startedAt ?? task.createdAt)} 开始`;
+            return `${base} · ` + t("tasks.progress-started", "转换进行中 · {{time}} 开始", { time: hm(task.startedAt ?? task.createdAt) });
         case "queued":
-            return `${base} · 排队中`;
-        case "failed":
-            return `${base} · 转换失败 · ${task.finishedAt ? hm(task.finishedAt) : ""} 中断${
-                task.error?.attempts ? `（已重试 ${task.error.attempts} 次）` : ""
-            }`;
+            return `${base} · ${t("lib.queued", "排队中")}`;
+        case "failed": {
+            const retried = task.error?.attempts
+                ? t("tasks.retried-count-time", "（已重试 {{count}} 次）", { count: task.error.attempts })
+                : "";
+            return `${base} · ` + t("tasks.failed-stopped", "转换失败 · {{time}} 中断{{retried}}", {
+                time: task.finishedAt ? hm(task.finishedAt) : "",
+                retried,
+            });
+        }
         case "cancelled":
-            return `${base} · 已取消 · ${task.finishedAt ? hm(task.finishedAt) : ""}`;
+            return `${base} · ${t("lib.canceled", "已取消")} · ${task.finishedAt ? hm(task.finishedAt) : ""}`;
         default:
-            return `${base} · 转换成功 · 耗时 ${formatDuration(elapsed)}`;
+            return `${base} · ` + t("tasks.succeeded-duration", "转换成功 · 耗时 {{duration}}", { duration: formatDuration(elapsed) });
     }
 }
 
@@ -711,24 +745,34 @@ function subLine(task: ConversionTask, elapsed: number): string {
 function progressHeadline(task: ConversionTask): string {
     const net = needsNetwork(task);
     const { verb, done, total } = fetchCounts(task);
-    const n = task.total != null ? `${done} / ${total} 个文件` : "";
+    const n = task.total != null ? t("tasks.total-files", "{{done}} / {{total}} 个文件", { done, total }) : "";
     const taken =
-        task.doneBytes != null && task.doneBytes > 0 ? ` · 已取 ${formatSize(task.doneBytes)}` : "";
+        task.doneBytes != null && task.doneBytes > 0
+            ? ` · ${t("tasks.size-collected", "已取 {{size}}", { size: formatSize(task.doneBytes) })}`
+            : "";
     if (task.status === "failed")
-        return n ? `${verb}中断于 ${n}` : `${stageLabel(task.stage ?? "builder", net)}阶段中断`;
-    if (task.status === "cancelled") return n ? `用户取消于 ${n}` : "用户取消任务";
+        return n
+            ? t("tasks.stopped-during", "{{verb}}中断于 {{n}}", { verb: verbLabel(verb), n })
+            : t("tasks.stage-interrupted", "{{stage}}阶段中断", { stage: stageLabel(task.stage ?? "builder", net) });
+    if (task.status === "cancelled")
+        return n ? t("tasks.canceled-user", "用户取消于 {{n}}", { n }) : t("tasks.canceled-user-2", "用户取消任务");
     if (task.status === "success")
-        return `构建完成 · 输出 ${task.outputFileName ?? outputNameOf(task.pack.fileName)}`;
-    if (task.stage === "downloader" && n)
-        return `${verb === "下载" ? "依赖" : "文件"}${verb} ${n}${taken}${net ? "" : " · 无需联网"}`;
-    return `${stageLabel(task.stage ?? "parser", net)}阶段进行中`;
+        return t("tasks.build-complete", "构建完成 · 输出 {{name}}", {
+            name: task.outputFileName ?? outputNameOf(task.pack.fileName),
+        });
+    if (task.stage === "downloader" && n) {
+        const head = verb === "下载" ? t("tasks.deps-downloading", "依赖下载") : t("tasks.files-collecting", "文件取件");
+        const offline = net ? "" : ` · ${t("tasks.offline", "无需联网")}`;
+        return `${head} ${n}${taken}${offline}`;
+    }
+    return t("tasks.stage-progress", "{{stage}}阶段进行中", { stage: stageLabel(task.stage ?? "parser", net) });
 }
 
 /** 进度卡第二行右侧：错误码 / 取消 / 耗时 */
 function progressAside(task: ConversionTask, elapsed: number): string {
     if (task.status === "failed")
-        return task.error?.attempts ? `已重试 ${task.error.attempts} 次` : "已中断";
-    if (task.status === "cancelled") return "已取消";
-    if (task.status === "success") return `耗时 ${formatDuration(elapsed)}`;
+        return task.error?.attempts ? t("tasks.retried-count", "已重试 {{count}} 次", { count: task.error.attempts }) : t("tasks.interrupted", "已中断");
+    if (task.status === "cancelled") return t("lib.canceled", "已取消");
+    if (task.status === "success") return t("tasks.duration-elapsed", "耗时 {{duration}}", { duration: formatDuration(elapsed) });
     return "";
 }

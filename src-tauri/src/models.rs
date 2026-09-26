@@ -5,6 +5,8 @@ use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
+use crate::l10n::Msg;
+
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub enum LoaderKind {
@@ -267,6 +269,7 @@ pub struct ConversionOptions {
     pub memory_mb: u32,
     pub generate_scripts: bool,
     pub nogui: bool,
+    /// 自动写入 `eula=true`（**默认开**：关掉做出的包首次一律拒启，那是"默认给用户一个跑不起来的包"）
     pub agree_eula: bool,
     /* ---- 服务端设置（server.properties 高频字段） ---- */
     pub server_port: u16,
@@ -279,7 +282,8 @@ pub struct ConversionOptions {
     pub online_mode: bool,
     pub level_seed: String,
     /* ---- 启动参数扩展 ---- */
-    /// Aikar's flags：G1GC 调优参数组，拼入 start 脚本 JVM 参数
+    /// Aikar's flags：G1GC 调优参数组，拼入 start 脚本 JVM 参数（**默认开**：官方推荐档，
+    /// 且只在 start 脚本里出现，用户手改 `-Xmx` 之外不会碰到它）
     pub use_aikar_flags: bool,
     /// 用户附加 JVM 参数（原样拼接）
     pub extra_jvm_args: String,
@@ -308,7 +312,7 @@ impl Default for ConversionOptions {
             memory_mb: 4096,
             generate_scripts: true,
             nogui: true,
-            agree_eula: false,
+            agree_eula: true,
             server_port: 25565,
             motd: "A Minecraft server".into(),
             max_players: 20,
@@ -316,7 +320,7 @@ impl Default for ConversionOptions {
             difficulty: "easy".into(),
             online_mode: true,
             level_seed: String::new(),
-            use_aikar_flags: false,
+            use_aikar_flags: true,
             extra_jvm_args: String::new(),
             output_override: String::new(),
             keep_dirs: Vec::new(),
@@ -490,12 +494,17 @@ pub enum CheckStatus {
 #[derive(Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct CheckResult {
-    /// 稳定标识（files / jars / deps / start / root / keep）：前端按它排布，不认中文标题
+    /// 稳定标识（files / jars / deps / start / loader / root / keep）：前端按它排布，不认中文标题
     pub id: String,
     pub label: String,
     pub status: CheckStatus,
     /// 一句话结论（带真实数字），报告页直接显示
     pub detail: String,
+    /// 同一句话的「模板 + 参数」，给界面查翻译目录用（见 `crate::l10n`）。
+    /// `detail` 仍是后端渲染好的中文整句：日志、剪贴板、以及这一项缺失时的兜底。
+    /// 磁盘上的旧任务快照没有这一项 → `None`，前端照旧显示 `detail`，行为与改造前逐字一致。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub detail_msg: Option<Msg>,
     /// 涉及的对象名（缺哪几个文件、哪几个 jar 坏了），已截断
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub items: Vec<String>,
@@ -701,6 +710,41 @@ pub struct AppSettings {
     /// 关掉 = 每次现装现丢，装在任务的临时目录里、打完包即删：省磁盘但每次都吃一遍下载。
     #[serde(default = "default_reuse_installs")]
     pub reuse_loader_installs: bool,
+    /// 界面语言。翻译目录只有一份、住在前端（`src/lib/i18n/resources/`），
+    /// 所以后端**只存这一档**：生效语言的判定与切换都在前端，改档也不需要重启。
+    /// 旧 settings.json 无此字段 → `Auto`（跟随系统），不能因为多一个字段就丢用户设置。
+    #[serde(default)]
+    pub locale: AppLocale,
+}
+
+/// 界面语言档位（Settings · 外观与关于）。线上码 camelCase，与前端 `AppLocale` 逐字对齐。
+///
+/// `Auto` 是一档真语义（跟随系统），不是"还没选过"；它永远不会成为生效档
+/// ——生效档只有三种，由前端按 `navigator` 的语言偏好解析。
+/// `Unspecified` 只吃「手改 settings.json 写错值」这一种情况：`persist::load_settings` 是
+/// **整份回落默认**，一个错别字不该把用户所有设置抹掉（同 DownloadSource / UpdateChannel）。
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, Default)]
+#[serde(rename_all = "camelCase")]
+pub enum AppLocale {
+    /// 跟随系统语言（默认）
+    #[default]
+    Auto,
+    ZhCn,
+    ZhTw,
+    EnUs,
+    #[serde(other)]
+    Unspecified,
+}
+
+impl AppLocale {
+    /// 落盘前把占位值归回跟随系统（读写两端各过一遍，见 `AppSettings::normalized`）
+    pub fn normalized(self) -> Self {
+        if self == Self::Unspecified {
+            Self::Auto
+        } else {
+            self
+        }
+    }
 }
 
 /// 更新渠道（Settings · 外观与关于）：正式版 / Beta，对应 GitHub release 的 prerelease 标志
@@ -829,6 +873,7 @@ impl Default for AppSettings {
             curseforge_api_key: None,
             install_loader_locally: true,
             reuse_loader_installs: true,
+            locale: AppLocale::Auto,
         }
     }
 }
@@ -857,6 +902,9 @@ impl AppSettings {
         self.download_source = self.download_source.normalized();
         // 只在"选过"的时候归位；None 是"跟随当前构建"，不能被当成无效值顶成正式版
         self.update_channel = self.update_channel.map(UpdateChannel::normalized);
+        // 语言档位写坏了顶成"跟随系统"：否则设置页的下拉会显示成一个不存在的选项，
+        // 而且落盘时会把 "unspecified" 写回 settings.json（同 download_source 那一行）
+        self.locale = self.locale.normalized();
         // 凭据字段：粘贴时常带首尾空白，带着空格发出去的 403 用户读不懂，
         // 所以在这里一次归位；清空的串记成 None，让「没配」与「配了个空」是同一个状态
         self.curseforge_api_key = self
@@ -937,6 +985,29 @@ mod tests {
                 .expect("旧方案存档应能加载");
         assert!(opts.install_loader_locally);
         assert_eq!(opts.memory_mb, 4096, "其余字段走 Default，别悄悄改了老任务的档位");
+    }
+
+    /// 老设置里完全没有语言这一档（i18n 之前写的 settings.json）：必须加载成功并落 `Auto`，
+    /// 也就是"跟随系统"。档位值写错（手改、或未来版本加了新档又被老程序读）只能归位成 Auto，
+    /// 不能把整份设置连带丢掉——`persist::load_settings` 的回落粒度是整份文件。
+    #[test]
+    fn settings_without_locale_still_load_and_bad_value_normalizes() {
+        let legacy = r#"{"outputDir":"o","cacheDir":"c","stripClientOnly":true,"verifyAfterBuild":false,
+            "downloadSource":"official","concurrency":6,"autoClassifyOnline":true}"#;
+        let s: AppSettings = serde_json::from_str(legacy).expect("旧设置应能加载");
+        assert_eq!(s.locale, AppLocale::Auto, "缺字段必须落跟随系统");
+
+        let pinned: AppSettings = serde_json::from_str(&format!(
+            r#"{{"outputDir":"o","cacheDir":"c","stripClientOnly":true,"verifyAfterBuild":false,
+            "downloadSource":"official","concurrency":6,"locale":"zhTw"}}"#
+        ))
+        .expect("显式语言档位应能加载");
+        assert_eq!(pinned.locale, AppLocale::ZhTw);
+
+        let broken = r#"{"outputDir":"o","cacheDir":"c","stripClientOnly":true,"verifyAfterBuild":false,
+            "downloadSource":"official","concurrency":6,"locale":"zh_CN"}"#;
+        let s: AppSettings = serde_json::from_str(broken).expect("无效语言值不该拖垮整份设置");
+        assert_eq!(s.normalized().locale, AppLocale::Auto);
     }
 
     /// 粘贴进来的 Key 常带空白：带着空格发出去只会收到一条读不懂的 403，所以读写两端都归位；

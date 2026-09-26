@@ -13,6 +13,7 @@
 import { Check, RefreshCw, X, type LucideIcon } from "lucide-react";
 import type { ConversionTask, FetchTally, PipelineStage, TaskStatus } from "@/lib/types";
 import type { Tone } from "@/components/ui";
+import { t } from "@/lib/i18n";
 
 /* ---- 轨道展示词表（ShiftRail 与本文件共用；定义放在视图模型层，避免 lib 反向依赖组件） ---- */
 
@@ -57,6 +58,9 @@ export function needsNetwork(task: ConversionTask): boolean {
 /**
  * 阶段 3 计数口径：真联网时按「已下载/需联网」（本地件秒完成，计入会让进度条失真），
  * 全程零流量时按「已取件/全部条目」。
+ *
+ * `verb` 是**数据不是文案**：调用处拿它比过相等（`verb === "下载"` 决定说「依赖」还是「文件」），
+ * 所以这里给的是中文原文；显示时由 `verbLabel` 各自命中自己的词条，比较照原样比。
  */
 export function fetchCounts(task: ConversionTask): {
     verb: string;
@@ -76,7 +80,18 @@ export function fetchCounts(task: ConversionTask): {
 /** 「下载 3/5」/「取件 12/14」——芯片与轨道标题共用的一行文案 */
 export function runLabel(task: ConversionTask): string {
     const { verb, done, total } = fetchCounts(task);
-    return `${verb} ${done}/${total}`;
+    // 排版模板当中文原文写在调用点：三档都走目录命中，中文档逐字与改造前一致；
+    // 动词已由 `verbLabel` 翻好，所以英/繁两条目录的值就是同一副槽
+    return t("lib.run-label", "{{verb}} {{done}}/{{total}}", {
+        verb: verbLabel(verb),
+        done,
+        total,
+    });
+}
+
+/** 「下载中 7/12」这类进行态动词的显示形态（比较请用 `fetchCounts().verb` 的原文，别用这个） */
+export function verbLabel(verb: string): string {
+    return verb === "取件" ? t("lib.collect", "取件") : t("lib.download", "下载");
 }
 
 /** 只取计数部分（芯片已带动词时用，如「下载中 7/12」） */
@@ -85,7 +100,8 @@ export function runCounts(task: ConversionTask): string {
     return `${done}/${total}`;
 }
 
-/** 任务状态 → 芯片文案/色调/图标（任务列表卡与任务详情页共用一套口径） */
+/** 任务状态 → 芯片文案/色调/图标（任务列表卡与任务详情页共用一套口径）
+ *  注意：`label` 存的是中文原文，也就是 i18n 的键 —— 取用处显示时要过一层 `t()`（本仓库目前无人取用它） */
 export const STATUS_META: Record<
     TaskStatus,
     { label: string; tone: Tone; icon?: LucideIcon }
@@ -169,11 +185,13 @@ export function taskToRail(task: ConversionTask): TaskRailView {
     const label =
         task.status === "running"
             ? task.stage === "downloader" && task.total != null
-              ? `转换中 · ${runLabel(task)}`
-              : `转换中 · ${stageLabel(task.stage ?? "parser", needsNetwork(task))}`
+              ? t("lib.converting-run", "转换中 · {{run}}", { run: runLabel(task) })
+              : t("lib.converting-stage", "转换中 · {{stage}}", {
+                    stage: stageLabel(task.stage ?? "parser", needsNetwork(task)),
+                })
             : task.status === "queued"
-              ? "排队中"
-              : FINISHED_LABEL[task.status];
+              ? t("lib.queued", "排队中")
+              : finishedLabel(task.status);
 
     const logs: RailLog[] = taskLogs(task);
 
@@ -182,8 +200,8 @@ export function taskToRail(task: ConversionTask): TaskRailView {
         status: { label, tone },
         logs,
         runFrac: runFraction(task),
-        subs: needsNetwork(task) ? undefined : { downloader: "整合包与本地取件" },
-        waiting: logs.length === 0 ? { title: "等待开始转换" } : undefined,
+        subs: needsNetwork(task) ? undefined : { downloader: t("lib.modpack-local", "整合包与本地取件") },
+        waiting: logs.length === 0 ? { title: t("lib.waiting-start", "等待开始转换") } : undefined,
     };
 }
 
@@ -207,25 +225,46 @@ export function taskLogs(task: ConversionTask): RailLog[] {
     }));
 }
 
-const FINISHED_LABEL: Record<string, string> = {
-    success: "已完成",
-    failed: "失败",
-    cancelled: "已取消",
-};
+/** 收尾三态的轨道标题（轨道上没有进行态：running/queued 由 taskToRail 自己拼） */
+function finishedLabel(status: TaskStatus): string {
+    const label: Partial<Record<TaskStatus, string>> = {
+        success: t("lib.entry-2", "已完成"),
+        failed: t("lib.failed", "失败"),
+        cancelled: t("lib.canceled", "已取消"),
+    };
+    return label[status] ?? "";
+}
 
 /**
  * 阶段中文短名（芯片文案用，与设计稿"转换中 · 下载 41/146"口径一致）。
  * downloader 站点按是否真联网改口：零流量的包内/本地搬运叫「取件」，不叫「下载」
  */
 export function stageLabel(stage: PipelineStage, net = true): string {
-    if (stage === "downloader" && !net) return "取件";
-    return {
-        parser: "解析",
-        detector: "检测",
-        downloader: "下载",
-        installer: "安装",
-        builder: "构建",
-    }[stage];
+    // 表建在函数里：模块顶层建表会把词冻在首次加载的语言上
+    const label: Record<PipelineStage, string> = {
+        parser: t("lib.parse", "解析"),
+        detector: t("lib.detect", "检测"),
+        downloader: net ? t("lib.download", "下载") : t("lib.collect", "取件"),
+        installer: t("lib.install", "安装"),
+        builder: t("lib.build", "构建"),
+    };
+    return label[stage];
+}
+
+/**
+ * 进行态短名（进度条芯片）。中文是「阶段名 + 中」，英文是另一种词形（Downloading）——
+ * 拼不出来说明它得是独立词条，所以这里整词一个键，不 `${stageLabel()}中`。
+ */
+function stageIngLabel(stage: PipelineStage, net = true): string {
+    if (stage === "downloader" && !net) return t("lib.collecting", "取件中");
+    const label: Record<PipelineStage, string> = {
+        parser: t("lib.parsing", "解析中"),
+        detector: t("lib.detecting", "检测中"),
+        downloader: t("lib.downloading", "下载中"),
+        installer: t("lib.installing", "安装中"),
+        builder: t("lib.building", "构建中"),
+    };
+    return label[stage];
 }
 
 /* ---------------- 任务详情「转换进度」卡（XjfIJ / KdHjU / ZKwyq） ---------------- */
@@ -239,18 +278,18 @@ export function progressChip(task: ConversionTask): { label: string; tone: Tone;
     switch (task.status) {
         case "running":
             return {
-                label: `${stageLabel(task.stage ?? "parser", net)}中`,
+                label: stageIngLabel(task.stage ?? "parser", net),
                 tone: "gold",
                 plain: false,
             };
         case "queued":
-            return { label: "排队中", tone: "muted", plain: true };
+            return { label: t("lib.queued", "排队中"), tone: "muted", plain: true };
         case "failed":
-            return { label: "已失败", tone: "redstone", plain: true };
+            return { label: t("lib.failed-2", "已失败"), tone: "redstone", plain: true };
         case "cancelled":
-            return { label: "已取消", tone: "muted", plain: true };
+            return { label: t("lib.canceled", "已取消"), tone: "muted", plain: true };
         default:
-            return { label: "已完成", tone: "emerald", plain: false };
+            return { label: t("lib.entry-2", "已完成"), tone: "emerald", plain: false };
     }
 }
 
@@ -268,16 +307,19 @@ export function stageTrack(task: ConversionTask): {
     const net = needsNetwork(task);
     const next =
         idx >= 0 && idx < RAIL_ORDER.length - 1 ? stageLabel(RAIL_ORDER[idx + 1], net) : undefined;
-    if (task.status === "success") return { current: { label: "构建完成", tone: "emerald" } };
+    if (task.status === "success") return { current: { label: t("lib.build-complete", "构建完成"), tone: "emerald" } };
     if (task.status === "failed")
         return {
             current: {
-                label: `${stageLabel(station ?? "builder", net)}失败`,
+                label: t("lib.stage-failed", "{{stage}}失败", {
+                    stage: stageLabel(station ?? "builder", net),
+                }),
                 tone: "redstone",
             },
             next,
         };
-    if (task.status === "cancelled") return { current: { label: "已取消", tone: "muted" }, next };
+    if (task.status === "cancelled")
+        return { current: { label: t("lib.canceled", "已取消"), tone: "muted" }, next };
     return {
         current: { label: stageLabel(station ?? "parser", net), tone: "gold" },
         next,

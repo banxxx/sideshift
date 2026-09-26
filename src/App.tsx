@@ -17,6 +17,8 @@ import { TrashBin } from "@/features/tasks/TrashBin";
 import { ResizeEdges } from "@/components/shared/ResizeEdges";
 import { useWindowControls } from "@/lib/window-controls";
 import { PackStoreProvider } from "@/lib/pack-store";
+import { setScrollNode } from "@/lib/page-scroll";
+import { LocaleGate } from "@/lib/i18n";
 import {
     EntryFreezer,
     NavigationProvider,
@@ -82,6 +84,7 @@ function Shell() {
                     <AnimatePresence initial={false} mode="wait">
                         <motion.main
                             key={entry.key}
+                            ref={setScrollNode}
                             initial={{ opacity: 0, y: 24 }}
                             animate={{ opacity: 1, y: 0, transition: PAGE_IN }}
                             exit={{ opacity: 0, y: -10, transition: PAGE_OUT }}
@@ -112,7 +115,11 @@ function App() {
             {/* reducedMotion:"user"：跟随系统"减少动态效果"设置，全局降级 motion 动画 */}
             <MotionConfig reducedMotion="user">
                 <PackStoreProvider>
-                    <Shell />
+                    {/* 换 key 重挂的兜底门只管**视图**，所以挂在两个 Provider 之内：
+                        挂在外头时切语言会把导航栈一起重挂，人从设置页被弹回首页。 */}
+                    <LocaleGate>
+                        <Shell />
+                    </LocaleGate>
                 </PackStoreProvider>
             </MotionConfig>
         </NavigationProvider>

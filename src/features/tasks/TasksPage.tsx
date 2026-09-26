@@ -27,6 +27,7 @@ import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { motion } from "motion/react";
 import * as api from "@/lib/api";
 import { notify } from "@/lib/notify";
+import { t, tSource, useT, type TranslateFn } from "@/lib/i18n";
 import { useNavigation } from "@/lib/navigation";
 import { BAR_COLOR, needsNetwork, progressChip, runCounts, stageLabel } from "@/lib/rail-view";
 import { formatDuration, formatElapsed, formatSize, loaderLabel, outputNameOf, truncateMiddle } from "@/lib/format";
@@ -66,25 +67,40 @@ const CARD_ICON: Record<TaskStatus, { icon: typeof Check; box: string; fg: strin
 };
 
 const FILTERS = [
-    { key: "all" as const, label: "全部" },
-    { key: "running" as const, label: "运行中" },
-    { key: "success" as const, label: "已完成" },
-    { key: "failed" as const, label: "失败" },
+    { key: "all" as const },
+    { key: "running" as const },
+    { key: "success" as const },
+    { key: "failed" as const },
 ];
 
+/** 页签文案过 `t`、value 保持 id：表建在函数里，切语言时随组件重渲染重建 */
+const filterTabs = (t: TranslateFn): Array<{ key: Filter; label: string }> =>
+    FILTERS.map((f) => ({
+        key: f.key,
+        label:
+            f.key === "all"
+                ? t("common.entry-2", "全部")
+                : f.key === "running"
+                  ? t("tasks.running", "运行中")
+                  : f.key === "success"
+                    ? t("lib.entry-2", "已完成")
+                    : t("lib.failed", "失败"),
+    }));
+
 /** 状态 → 主按钮文案：同一档位同一个动作（进详情），只有落点读的内容随状态换 */
-const PRIMARY_LABEL: Record<TaskStatus, string> = {
-    queued: "查看进度",
-    running: "查看进度",
-    success: "查看报告",
-    failed: "查看详情",
-    cancelled: "查看详情",
-};
+const primaryLabel = (t: TranslateFn): Record<TaskStatus, string> => ({
+    queued: t("tasks.view-progress", "查看进度"),
+    running: t("tasks.view-progress", "查看进度"),
+    success: t("tasks.view-report", "查看报告"),
+    failed: t("tasks.view-details", "查看详情"),
+    cancelled: t("tasks.view-details", "查看详情"),
+});
 
 /** 快照按创建时间倒序一份：首帧（缓存初值）与每趟轮询回来走同一条排序，别两处各写一遍 */
 const byNewest = (list: ConversionTask[]) => [...list].sort((a, b) => b.createdAt - a.createdAt);
 
 export function TasksPage() {
+    const t = useT();
     // 首帧直接吃上一趟读数（`api.peekTasks`，理由写在那儿）：换页会重挂载，
     // 空着挂载就是「占位层叠在列表上换一次」，正压在整页淡入的途中
     const [tasks, setTasks] = useState<ConversionTask[]>(() => byNewest(api.peekTasks() ?? []));
@@ -214,7 +230,9 @@ export function TasksPage() {
                     setGone(task.id, false);
                     unstageDeleted(task.id);
                     notify(
-                        `删除任务失败：${failure instanceof Error ? failure.message : String(failure)}`,
+                        t("tasks.couldn-delete", "删除任务失败：{{reason}}", {
+                            reason: failure instanceof Error ? failure.message : String(failure),
+                        }),
                         "error"
                     );
                 });
@@ -240,16 +258,16 @@ export function TasksPage() {
             <div className="sticky top-0 z-20 -mb-5 bg-background pt-6 pb-5">
                 <PageHeader
                     compact
-                    title="转换任务"
+                    title={t("tasks.conversion-tasks", "转换任务")}
                     sub={
                         !loaded
-                            ? "正在读取任务…"
+                            ? t("tasks.loading-tasks", "正在读取任务…")
                             : tasks.length === 0
-                              ? "从首页选择整合包，开始第一次转换"
+                              ? t("tasks.pick-modpack", "从首页选择整合包，开始第一次转换")
                               : summary(shown)
                     }
                     subTone="mono"
-                    right={<SegTabs items={FILTERS} value={filter} onChange={changeFilter} />}
+                    right={<SegTabs items={filterTabs(t)} value={filter} onChange={changeFilter} />}
                 />
             </div>
 
@@ -310,18 +328,19 @@ const cardEl = (id: string) => cardEls.get(id);
 async function restoreAfterCommit(id: string) {
     try {
         await restoreDeleted(id);
-        notify("已追回，任务回到列表", "info");
+        notify(t("tasks.restored-task", "已追回，任务回到列表"), "info");
     } catch (e) {
-        notify(`追回失败：${e instanceof Error ? e.message : String(e)}`, "error");
+        notify(t("tasks.couldn-restore-reason", "追回失败：{{reason}}", { reason: e instanceof Error ? e.message : String(e) }), "error");
     }
 }
 
 /** 页头统计副标：运行中 N · 已完成 N · 失败 N */
 function summary(tasks: ConversionTask[]): string {
-    return `运行中 ${countOf(tasks, "running")} · 已完成 ${countOf(tasks, "success")} · 失败 ${countOf(
-        tasks,
-        "failed"
-    )}`;
+    return t("tasks.running-running", "运行中 {{running}} · 已完成 {{success}} · 失败 {{failed}}", {
+        running: countOf(tasks, "running"),
+        success: countOf(tasks, "success"),
+        failed: countOf(tasks, "failed"),
+    });
 }
 
 /** 四档筛选覆盖五个状态：排队/运行归「运行中」，取消归「失败」（都是没跑成）。 */
@@ -367,6 +386,7 @@ function LoadingTasks() {
 /** 空态块高度：70vh 在 1200×800 基准下正好等于设计稿的 560；窗口变矮先收这里（下限 400 保证
  *  图标盒+两行文案+按钮 176 的内容不破版），变高封顶 640，免得拉成一整屏空白。 */
 function EmptyTasks() {
+    const t = useT();
     const { switchPrimary } = useNavigation();
     return (
         <div className="flex h-[clamp(400px,70vh,640px)] flex-col items-center justify-center gap-4 rounded-[12px] bg-bg-app px-5 py-10">
@@ -376,10 +396,10 @@ function EmptyTasks() {
                 </span>
                 <div className="flex flex-col items-center gap-1">
                     <span className="font-mono text-[16px] leading-[24px] font-semibold text-text-1">
-                        还没有转换任务
+                        {t("tasks.conversion-tasks-yet", "还没有转换任务")}
                     </span>
                     <span className="font-mono text-[12px] leading-[18px] font-normal text-text-3">
-                        上传 Minecraft 整合包后，转换任务会出现在这里
+                        {t("tasks.upload-minecraft", "上传 Minecraft 整合包后，转换任务会出现在这里")}
                     </span>
                 </div>
             </div>
@@ -388,7 +408,7 @@ function EmptyTasks() {
                 className="border border-stroke text-[12px] font-medium"
                 onClick={() => switchPrimary("home")}
             >
-                去首页选择整合包
+                {t("tasks.select-modpack", "去首页选择整合包")}
             </Btn>
         </div>
     );
@@ -398,6 +418,7 @@ function EmptyTasks() {
  *  照旧做成居中的块（水平+垂直都居中），不留一行飘着的裸文字；比整页空态矮一档，
  *  免得切个页签就换来一大片空白。出现时的淡入归整块内容那一次 fade-through，这里不再各自动画。 */
 function EmptyFilter() {
+    const t = useT();
     return (
         <div className="flex h-[clamp(240px,38vh,380px)] flex-col items-center justify-center gap-4 rounded-[12px] bg-bg-app px-5 py-10">
             <span className="flex size-14 items-center justify-center rounded-2xl bg-surface-2">
@@ -405,10 +426,10 @@ function EmptyFilter() {
             </span>
             <div className="flex flex-col items-center gap-1">
                 <span className="font-mono text-[16px] leading-[24px] font-semibold text-text-1">
-                    该筛选下暂无任务
+                    {t("tasks.tasks-filter", "该筛选下暂无任务")}
                 </span>
                 <span className="font-mono text-[12px] leading-[18px] font-normal text-text-3">
-                    切回「全部」看看，或到首页再转换一个整合包
+                    {t("tasks.switch-convert", "切回「全部」看看，或到首页再转换一个整合包")}
                 </span>
             </div>
         </div>
@@ -483,6 +504,7 @@ function TaskRow({
 /* ---------------- 任务卡 ---------------- */
 
 function TaskCard({ task, onDelete }: { task: ConversionTask; onDelete: () => void }) {
+    const t = useT();
     const { navigate } = useNavigation();
     const running = task.status === "running" || task.status === "queued";
     const icon = CARD_ICON[task.status];
@@ -496,12 +518,12 @@ function TaskCard({ task, onDelete }: { task: ConversionTask; onDelete: () => vo
     const retry = async () => {
         const res = await api.retryTask(task.id);
         if (!res) return;
-        if (res.queued) notify("已有转换正在进行，重试任务已加入队列", "info");
+        if (res.queued) notify(t("tasks.conversion-running", "已有转换正在进行，重试任务已加入队列"), "info");
     };
 
     const cancel = async () => {
         await api.cancelTask(task.id);
-        notify("任务已取消，已下载的文件保留在缓存", "info");
+        notify(t("tasks.task-canceled-downloaded", "任务已取消，已下载的文件保留在缓存"), "info");
     };
 
     /** 打开产物所在目录。此前两处 `void` 把 openPath 的 reject 吞掉了，表现为「点了没反应」；
@@ -514,7 +536,10 @@ function TaskCard({ task, onDelete }: { task: ConversionTask; onDelete: () => vo
                 (await api.resolveOutputPath(outName, task.options.outputOverride));
             await api.openDir(api.dirOf(p));
         } catch (e) {
-            notify(`打开输出目录失败：${e instanceof Error ? e.message : String(e)}`, "error");
+            notify(
+                t("tasks.couldn-open", "打开输出目录失败：{{reason}}", { reason: e instanceof Error ? e.message : String(e) }),
+                "error"
+            );
         }
     };
 
@@ -560,7 +585,7 @@ function TaskCard({ task, onDelete }: { task: ConversionTask; onDelete: () => vo
             {task.status === "failed" && task.error && (
                 <div className="w-full rounded-lg border border-redstone-dim bg-bg-app px-4 py-3">
                     <span className="break-words font-mono text-[11px] leading-[16px] font-normal text-redstone">
-                        {task.error.title} · {task.error.detail}
+                        {tSource(task.error.title)} · {tSource(task.error.detail)}
                     </span>
                 </div>
             )}
@@ -583,22 +608,22 @@ function TaskCard({ task, onDelete }: { task: ConversionTask; onDelete: () => vo
                         运行/排队的行后端拒绝删除，这一档整枚不出现。 */}
                     {!running && (
                         <Btn variant="danger" size="sm" onClick={() => onDelete()}>
-                            删除
+                            {t("tasks.delete", "删除")}
                         </Btn>
                     )}
                     {running && (
                         <Btn size="sm" onClick={() => void cancel()}>
-                            取消
+                            {t("common.cancel", "取消")}
                         </Btn>
                     )}
                     {task.status === "success" && (
                         <Btn size="sm" onClick={() => void openOutput()}>
-                            打开输出位置
+                            {t("tasks.open-output", "打开输出位置")}
                         </Btn>
                     )}
                     {(task.status === "failed" || task.status === "cancelled") && (
                         <Btn size="sm" icon={RefreshCw} onClick={() => void retry()}>
-                            {task.status === "failed" ? "重试" : "重新转换"}
+                            {task.status === "failed" ? t("tasks.retry", "重试") : t("tasks.reconvert", "重新转换")}
                         </Btn>
                     )}
                     <Btn
@@ -613,7 +638,7 @@ function TaskCard({ task, onDelete }: { task: ConversionTask; onDelete: () => vo
                             })
                         }
                     >
-                        {PRIMARY_LABEL[task.status]}
+                        {primaryLabel(t)[task.status]}
                     </Btn>
                 </div>
             </div>
@@ -624,10 +649,9 @@ function TaskCard({ task, onDelete }: { task: ConversionTask; onDelete: () => vo
 /** row1 副标：输出名（运行/成功）或加载器 + 中断阶段（失败） */
 function subLine(task: ConversionTask, outName: string): string {
     if (task.status === "failed") {
-        return `→ ${loaderLabel(task.pack.loader)} ${task.options.mcVersion} · 中断于${stageLabel(
-            task.stage ?? "builder",
-            needsNetwork(task)
-        )}阶段`;
+        return `→ ${loaderLabel(task.pack.loader)} ${task.options.mcVersion} · ` + t("tasks.stopped-stage", "中断于{{stage}}阶段", {
+            stage: stageLabel(task.stage ?? "builder", needsNetwork(task)),
+        });
     }
     if (task.status === "success" && task.outputSizeBytes != null) {
         return `→ ${outName} · ${formatSize(task.outputSizeBytes)}`;
@@ -646,13 +670,18 @@ function chipLabel(task: ConversionTask, base: string): string {
 /** row3 左侧明细行 */
 function detailLine(task: ConversionTask): string {
     if (task.status === "running" || task.status === "queued") {
-        const last = task.logs[task.logs.length - 1]?.message;
-        const where = task.stage ? `${stageLabel(task.stage, needsNetwork(task))} ·` : "排队 ·";
-        return [where, last ?? "等待开始…"].filter(Boolean).join(" ");
+        const raw = task.logs[task.logs.length - 1]?.message;
+        const where = task.stage ? `${stageLabel(task.stage, needsNetwork(task))} ·` : `${t("tasks.queued", "排队")} ·`;
+        return [where, raw === undefined ? t("tasks.waiting", "等待开始…") : tSource(raw)].filter(Boolean).join(" ");
     }
     if (task.status === "success") {
         const c = task.counts;
-        return c ? `剔除 ${c.remove} 个客户端专属模组 · 补齐 ${c.add} 个服务端依赖` : "转换完成";
+        return c
+            ? t("tasks.remove-client", "剔除 {{remove}} 个客户端专属模组 · 补齐 {{add}} 个服务端依赖", {
+                  remove: c.remove,
+                  add: c.add,
+              })
+            : t("tasks.conversion-complete", "转换完成");
     }
-    return "任务已取消 · 已取回的文件保留在下载缓存";
+    return t("tasks.task-canceled", "任务已取消 · 已取回的文件保留在下载缓存");
 }

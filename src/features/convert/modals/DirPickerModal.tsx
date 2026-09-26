@@ -3,6 +3,7 @@ import { ChevronRight, Folder, MinusSquare, SquareCheck } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { PackDirNode } from "@/lib/types";
 import { Btn, CheckBox, ListRow, ModalShell, SearchBox, HOVER_FILL } from "@/components/ui";
+import { useT } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
 
 /** 树内目录节点总数（标题「共 N 个目录」口径） */
@@ -33,6 +34,7 @@ export function DirPickerModal({
     selected: string[];
     onApply: (next: string[]) => void;
 }) {
+    const t = useT();
     const [query, setQuery] = useState("");
     /** 当前浏览层级（从包根起算的目录段，[]=根） */
     const [path, setPath] = useState<string[]>([]);
@@ -117,13 +119,13 @@ export function DirPickerModal({
             back={path.length > 0 ? () => setPath((p) => p.slice(0, -1)) : undefined}
             width={560}
             height={440}
-            title={`选择保留目录 · ${countDirNodes(dirs)} 个目录`}
-            sub="双击进入子目录 · 单击勾选 · 勾选后随包复制到服务端"
-            footerNote={`${draft.length} 个目录将随包保留`}
+            title={t("convert-modals.choose-folders", "选择保留目录 · {{count}} 个目录", { count: countDirNodes(dirs) })}
+            sub={t("convert-modals.double-click-opens", "双击进入子目录 · 单击勾选 · 勾选后随包复制到服务端")}
+            footerNote={t("convert-modals.count-folder", "{{count}} 个目录将随包保留", { count: draft.length })}
             footerActions={
                 <>
                     <Btn size="sm" className="px-3.5" onClick={onClose}>
-                        取消
+                        {t("common.cancel", "取消")}
                     </Btn>
                     <Btn
                         variant="primary"
@@ -135,7 +137,7 @@ export function DirPickerModal({
                             onClose();
                         }}
                     >
-                        应用
+                        {t("convert-modals.apply", "应用")}
                     </Btn>
                 </>
             }
@@ -151,7 +153,7 @@ export function DirPickerModal({
                     )}
                     onClick={() => setPath([])}
                 >
-                    全部
+                    {t("common.entry-2", "全部")}
                 </button>
                 {path.map((seg, i) => (
                     <span key={`${seg}-${i}`} className="flex items-center gap-1">
@@ -174,7 +176,7 @@ export function DirPickerModal({
             <SearchBox
                 value={query}
                 onChange={setQuery}
-                placeholder="搜索当前层目录名称…"
+                placeholder={t("convert-modals.search-folder", "搜索当前层目录名称…")}
                 className="border border-stroke"
             />
 
@@ -189,10 +191,13 @@ export function DirPickerModal({
                     ) : (
                         <SquareCheck className="size-3.5 text-accent" />
                     )}
-                    {allOn ? "取消全选" : "全选"}
+                    {allOn ? t("convert-modals.unselect", "取消全选") : t("convert-modals.select", "全选")}
                 </button>
                 <span className="font-mono text-[11px] leading-[16px] font-normal tabular-nums text-text-3">
-                    已勾选 {draft.length} / {countDirNodes(dirs)}
+                    {t("convert-modals.checked-total", "已勾选 {{checked}} / {{total}}", {
+                        checked: draft.length,
+                        total: countDirNodes(dirs),
+                    })}
                 </span>
             </div>
 
@@ -204,7 +209,7 @@ export function DirPickerModal({
                         <ListRow
                             key={key}
                             className="cursor-pointer hover:bg-surface-2"
-                            title={n.children.length > 0 ? "双击进入子目录" : undefined}
+                            title={n.children.length > 0 ? t("convert-modals.double-click", "双击进入子目录") : undefined}
                             onClick={() => handleRowClick(n)}
                             onDoubleClick={() => handleRowDblClick(n)}
                         >
@@ -227,14 +232,14 @@ export function DirPickerModal({
                                     on ? "text-emerald" : "text-text-3"
                                 )}
                             >
-                                {n.fileCount} 文件
+                                {t("convert.count-file", "{{count}} 文件", { count: n.fileCount })}
                             </span>
                         </ListRow>
                     );
                 })}
                 {filtered.length === 0 && (
                     <span className="py-8 text-center text-[11px] text-text-3">
-                        {dirs.length === 0 ? "包内没有可保留的目录" : "无匹配目录"}
+                        {dirs.length === 0 ? t("convert-modals.folders-keep", "包内没有可保留的目录") : t("convert-modals.matching-folders", "无匹配目录")}
                     </span>
                 )}
             </div>

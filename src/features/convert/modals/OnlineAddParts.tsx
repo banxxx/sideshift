@@ -3,13 +3,20 @@ import { Puzzle } from "lucide-react";
 import { useEffect, useId, useState } from "react";
 import { motion } from "motion/react";
 import { HOVER_FILL } from "@/components/ui";
+import { intlLocale } from "@/lib/i18n";
 import { PILL_SLIDE } from "@/lib/springs";
 import { cn } from "@/lib/utils";
 
 export type Source = "modrinth" | "curseforge";
 
-/** 下载次数 → "1,204 万" / "8,412" */
+/** 下载次数：中文按「万」读（1,204 万），其他语言走 Intl 紧凑记数（1.2M） */
 export function formatCount(n: number): string {
+    if (!intlLocale().startsWith("zh")) {
+        return new Intl.NumberFormat(intlLocale(), {
+            notation: "compact",
+            maximumFractionDigits: 1,
+        }).format(n);
+    }
     return n >= 10_000 ? `${(n / 10_000).toFixed(0)} 万` : n.toLocaleString();
 }
 

@@ -14,6 +14,7 @@
 import { Download, PackageOpen, RefreshCw, X, type LucideIcon } from "lucide-react";
 import type { TaskError } from "@/lib/types";
 import { truncateMiddle } from "@/lib/format";
+import { tSource, useT } from "@/lib/i18n";
 import { Btn, LinkBtn, ToneChip } from "@/components/ui";
 import { cn } from "@/lib/utils";
 
@@ -53,6 +54,7 @@ export function TaskErrorCard({
     onCopyDiagnostics,
     copied,
 }: TaskErrorCardProps) {
+    const t = useT();
     const { icon: Icon, gold } = STAGE_STYLE[error.stage];
     const builder = error.stage === "builder";
 
@@ -63,12 +65,34 @@ export function TaskErrorCard({
                 builder ? "gap-2.5" : "gap-2"
             )}
         >
-            {/* 头行：图标 + 标题 + 上下文 + 内联出口 */}
-            <div className="flex w-full items-center gap-2">
-                <Icon className={cn("size-3.5 shrink-0", gold ? "text-gold" : "text-redstone")} />
-                <span className="shrink-0 text-[13px] leading-[20px] font-semibold text-text-1">
-                    {error.title}
-                </span>
+                {/* 头行：图标 + 标题 + 上下文 + 内联出口。
+                    error.title 是后端算好的固定句（动态键，就地查目录），下面这块登记
+                    src-tauri 里会走到这张卡的那些：少一条，那条在英文界面就漏译。 */}
+                <div className="flex w-full items-center gap-2">
+                    <Icon className={cn("size-3.5 shrink-0", gold ? "text-gold" : "text-redstone")} />
+                    {/*i18n:
+                        解析失败
+                        CurseForge 取链接失败
+                        依赖解析失败
+                        未选择加载器版本
+                        服务端加载器获取失败
+                        构建失败
+                        本机没有可用的 Java
+                        本机安装异常
+                        安装目录准备失败
+                        Java 起不来
+                        本机安装超时
+                        安装器报错
+                        安装器报成功却没装出结果
+                        本机安装已取消
+                        文件获取失败
+                        联网下载失败
+                        取件失败
+                        转换中断
+                    */}
+                    <span className="shrink-0 text-[13px] leading-[20px] font-semibold text-text-1">
+                        {tSource(error.title)}
+                    </span>
 
                 {error.stage === "parser" && fileName && (
                     <span className="truncate font-mono text-[11px] leading-[16px] font-normal text-text-3">
@@ -77,12 +101,12 @@ export function TaskErrorCard({
                 )}
                 {error.stage === "downloader" && error.attempts != null && error.attempts > 0 && (
                     <ToneChip tone="redstone" size="xs" className="bg-surface-2">
-                        已重试 {error.attempts} 次
+                        {t("tasks.retried-count", "已重试 {{count}} 次", { count: error.attempts })}
                     </ToneChip>
                 )}
                 {gold && (
                     <ToneChip tone="gold" size="xs" className="bg-surface-2">
-                        警告
+                        {t("tasks.warning", "警告")}
                     </ToneChip>
                 )}
                 {builder && error.exitCode != null && (
@@ -93,18 +117,24 @@ export function TaskErrorCard({
 
                 {!builder && onFix && (
                     <Btn size="xs" className={INLINE_OUTLINE} onClick={onFix}>
-                        {error.stage === "parser" ? "重新选择" : "查看处置建议"}
+                        {error.stage === "parser" ? t("common.re-select", "重新选择") : t("tasks.see-suggestions", "查看处置建议")}
                     </Btn>
                 )}
                 {!builder && error.retryable && onRetry && (
                     <Btn variant="primary" size="xs" className="px-3 font-semibold" onClick={onRetry}>
-                        重试
+                        {t("tasks.retry", "重试")}
                     </Btn>
                 )}
             </div>
 
-            {/* 详情 */}
-            <p className="text-[12px] leading-[18px] font-normal text-text-2">{error.detail}</p>
+            {/* 详情：带文件名/退出码/cause 的那些是诊断串，查不中目录就照原样出中文 */}
+            {/*i18n:
+                找不到源整合包文件，请返回首页重新选择
+                裸 zip 包无法自动确定 Loader 版本，请在转换配置中选择后重试
+                应用退出时任务尚未完成，可重试
+                未检测到 Java（本机没有可用的 JDK）
+            */}
+            <p className="text-[12px] leading-[18px] font-normal text-text-2">{tSource(error.detail)}</p>
 
             {/* 构建失败：日志尾块（等宽 10，末行 redstone） */}
             {builder && error.logTail && error.logTail.length > 0 && (
@@ -117,7 +147,7 @@ export function TaskErrorCard({
                                 i === error.logTail!.length - 1 ? "text-redstone" : "text-text-2"
                             )}
                         >
-                            {line}
+                            {tSource(line)}
                         </span>
                     ))}
                 </div>
@@ -128,12 +158,12 @@ export function TaskErrorCard({
                 <div className="flex w-full gap-2">
                     {onCopyDiagnostics && (
                         <Btn size="xs" className={INLINE_OUTLINE} onClick={onCopyDiagnostics}>
-                            {copied ? "已复制" : "复制诊断信息"}
+                            {copied ? t("common.copied", "已复制") : t("tasks.copy-diagnostics", "复制诊断信息")}
                         </Btn>
                     )}
                     {error.retryable && onRetry && (
                         <Btn size="xs" className={INLINE_OUTLINE} onClick={onRetry}>
-                            重试构建
+                            {t("tasks.retry-build", "重试构建")}
                         </Btn>
                     )}
                 </div>
@@ -142,7 +172,7 @@ export function TaskErrorCard({
             {/* 解析失败：日志链接（11/600 accent） */}
             {onShowLog && (
                 <LinkBtn size="sm" className="self-start" onClick={onShowLog}>
-                    查看解析日志
+                    {t("tasks.view-parse", "查看解析日志")}
                 </LinkBtn>
             )}
         </section>

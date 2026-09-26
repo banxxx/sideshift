@@ -156,7 +156,8 @@ pub fn default_options(state: S<'_>, manifest: PackManifest) -> ConversionOption
         memory_mb: 4096,
         generate_scripts: true,
         nogui: true,
-        agree_eula: false,
+        // 默认开：关着做出来的包首次一律拒启（`eula.txt` 恒生成，这一档只决定里面的值）
+        agree_eula: true,
         // 全局值只在这里当**初值**用一次：用户在本包改过就存进自己那份，之后重试与回看都读快照，
         // 不再回头看全局（否则同一份方案隔几天重跑会做出不同的包）
         install_loader_locally,

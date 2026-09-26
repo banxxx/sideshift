@@ -30,6 +30,7 @@ import {
     X,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { t, tSource, useT } from "@/lib/i18n";
 import type { PipelineStage } from "@/lib/types";
 import { formatClock } from "@/lib/format";
 import { useLogFollow } from "@/lib/log-view";
@@ -56,18 +57,21 @@ interface ShiftRailProps {
     className?: string;
 }
 
-/** 四站静态定义：图标/中文名/副标题（副标题 mono 小字，与设计稿逐字对应） */
-export const RAIL_STAGES: Array<{
+/** 四站静态定义：图标 + 文案（副标题 mono 小字，与设计稿逐字对应）。
+ *  表建在函数里、每格一条 `t(字面量)`：顶层建表会把词冻在首次加载的语言上（切语言不再跟）。 */
+export function railStages(): Array<{
     stage: PipelineStage;
     label: string;
     sub: string;
     icon: typeof Archive;
-}> = [
-    { stage: "parser", label: "解析", sub: "读取 mrpack 清单", icon: FileSearch },
-    { stage: "detector", label: "检测", sub: "识别加载器与版本", icon: Radar },
-    { stage: "downloader", label: "下载", sub: "拉取服务端依赖", icon: Download },
-    { stage: "builder", label: "构建", sub: "生成服务端实例", icon: Hammer },
-];
+}> {
+    return [
+        { stage: "parser", label: t("lib.parse", "解析"), sub: t("common.read-mrpack", "读取 mrpack 清单"), icon: FileSearch },
+        { stage: "detector", label: t("lib.detect", "检测"), sub: t("common.loaders-version", "识别加载器与版本"), icon: Radar },
+        { stage: "downloader", label: t("lib.download", "下载"), sub: t("common.server-deps", "拉取服务端依赖"), icon: Download },
+        { stage: "builder", label: t("lib.build", "构建"), sub: t("common.server-instance", "生成服务端实例"), icon: Hammer },
+    ];
+}
 
 /** 站点状态 → 配色/图标（done 默认换成 check，前沿站例外见下） */
 const STATION_STYLE: Record<
@@ -164,7 +168,9 @@ export function ShiftRail({
                               onOpenTask,
                               className,
                           }: ShiftRailProps) {
-    const list = RAIL_STAGES.map((s) => statuses[s.stage] ?? "pending");
+    const t = useT();
+    const stages = railStages();
+    const list = stages.map((s) => statuses[s.stage] ?? "pending");
     const doneFrac = doneLineFraction(list);
     const leg = runningLeg(list, doneFrac);
     const runPct = leg ? leg.width * Math.max(0, Math.min(1, runFrac ?? 0)) : 0;
@@ -181,7 +187,7 @@ export function ShiftRail({
             {/* 头部：轨道标题 + 状态芯片（显式 leading，否则继承 html 的 24px 行高白撑高） */}
             <header className="flex items-center justify-between">
                 <span className="font-mono text-[11px] leading-[16px] font-semibold tracking-[1.2px] text-text-3">
-                    SHIFT RAIL · 转换轨道
+                    SHIFT RAIL · {t("common.conversion-rail", "转换轨道")}
                 </span>
                 {status && (
                     <span
@@ -200,7 +206,7 @@ export function ShiftRail({
                 所以芯片与站点盒的视觉净间距左右都是 20px。
                 纵向 106 = 站点顶留位 26 + 盒 38 + 10 + 名称 16 + 2 + 副标题 14 */}
             <div className="flex h-[106px] gap-[39px] px-1.5">
-                <EndChip icon={Archive} label="客户端包" className="mt-[29px] shrink-0" />
+                <EndChip icon={Archive} label={t("common.client-pack", "客户端包")} className="mt-[29px] shrink-0" />
                 <div className="relative min-w-0 flex-1">
                     {/* 底轨 + 已完成段 */}
                     <span
@@ -249,7 +255,7 @@ export function ShiftRail({
                     )}
 
                     {/* 四站：站点盒 + 名称/副标题，整列以轨道中心对齐 */}
-                    {RAIL_STAGES.map((s, i) => {
+                    {stages.map((s, i) => {
                         const st = list[i];
                         const style = STATION_STYLE[st];
                         const Icon = s.icon;
@@ -298,7 +304,7 @@ export function ShiftRail({
                 </div>
                 <EndChip
                     icon={Server}
-                    label="服务端包"
+                    label={t("common.server-pack", "服务端包")}
                     iconClass="text-emerald"
                     className="mt-[29px] shrink-0"
                 />
@@ -311,7 +317,7 @@ export function ShiftRail({
                         onClick={onOpenTask}
                         className="text-[11px] leading-[16px] font-semibold text-accent hover:underline"
                     >
-                        查看任务详情 →
+                        {t("common.view-task", "查看任务详情")} →
                     </button>
                 </footer>
             )}
@@ -348,7 +354,7 @@ export function ShiftRail({
                                         LOG_LEVEL_COLOR[l.level ?? "info"]
                                     )}
                                 >
-                                    {l.message}
+                                    {tSource(l.message)}
                                 </span>
                             </p>
                         ))

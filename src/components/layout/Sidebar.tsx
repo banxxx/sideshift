@@ -14,6 +14,7 @@ import { useRef, useState } from "react";
 import { AnimatePresence, motion } from "motion/react";
 import { NotificationStack } from "./NotificationStack";
 import { HOVER_FILL } from "@/components/ui";
+import { useT } from "@/lib/i18n";
 import { PILL_SLIDE } from "@/lib/springs";
 import { cn } from "@/lib/utils";
 import { isDark, switchTheme, useTheme } from "@/lib/theme";
@@ -24,15 +25,23 @@ import {
     type PrimaryPage,
 } from "@/lib/navigation";
 
-const navItems: { key: PrimaryPage; label: string; icon: typeof Home }[] = [
-    { key: "home", label: "首页", icon: Home },
-    { key: "tasks", label: "任务列表", icon: ListChecks },
-    { key: "settings", label: "设置", icon: Settings },
+/** 导航三行的图标与 id（id 是路由 key，绝不翻译）；页名见下面组件里的 `navLabel` */
+const navItems: { key: PrimaryPage; icon: typeof Home }[] = [
+    { key: "home", icon: Home },
+    { key: "tasks", icon: ListChecks },
+    { key: "settings", icon: Settings },
 ];
 
 export function Sidebar() {
     const { entry, switchPrimary } = useNavigation();
     const [theme] = useTheme();
+    const t = useT();
+    // 表建在组件里、每格一条 `t(字面量)`：模块顶层建表会把词冻在首次加载的语言上
+    const navLabel: Record<PrimaryPage, string> = {
+        home: t("shell.home", "首页"),
+        tasks: t("shell.tasks", "任务列表"),
+        settings: t("common.settings", "设置"),
+    };
     const dark = isDark();
     const themeBtn = useRef<HTMLButtonElement>(null);
     // 每点一次换一个 key 重播光环；不需要退场，终态本身就是透明
@@ -40,10 +49,14 @@ export function Sidebar() {
 
     /** 快切只两态：点下去即锁定浅/深，因此读屏文案先把「这会离开跟随系统」说破（按钮无图标外的可见文字，靠它当名字） */
     const next = dark ? "light" : "dark";
+    const shadeOf = (mode: "light" | "dark") => (mode === "light" ? t("shell.light", "亮色") : t("common.dark", "深色"));
     const themeLabel =
         theme === "system"
-            ? `跟随系统（当前${dark ? "深色" : "亮色"}）· 点击锁定为${next === "light" ? "亮色" : "深色"}`
-            : `切换到${next === "light" ? "亮色" : "深色"}`;
+            ? t("shell.following-system", "跟随系统（当前{{shade}}）· 点击锁定为{{next}}", {
+                  shade: shadeOf(dark ? "dark" : "light"),
+                  next: shadeOf(next),
+              })
+            : t("shell.switch-shade", "切换到{{shade}}", { shade: shadeOf(next) });
 
     /** 当前一级页：栈顶是一级则取自身，二级则回溯到所属一级 */
     const activePrimary: PrimaryPage =
@@ -97,7 +110,7 @@ export function Sidebar() {
                             )}
                             <span className="relative z-[1] flex h-full items-center gap-2.5">
                                 <Icon className="size-4" />
-                                <span>{item.label}</span>
+                                <span>{navLabel[item.key]}</span>
                             </span>
                         </button>
                     );

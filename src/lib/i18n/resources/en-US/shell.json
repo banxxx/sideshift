@@ -1,0 +1,12 @@
+{
+  "shell.back": "Back",
+  "shell.dismiss-notification": "Dismiss notification",
+  "shell.following-system": "Following the system (now {{shade}}) · Click to lock to {{next}}",
+  "shell.home": "Home",
+  "shell.light": "Light",
+  "shell.maximize": "Maximize",
+  "shell.minimize": "Minimize",
+  "shell.restore": "Restore",
+  "shell.switch-shade": "Switch to {{shade}}",
+  "shell.tasks": "Tasks"
+}

@@ -9,6 +9,7 @@ import { Dialog as DialogPrimitive } from "@base-ui/react/dialog";
 import { ArrowLeft, X, type LucideIcon } from "lucide-react";
 import { type ReactNode } from "react";
 import { cn } from "@/lib/utils";
+import { useT } from "@/lib/i18n";
 import { Divider } from "./Panel";
 import { Tip, TIP_TRIGGER } from "./Tip";
 import { HOVER_PRESS } from "./HoverFill";
@@ -52,6 +53,7 @@ export function ModalShell({
     /** 防误触：点遮罩/按 Esc 不关闭，只能走按钮（目录勾选弹窗用） */
     persistent?: boolean;
 }) {
+    const t = useT();
     const sizeStyle = {
         width: `clamp(${width}px, 62vw, ${Math.round(width * MODAL_SCALE_MAX)}px)`,
         height: height
@@ -108,7 +110,7 @@ export function ModalShell({
                             {back && (
                                 <button
                                     onClick={back}
-                                    aria-label="返回"
+                                    aria-label={t("common.back", "返回")}
                                     className={cn(
                                         TIP_TRIGGER,
                                         "size-7 rounded-lg border border-stroke bg-surface text-text-2",
@@ -117,12 +119,12 @@ export function ModalShell({
                                     )}
                                 >
                                     <ArrowLeft className="size-3.5" />
-                                    <Tip label="返回" />
+                                    <Tip label={t("common.back", "返回")} />
                                 </button>
                             )}
                             <button
                                 onClick={onClose}
-                                aria-label="关闭"
+                                aria-label={t("common.close", "关闭")}
                                 className={cn(
                                     TIP_TRIGGER,
                                     "size-7 rounded-lg border border-stroke text-text-2",
@@ -131,7 +133,7 @@ export function ModalShell({
                                 )}
                             >
                                 <X className="size-3.5" />
-                                <Tip label="关闭" />
+                                <Tip label={t("common.close", "关闭")} />
                             </button>
                         </div>
                     </div>

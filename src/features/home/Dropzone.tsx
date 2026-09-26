@@ -21,6 +21,7 @@ import { AnimatePresence, motion } from "motion/react";
 import { Upload } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { isTauri } from "@/lib/api";
+import { useT } from "@/lib/i18n";
 import { LIFT, MORPH } from "@/lib/springs";
 
 interface DropzoneProps {
@@ -50,6 +51,7 @@ export function Dropzone({
     busy,
     className,
 }: DropzoneProps) {
+    const t = useT();
     const [hovering, setHovering] = useState(false);
     const [dragOver, setDragOver] = useState(false);
     const dragging = dragOver || !!fileDragging;
@@ -296,15 +298,15 @@ export function Dropzone({
                                 exit={{ opacity: 0, y: -8 }}
                                 transition={{ duration: 0.15 }}
                             >
-                                {dragging ? "松开，交给 SideShift" : "拖入客户端整合包"}
+                                {dragging ? t("home.release-hand", "松开，交给 SideShift") : t("home.drop-client", "拖入客户端整合包")}
                             </motion.p>
                         </AnimatePresence>
                     </div>
                     <p className="font-mono text-xs text-text-3">
-                        支持 .mrpack · .zip 文件格式
+                        {t("home.supports-mrpack", "支持 .mrpack · .zip 文件格式")}
                     </p>
                     <p className="text-[13px] font-semibold text-accent">
-                        或点击选择文件
+                        {t("home.click-browse", "或点击选择文件")}
                     </p>
                 </div>
             </motion.div>

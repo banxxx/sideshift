@@ -5,6 +5,7 @@
  * 抽到公共模块避免各页各写一份导致文案格式漂移。
  */
 import type { EnvSource, LoaderKind, PlanMod } from "./types";
+import { t } from "@/lib/i18n";
 
 /** 84.0 MB / 512 MB / 1.2 GB —— ≥1024 才进阶单位，保留一位小数 */
 export function formatSize(bytes: number): string {
@@ -38,8 +39,12 @@ export function formatStamp(d: Date | number): string {
 /** 耗时：短于 1 分钟显示 "42 秒"，否则 "2分 14秒"（报告页口径） */
 export function formatDuration(ms: number): string {
     const s = Math.max(0, Math.round(ms / 1000));
-    if (s < 60) return `${s} 秒`;
-    return `${Math.floor(s / 60)}分 ${s % 60}秒`;
+    // 单槽的「秒」与「分秒」是两种排版，各给一个键：中文档回落即原文，逐字不变
+    if (s < 60) return t("lib.count-sec", "{{count}} 秒", { count: s });
+    return t("lib.minutes-seconds", "{{minutes}}分 {{seconds}}秒", {
+        minutes: Math.floor(s / 60),
+        seconds: s % 60,
+    });
 }
 
 /** 运行中任务的已用时长：MM:SS（任务列表卡右上角） */
@@ -67,14 +72,19 @@ export function loaderLabel(loader: LoaderKind): string {
 
 /** 端判定依据的直白说法：Convert 卡行与「查看全部」弹窗共用同一口径，别两处各写一份 */
 export function evidenceLabel(source: EnvSource = "unknown"): string {
-    return {
-        mrpack: "整合包声明",
-        jarMetadata: "jar 自证",
-        modrinthHash: "平台构建",
-        modrinthProject: "平台项目",
-        nameHeuristic: "名称推断",
-        unknown: "无依据",
-    }[source];
+    // 表建在函数里、每格一条 `t(字面量)`：
+    //  - 顶层建表会把字符串冻在首次加载的语言上（切语言不变）
+    //  - 表里存键再 `t(表[k])`：第二参没了中文原文，中文档直接露裸键；
+    //    `scripts/i18n.mjs check` 也只认字面量调用点，那样写等于漏网
+    const label: Record<EnvSource, string> = {
+        mrpack: t("lib.modpack-declared", "整合包声明"),
+        jarMetadata: t("lib.jar-metadata", "jar 自证"),
+        modrinthHash: t("lib.platform-build", "平台构建"),
+        modrinthProject: t("lib.platform-project", "平台项目"),
+        nameHeuristic: t("lib.name-guess", "名称推断"),
+        unknown: t("lib.basis", "无依据"),
+    };
+    return label[source];
 }
 
 /**
@@ -93,15 +103,6 @@ export type SideTag =
     | "clientOptional"
     | "review"
     | "unknown";
-
-const SIDE_TAG_LABEL: Record<SideTag, string> = {
-    serverRequired: "服务端必装",
-    serverOptional: "服务端可选",
-    clientRequired: "客户端必装",
-    clientOptional: "客户端可选",
-    review: "需人工确认",
-    unknown: "未判定",
-};
 
 /**
  * 两侧支持度 → 端标签。判据与 `detector::verdict` / 待确认口径同轴，所以标签永远不会与所在页签打架：
@@ -123,7 +124,15 @@ export function sideTagOf(m: Pick<PlanMod, "clientSide" | "serverSide">): SideTa
 
 /** 端标签文案（三张清单与卡内共用，别各处再抄一份字符串） */
 export function sideTagLabel(tag: SideTag): string {
-    return SIDE_TAG_LABEL[tag];
+    const label: Record<SideTag, string> = {
+        serverRequired: t("lib.server-required", "服务端必装"),
+        serverOptional: t("lib.server-optional", "服务端可选"),
+        clientRequired: t("lib.client-required", "客户端必装"),
+        clientOptional: t("lib.client-optional", "客户端可选"),
+        review: t("lib.needs-review", "需人工确认"),
+        unknown: t("lib.unknown", "未判定"),
+    };
+    return label[tag];
 }
 
 /**

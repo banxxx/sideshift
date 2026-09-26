@@ -3,6 +3,7 @@ import { ChevronLeft, ChevronRight, ExternalLink, Puzzle } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import * as api from "@/lib/api";
 import { formatSize, loaderLabel } from "@/lib/format";
+import { tSource, useT } from "@/lib/i18n";
 import type {
     LoaderKind,
     ModSearchResult,
@@ -42,6 +43,7 @@ export function OnlineAddModal({
     /** 选中某个构建版本后回写新增列表 */
     onAdd: (mod: ModSearchResult, version: ModVersionEntry) => void;
 }) {
+    const t = useT();
     const [view, setView] = useState<"list" | "detail">("list");
     const [source, setSource] = useState<Source>("modrinth");
     const [query, setQuery] = useState("");
@@ -182,31 +184,34 @@ export function OnlineAddModal({
 
     const verOpts = useMemo<SelectOption[]>(
         () => [
-            { value: "", chip: "全部", label: "全部版本" },
+            { value: "", chip: t("common.entry-2", "全部"), label: t("convert-modals.versions", "全部版本") },
             ...mcOptions.map((o) => ({
                 value: o.value,
                 chip: o.value,
                 label: o.value,
+                // group 参与 SearchSelect 相邻分组判定，必须保持后端原文，不套 t
                 group: o.group,
             })),
         ],
-        [mcOptions]
+        [mcOptions, t]
     );
     const loOpts = useMemo<SelectOption[]>(
         () => [
-            { value: "", chip: "任意", label: "任意加载器" },
+            { value: "", chip: t("convert-modals.entry-2", "任意"), label: t("convert-modals.loader", "任意加载器") },
             { value: "fabric", chip: "Fabric", label: "Fabric" },
             { value: "forge", chip: "Forge", label: "Forge" },
             { value: "neoforge", chip: "NeoForge", label: "NeoForge" },
         ],
-        []
+        [t]
     );
     const catOpts = useMemo<SelectOption[]>(
         () => [
-            { value: "all", chip: "全部", label: "全部类别" },
-            ...categories.map((c) => ({ value: c, chip: c, label: c })),
+            { value: "all", chip: t("common.entry-2", "全部"), label: t("convert-modals.categories", "全部类别") },
+            // 类别名来自后端平台词表（Modrinth 为英文 slug，CurseForge 可能中文）：
+            // value 用原文（走 IPC 的筛选项），显示处 tSource(raw) 让登记过的类别名自动翻
+            ...categories.map((c) => ({ value: c, chip: tSource(c), label: tSource(c) })),
         ],
-        [categories]
+        [categories, t]
     );
 
     // 二级视图共用同一筛选状态：版本行按所选版本/加载器在前端过滤
@@ -218,7 +223,7 @@ export function OnlineAddModal({
         [versions, verSel, loSel]
     );
 
-    const filterNote = `${verSel ? `Minecraft ${verSel}` : "全部版本"} · ${loSel ? loaderLabel(loSel) : "任意加载器"}`;
+    const filterNote = `${verSel ? `Minecraft ${verSel}` : t("convert-modals.versions", "全部版本")} · ${loSel ? loaderLabel(loSel) : t("convert-modals.loader", "任意加载器")}`;
 
     /* 模组名后那一枚端标签（全弹窗只此一处，列表行与版本行都不再挂）：
        优先项目级支持度，平台只在构建级给数据时退到首个有声明的构建；两边都没有就不挂 */
@@ -242,7 +247,11 @@ export function OnlineAddModal({
                 iconNode={<ModIcon url={detail.iconUrl} className="size-10" puzzleClass="size-5" />}
                 title={detail.name}
                 titleTag={modTag ? <SideChip sides={modTag} warnClient /> : undefined}
-                sub={`${srcName} · 作者 ${detail.author} · ${formatCount(detail.downloads)} 次下载`}
+                sub={t("convert-modals.src-author", "{{src}} · 作者 {{author}} · {{downloads}} 次下载", {
+                    src: srcName,
+                    author: detail.author,
+                    downloads: formatCount(detail.downloads),
+                })}
             >
                 <p className="shrink-0 text-[13px] leading-[20px] font-normal text-text-2">
                     {detail.description}
@@ -251,16 +260,16 @@ export function OnlineAddModal({
                     <div className="flex h-7 items-center gap-2">
                         <SearchSelect
                             variant="chip"
-                            prefix="版本"
+                            prefix={t("settings.version", "版本")}
                             value={verSel}
                             options={verOpts}
                             searchable
-                            searchPlaceholder="搜索版本…"
+                            searchPlaceholder={t("convert.search-versions", "搜索版本…")}
                             onChange={setVerSel}
                         />
                         <SearchSelect
                             variant="chip"
-                            prefix="加载器"
+                            prefix={t("home.loader", "加载器")}
                             value={loSel}
                             options={loOpts}
                             onChange={(v) => setLoSel(v as LoaderKind | "")}
@@ -272,7 +281,7 @@ export function OnlineAddModal({
                         <ListSkeleton rows={5} />
                     ) : versionsError ? (
                         <span className="py-8 text-center text-[11px] text-gold">
-                            版本加载失败 · {versionsError}
+                            {t("convert-modals.version-load", "版本加载失败 · {{error}}", { error: versionsError })}
                         </span>
                     ) : (
                         <>
@@ -295,7 +304,7 @@ export function OnlineAddModal({
                                             </span>
                                             {v.recommended && (
                                                 <ToneChip tone="gold" size="xs">
-                                                    推荐
+                                                    {t("common.recommended", "推荐")}
                                                 </ToneChip>
                                             )}
                                         </span>
@@ -309,8 +318,8 @@ export function OnlineAddModal({
                             {shownVersions.length === 0 && (
                                 <span className="py-8 text-center text-[11px] text-text-3">
                                     {versions.length === 0
-                                        ? "该模组没有可用构建"
-                                        : "当前筛选下没有构建"}
+                                        ? t("convert-modals.builds-mod", "该模组没有可用构建")
+                                        : t("convert-modals.builds-match", "当前筛选下没有构建")}
                                 </span>
                             )}
                         </>
@@ -328,16 +337,16 @@ export function OnlineAddModal({
             persistent
             width={800}
             height={464}
-            title="从网络添加模组"
-            sub={`搜索 Modrinth 与 CurseForge · ${filterNote}`}
+            title={t("convert-modals.add-mods", "从网络添加模组")}
+            sub={t("convert-modals.search-modrinth", "搜索 Modrinth 与 CurseForge · {{filter}}", { filter: filterNote })}
             footerNote={
                 cfBlocked
-                    ? "CurseForge · 需要 API Key"
+                    ? t("convert-modals.curseforge-needs", "CurseForge · 需要 API Key")
                     : error
-                      ? `${srcName} · 加载失败`
+                      ? t("convert-modals.src-load", "{{src}} · 加载失败", { src: srcName })
                       : loading
-                        ? `${srcName} · 搜索中…`
-                        : `${srcName} · 共 ${result.total} 个结果`
+                        ? t("convert-modals.src-searching", "{{src}} · 搜索中…", { src: srcName })
+                        : t("convert-modals.src-count", "{{src}} · 共 {{count}} 个结果", { src: srcName, count: result.total })
             }
             footerActions={
                 <>
@@ -347,7 +356,7 @@ export function OnlineAddModal({
                         className="w-9 px-0"
                         disabled={page <= 1 || loading}
                         onClick={() => setPage((p) => p - 1)}
-                        title="上一页"
+                        title={t("convert-modals.previous", "上一页")}
                     />
                     <Btn
                         size="sm"
@@ -355,10 +364,10 @@ export function OnlineAddModal({
                         className="w-9 bg-surface px-0"
                         disabled={loading || page * result.results.length >= result.total}
                         onClick={() => setPage((p) => p + 1)}
-                        title="下一页"
+                        title={t("convert-modals.next", "下一页")}
                     />
                     <Btn variant="primary" size="sm" className="px-3.5 font-semibold" onClick={close}>
-                        完成
+                        {t("convert-modals.entry-3", "完成")}
                     </Btn>
                 </>
             }
@@ -369,7 +378,7 @@ export function OnlineAddModal({
                     setQuery(v);
                     setPage(1);
                 }}
-                placeholder="搜索模组名称…"
+                placeholder={t("convert-modals.search-mod", "搜索模组名称…")}
                 className="bg-surface-2"
             />
 
@@ -385,11 +394,11 @@ export function OnlineAddModal({
                 <div className="flex h-7 items-center gap-2">
                     <SearchSelect
                         variant="chip"
-                        prefix="版本"
+                        prefix={t("settings.version", "版本")}
                         value={verSel}
                         options={verOpts}
                         searchable
-                        searchPlaceholder="搜索版本…"
+                        searchPlaceholder={t("convert.search-versions", "搜索版本…")}
                         onChange={(v) => {
                             setVerSel(v);
                             setPage(1);
@@ -397,7 +406,7 @@ export function OnlineAddModal({
                     />
                     <SearchSelect
                         variant="chip"
-                        prefix="加载器"
+                        prefix={t("home.loader", "加载器")}
                         value={loSel}
                         options={loOpts}
                         onChange={(v) => {
@@ -407,11 +416,11 @@ export function OnlineAddModal({
                     />
                     <SearchSelect
                         variant="chip"
-                        prefix="类别"
+                        prefix={t("convert-modals.category", "类别")}
                         value={catSel}
                         options={catOpts}
                         searchable
-                        searchPlaceholder="搜索类别…"
+                        searchPlaceholder={t("convert-modals.search-category", "搜索类别…")}
                         onChange={(v) => {
                             setCatSel(v);
                             setPage(1);
@@ -427,11 +436,10 @@ export function OnlineAddModal({
                 ) : cfBlocked ? (
                     <div className="flex min-h-0 flex-1 flex-col items-center justify-center gap-1 text-center">
                         <span className="text-[12px] leading-[18px] text-text-2">
-                            CurseForge API Key 未配置
+                            {t("convert-modals.curseforge-api", "CurseForge API Key 未配置")}
                         </span>
                         <span className="text-[11px] leading-[16px] text-text-3">
-                            申请后填到「设置 · 网络 · CurseForge API
-                            Key」后即可
+                            {t("convert-modals.request-paste", "申请后填到「设置 · 网络 · CurseForge API Key」后即可")}
                         </span>
                         <Btn
                             size="sm"
@@ -439,12 +447,12 @@ export function OnlineAddModal({
                             className="mt-2"
                             onClick={() => void api.openExternal(api.CURSEFORGE_APPLY_FORM)}
                         >
-                            去申请 Key
+                            {t("convert-modals.get-key", "去申请 Key")}
                         </Btn>
                     </div>
                 ) : error ? (
                     <span className="py-8 text-center text-[11px] text-gold">
-                        加载失败 · {error}
+                        {t("convert-modals.load-failed", "加载失败 · {{error}}", { error })}
                     </span>
                 ) : (
                     <>
@@ -468,7 +476,7 @@ export function OnlineAddModal({
                                 </span>
                                 {m.alreadyAdded && (
                                     <ToneChip tone="emerald" size="xs">
-                                        已添加
+                                        {t("convert-modals.added", "已添加")}
                                     </ToneChip>
                                 )}
                                 <ChevronRight className="size-3.5 shrink-0 text-text-3" />
@@ -476,7 +484,7 @@ export function OnlineAddModal({
                         ))}
                         {result.results.length === 0 && (
                             <span className="py-8 text-center text-[11px] text-text-3">
-                                无匹配结果
+                                {t("convert-modals.results", "无匹配结果")}
                             </span>
                         )}
                     </>

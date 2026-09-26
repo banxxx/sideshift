@@ -20,6 +20,7 @@ import { Check, ChevronDown, Search } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { AnimatePresence, motion } from "motion/react";
 import { cn } from "@/lib/utils";
+import { tSource, useT } from "@/lib/i18n";
 import { READONLY_BOX } from "./Field";
 import { HOVER_FILL } from "./HoverFill";
 
@@ -50,7 +51,7 @@ export function SearchSelect({
     variant = "field",
     plain,
     searchable,
-    searchPlaceholder = "搜索…",
+    searchPlaceholder,
     className,
     readOnly,
     onOpen,
@@ -75,6 +76,7 @@ export function SearchSelect({
      */
     onOpen?: () => void;
 }) {
+    const t = useT();
     const [open, setOpen] = useState(false);
     const [query, setQuery] = useState("");
     const boxRef = useRef<HTMLDivElement>(null);
@@ -161,7 +163,7 @@ export function SearchSelect({
                     )}
                 >
                     {prefix ? `${prefix} ` : ""}
-                    {current?.chip ?? current?.label ?? value}
+                    {tSource(current?.chip ?? current?.label ?? value)}
                 </span>
                 {!readOnly && (
                     <ChevronDown
@@ -193,7 +195,7 @@ export function SearchSelect({
                                     <input
                                         value={query}
                                         onChange={(e) => setQuery(e.target.value)}
-                                        placeholder={searchPlaceholder}
+                                        placeholder={searchPlaceholder ?? t("common.search", "搜索…")}
                                         // size=1 + w-0：input 的固有宽度约 20 字符，
                                         // 浮层是 w-max，不掐掉它搜索框会把面板顶到 320px 上限
                                         size={1}
@@ -212,7 +214,11 @@ export function SearchSelect({
                                     <div key={o.value || "any"} className="flex flex-col">
                                         {showGroup && (
                                             <span className="px-2 pt-1 pb-0.5 text-[10px] leading-[14px] font-normal text-text-3">
-                                                {o.group}
+                                                {/*i18n:正式版*/}
+                                                {/*i18n:推荐*/}
+                                                {/*i18n:最新*/}
+                                                {/*i18n:全部构建*/}
+                                                {tSource(o.group!)}
                                             </span>
                                         )}
                                         <button
@@ -234,7 +240,11 @@ export function SearchSelect({
                                                         : "font-normal text-text-1"
                                                 )}
                                             >
-                                                {o.label}
+                                                {/* 选项文案来自后端枚举（下载源、版本通道…）：就地查目录，
+                                                    查不到就是原文，所以前端已翻过的选项不受影响 */}
+                                                {/*i18n:官方源*/}
+                                                {/*i18n:BMCLAPI 国内镜像*/}
+                                                {tSource(o.label)}
                                             </span>
                                             {active && (
                                                 <Check className="size-3 shrink-0 text-accent" />
@@ -245,7 +255,7 @@ export function SearchSelect({
                             })}
                             {filtered.length === 0 && (
                                 <span className="px-2 py-3 text-center text-[11px] text-text-3">
-                                    无匹配项
+                                    {t("common.matches", "无匹配项")}
                                 </span>
                             )}
                         </div>

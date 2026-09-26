@@ -7,6 +7,7 @@ import { Check, Minus, Plus, Search, X, type LucideIcon } from "lucide-react";
 import { useState } from "react";
 import { motion } from "motion/react";
 import { cn } from "@/lib/utils";
+import { useT } from "@/lib/i18n";
 import { Tip, TIP_TRIGGER } from "./Tip";
 import { HOVER_FILL } from "./HoverFill";
 import { TOGGLE_PRESS, TOGGLE_SLIDE } from "@/lib/springs";
@@ -261,6 +262,7 @@ export function SearchBox({
     placeholder: string;
     className?: string;
 }) {
+    const t = useT();
     return (
         <div
             className={cn(
@@ -277,7 +279,7 @@ export function SearchBox({
             />
             {value && (
                 <button
-                    aria-label="清空搜索"
+                    aria-label={t("common.clear-search", "清空搜索")}
                     onClick={() => onChange("")}
                     className={cn(
                         TIP_TRIGGER,
@@ -287,7 +289,7 @@ export function SearchBox({
                     )}
                 >
                     <X className="size-3" />
-                    <Tip label="清空搜索" />
+                    <Tip label={t("common.clear-search", "清空搜索")} />
                 </button>
             )}
         </div>

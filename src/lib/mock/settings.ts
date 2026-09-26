@@ -31,6 +31,8 @@ export const mockDefaultSettings: AppSettings = {
     // 本机装 Loader 默认开（与 Rust 一致）：开着才出 JDK 判定那一行
     installLoaderLocally: true,
     reuseLoaderInstalls: true,
+    // 语言默认跟随系统（与 Rust 的 AppLocale::Auto 一致）：dev 里 navigator 是什么就出什么
+    locale: "auto",
 };
 
 /**

@@ -7,6 +7,7 @@
  */
 import { motion, type Variants } from "motion/react";
 import { Archive, Folder, Server, type LucideIcon } from "lucide-react";
+import { useT } from "@/lib/i18n";
 import { RISE } from "@/lib/springs";
 
 const row: Variants = {
@@ -25,28 +26,29 @@ const card: Variants = {
     hide: { opacity: 0, y: 18, transition: { duration: 0.15 } },
 };
 
-const HELPS: Array<{ icon: LucideIcon; title: string; desc: string }> = [
-    {
-        icon: Archive,
-        title: "会剔除什么",
-        desc: "光影、小地图、键鼠等客户端专属模组与资源残留",
-    },
-    {
-        icon: Server,
-        title: "会补齐什么",
-        desc: "Fabric API 等服务端依赖，Forge 运行时库",
-    },
-    {
-        icon: Folder,
-        title: "输出到哪里",
-        desc: "生成同名服务端包，一键打开目录或拷贝至服务器",
-    },
-];
-
 export function HelpRow() {
+    const t = useT();
+    // 表建在渲染里：顶层建会把 title/desc 冻在首次加载的语言上
+    const helps: Array<{ icon: LucideIcon; title: string; desc: string }> = [
+        {
+            icon: Archive,
+            title: t("home.what-strip", "会剔除什么"),
+            desc: t("home.client-only", "光影、小地图、键鼠等客户端专属模组与资源残留"),
+        },
+        {
+            icon: Server,
+            title: t("home.what-add", "会补齐什么"),
+            desc: t("home.server-deps", "Fabric API 等服务端依赖，Forge 运行时库"),
+        },
+        {
+            icon: Folder,
+            title: t("home.where-lands", "输出到哪里"),
+            desc: t("home.same-named", "生成同名服务端包，一键打开目录或拷贝至服务器"),
+        },
+    ];
     return (
         <motion.div variants={row} className="flex w-full max-w-[760px] gap-4">
-            {HELPS.map(({ icon: Icon, title, desc }) => (
+            {helps.map(({ icon: Icon, title, desc }) => (
                 <motion.div
                     key={title}
                     variants={card}

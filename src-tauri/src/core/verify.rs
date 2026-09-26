@@ -4,12 +4,18 @@
 //! 不是「服务端能不能起来」——后者要 Java、要同意 EULA，未开本机安装那一档的 Forge 还要首次
 //! 联网自装服务端，失败原因九成与本包无关，把它做成构建开关只会让用户误信「跑起来了 = 包没问题」。
 //! 所以结论口径统一是**对账**，报告页也不得写成「校验通过 = 可开服」。
+//!
+//! 措辞一律走 `msg!`（模板 + 参数），因为界面要翻它：整句中文当键查不到带数字的句子，
+//! 拿正则套又会把两个数字张冠李戴。`items` 是**对象名**（文件名、jar 名），
+//! 本来就是数据、不翻；少数几条「名字 + 中文说明」拼出来的除外（见 deps/keep 那两处的注释）。
 
 use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::io::Read;
 use std::path::{Path, PathBuf};
 
+use crate::l10n::Msg;
+use crate::msg;
 use crate::models::{
     CheckResult, CheckStatus, ConversionOptions, LoaderKind, ModDisposition, PlanMod,
 };
@@ -54,10 +60,18 @@ pub fn run(input: &Input) -> Vec<CheckResult> {
     out
 }
 
-fn check(id: &str, label: &str, status: CheckStatus, detail: String, items: Vec<String>) -> CheckResult {
+fn check(id: &str, label: &str, status: CheckStatus, detail: Msg, items: Vec<String>) -> CheckResult {
     let mut items = items;
     items.truncate(MAX_ITEMS);
-    CheckResult { id: id.to_string(), label: label.to_string(), status, detail, items }
+    let text = detail.zh.clone();
+    CheckResult {
+        id: id.to_string(),
+        label: label.to_string(),
+        status,
+        detail: text,
+        detail_msg: Some(detail),
+        items,
+    }
 }
 
 /// 1 · 取件完整：计划落位的模组文件是否一个不少
@@ -76,11 +90,11 @@ fn fetch_check(input: &Input) -> CheckResult {
         .collect();
     let status = if missing.is_empty() { CheckStatus::Pass } else { CheckStatus::Fail };
     let detail = if expected == 0 {
-        "本包无模组文件需落位".to_string()
+        msg!("本包无模组文件需落位")
     } else if missing.is_empty() {
-        format!("模组 {expected} 个全部落位")
+        msg!("模组 {{count}} 个全部落位", {"count": expected})
     } else {
-        format!("模组应到 {expected} 个 · 缺 {} 个", missing.len())
+        msg!("模组应到 {{expected}} 个 · 缺 {{missing}} 个", {"expected": expected, "missing": missing.len()})
     };
     check("files", "取件完整", status, detail, missing)
 }
@@ -105,11 +119,11 @@ fn jar_check(input: &Input) -> CheckResult {
         .collect();
     let status = if bad.is_empty() { CheckStatus::Pass } else { CheckStatus::Fail };
     let detail = if jars.is_empty() {
-        "无 jar 需校验".to_string()
+        msg!("无 jar 需校验")
     } else if bad.is_empty() {
-        format!("{} 个 jar 容器可读", jars.len())
+        msg!("{{count}} 个 jar 容器可读", {"count": jars.len()})
     } else {
-        format!("{} 个 jar 不完整或非压缩包", bad.len())
+        msg!("{{count}} 个 jar 不完整或非压缩包", {"count": bad.len()})
     };
     check("jars", "jar 可用", status, detail, bad)
 }
@@ -128,17 +142,19 @@ fn deps_check(input: &Input) -> CheckResult {
             let Some(target) = by_id.get(dep.as_str()) else { continue };
             refs += 1;
             if !kept(target.disposition) {
+                // items 是「给人看的对象名」，这一条拼了中文说明：界面按原文显示，不进目录
+                // （翻它要把 items 也结构化成「模板 + 参数」，代价与收益不成比例）
                 broken.push(format!("{} → 已剔除的 {}", row.name, target.name));
             }
         }
     }
     let status = if broken.is_empty() { CheckStatus::Pass } else { CheckStatus::Fail };
     let detail = if refs == 0 {
-        "方案内无交叉依赖".to_string()
+        msg!("方案内无交叉依赖")
     } else if broken.is_empty() {
-        format!("{refs} 条依赖引用全部指向包内")
+        msg!("{{count}} 条依赖引用全部指向包内", {"count": refs})
     } else {
-        format!("{} 条依赖指向已剔除的模组", broken.len())
+        msg!("{{count}} 条依赖指向已剔除的模组", {"count": broken.len()})
     };
     check("deps", "依赖闭合", status, detail, broken)
 }
@@ -157,7 +173,7 @@ fn start_check(input: &Input) -> CheckResult {
             "start",
             "启动指向",
             CheckStatus::Warn,
-            "未确定启动目标，需自行指定".to_string(),
+            msg!("未确定启动目标，需自行指定"),
             Vec::new(),
         );
     };
@@ -171,35 +187,44 @@ fn start_check(input: &Input) -> CheckResult {
             "start",
             "启动指向",
             CheckStatus::Fail,
-            format!("启动脚本指向的 {} 个文件不在包里", missing.len()),
+            msg!("启动脚本指向的 {{count}} 个文件不在包里", {"count": missing.len()}),
             missing,
         );
     }
-    let head = if targets.len() > 1 {
-        "两份参数文件都在包内".to_string()
-    } else {
-        format!("{} 就位", targets[0])
-    };
+    // 「两种头 × 三种尾」以前是两段 format 拼的，拼出来的整句进不了目录（键查不到），
+    // 所以这里按组合把整句写全：中文那一份与以前逐字一致，只是每条组合各自成一个键。
+    let multi = targets.len() > 1;
+    let jar = targets[0];
     if !input.options.generate_scripts {
-        return check(
-            "start",
-            "启动指向",
-            CheckStatus::Warn,
-            format!("{head}；本次未生成启动脚本，需自行按包内文件启动"),
-            Vec::new(),
-        );
+        let detail = if multi {
+            msg!("两份参数文件都在包内；本次未生成启动脚本，需自行按包内文件启动")
+        } else {
+            msg!("{{jar}} 就位；本次未生成启动脚本，需自行按包内文件启动", {"jar": jar})
+        };
+        return check("start", "启动指向", CheckStatus::Warn, detail, Vec::new());
     }
-    let tail = match (input.installed, input.loader) {
+    let detail = match (multi, input.installed, input.loader) {
         // 本机装好的那一态没有联网这一步
-        (true, _) => "加载器与依赖已打进包，解压后可直接跑",
+        (true, true, _) => msg!("两份参数文件都在包内 · 加载器与依赖已打进包，解压后可直接跑"),
+        (false, true, _) => {
+            msg!("{{jar}} 就位 · 加载器与依赖已打进包，解压后可直接跑", {"jar": jar})
+        }
         // Fabric 与"没本机安装"的 Forge 都要在首启现装：这句必须说，
         // 否则用户以为「自检通过 = 双击就能开服」而把联网等待当成卡死
-        (false, LoaderKind::Fabric) => "首次运行会联网装出 loader（需本机 Java 与网络）",
-        (false, LoaderKind::Forge | LoaderKind::NeoForge) => {
-            "首次运行会自动安装服务端（需本机 Java 与网络）"
+        (true, false, LoaderKind::Fabric) => {
+            msg!("两份参数文件都在包内 · 首次运行会联网装出 loader（需本机 Java 与网络）")
+        }
+        (false, false, LoaderKind::Fabric) => {
+            msg!("{{jar}} 就位 · 首次运行会联网装出 loader（需本机 Java 与网络）", {"jar": jar})
+        }
+        (true, false, _) => {
+            msg!("两份参数文件都在包内 · 首次运行会自动安装服务端（需本机 Java 与网络）")
+        }
+        (false, false, _) => {
+            msg!("{{jar}} 就位 · 首次运行会自动安装服务端（需本机 Java 与网络）", {"jar": jar})
         }
     };
-    check("start", "启动指向", CheckStatus::Pass, format!("{head} · {tail}"), Vec::new())
+    check("start", "启动指向", CheckStatus::Pass, detail, Vec::new())
 }
 
 /// 各家 loader 本体的文件名前缀（实测三种布局都认这一条，比猜 Maven 目录稳）：
@@ -239,14 +264,14 @@ fn loader_check(input: &Input) -> CheckResult {
                 "loader",
                 "Loader 就位",
                 CheckStatus::Pass,
-                format!("本机装好的加载器已打进包（{name}.jar）· 目标机无需联网安装"),
+                msg!("本机装好的加载器已打进包（{{name}}.jar）· 目标机无需联网安装", {"name": name}),
                 Vec::new(),
             ),
             None => check(
                 "loader",
                 "Loader 就位",
                 CheckStatus::Fail,
-                "本机装好了加载器，但依赖树里没有它的本体（并树这一步没跑成）".to_string(),
+                msg!("本机装好了加载器，但依赖树里没有它的本体（并树这一步没跑成）"),
                 vec![format!("{}*.jar", loader_prefix(input.loader))],
             ),
         };
@@ -258,21 +283,21 @@ fn loader_check(input: &Input) -> CheckResult {
             "loader",
             "Loader 就位",
             CheckStatus::Pass,
-            format!("包内已有加载器本体（{name}.jar）"),
+            msg!("包内已有加载器本体（{{name}}.jar）", {"name": name}),
             Vec::new(),
         ),
         (Some(jar), None) => check(
             "loader",
             "Loader 就位",
             CheckStatus::Warn,
-            format!("只有 {jar}·首次运行才联网装出加载器"),
+            msg!("只有 {{jar}}·首次运行才联网装出加载器", {"jar": jar}),
             Vec::new(),
         ),
         (None, None) => check(
             "loader",
             "Loader 就位",
             CheckStatus::Fail,
-            "包内既没有加载器本体也没有安装器".to_string(),
+            msg!("包内既没有加载器本体也没有安装器"),
             Vec::new(),
         ),
     }
@@ -302,7 +327,7 @@ fn root_check(input: &Input) -> CheckResult {
             "root",
             "包根文件",
             CheckStatus::Fail,
-            format!("{} 个已登记的包根文件不在包里", missing.len()),
+            msg!("{{count}} 个已登记的包根文件不在包里", {"count": missing.len()}),
             missing,
         );
     }
@@ -311,7 +336,7 @@ fn root_check(input: &Input) -> CheckResult {
             "root",
             "包根文件",
             CheckStatus::Warn,
-            format!("缺 {} 个常用包根文件", soft.len()),
+            msg!("缺 {{count}} 个常用包根文件", {"count": soft.len()}),
             soft,
         );
     }
@@ -319,7 +344,7 @@ fn root_check(input: &Input) -> CheckResult {
         "root",
         "包根文件",
         CheckStatus::Pass,
-        format!("包根 {} 个文件全部就位", input.generated.len()),
+        msg!("包根 {{count}} 个文件全部就位", {"count": input.generated.len()}),
         Vec::new(),
     )
 }
@@ -334,14 +359,14 @@ fn keep_check(input: &Input) -> CheckResult {
         total += expect;
         let have = files_under(&input.staging.join(dir)).len();
         if have < *expect {
+            // 同 deps 那条：条目是「目录名 + 中文账目」，界面按原文显示
             short.push(format!("{dir}（应 {expect} · 实 {have}）"));
         }
     }
     let status = if short.is_empty() { CheckStatus::Pass } else { CheckStatus::Warn };
-    let detail = format!(
-        "{} 个目录 · {} 个文件已带入",
-        input.expected_keep_dirs.len(),
-        total
+    let detail = msg!(
+        "{{dirs}} 个目录 · {{files}} 个文件已带入",
+        {"dirs": input.expected_keep_dirs.len(), "files": total}
     );
     check("keep", "保留目录", status, detail, short)
 }

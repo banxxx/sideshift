@@ -13,10 +13,12 @@ import { SWAP_IN } from "@/lib/page-motion";
 import { cn } from "@/lib/utils";
 import { useNavigation } from "@/lib/navigation";
 import { useWindowControls } from "@/lib/window-controls";
+import { useT } from "@/lib/i18n";
 
 export function TitleBar() {
     const { canGoBack, back } = useNavigation();
     const win = useWindowControls();
+    const t = useT();
 
     return (
         <header
@@ -53,17 +55,17 @@ export function TitleBar() {
                     transition={SWAP_IN}
                     className="flex items-center gap-0.5"
                 >
-                    <WindowButton onClick={back} title="返回上一页">
+                    <WindowButton onClick={back} title={t("shell.back", "返回上一页")}>
                         <Undo2 className="size-[13px]" />
                     </WindowButton>
                     <span aria-hidden className="h-3.5 w-px shrink-0 self-center bg-stroke" />
                 </Collapse>
-                <WindowButton onClick={win.minimize} title="最小化">
+                <WindowButton onClick={win.minimize} title={t("shell.minimize", "最小化")}>
                     <Minus className="size-[13px]" />
                 </WindowButton>
                 <WindowButton
                     onClick={win.toggleMaximize}
-                    title={win.isMaximized ? "还原" : "最大化"}
+                    title={win.isMaximized ? t("shell.restore", "还原") : t("shell.maximize", "最大化")}
                 >
                     {win.isMaximized ? (
                         <Copy className="size-3" />
@@ -73,7 +75,7 @@ export function TitleBar() {
                 </WindowButton>
                 <WindowButton
                     onClick={win.close}
-                    title="关闭"
+                    title={t("common.close", "关闭")}
                     variant="close"
                 >
                     <X className="size-[13px]" />

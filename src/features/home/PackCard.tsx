@@ -8,6 +8,7 @@
 import { Archive, Check, ChevronRight, RefreshCw, X } from "lucide-react";
 import type { PackManifest } from "@/lib/types";
 import { formatSize, truncateMiddle } from "@/lib/format";
+import { tSource, useT } from "@/lib/i18n";
 import { Btn, Divider, MetaCell, Panel, ToneChip, type Tone } from "@/components/ui";
 
 export type PackCardStatus = "parsing" | "ready" | "converting" | "error";
@@ -22,14 +23,6 @@ interface PackCardProps {
     onPrimary: () => void;
 }
 
-/** 状态 → 芯片色调/图标/文案 */
-const BADGE: Record<PackCardStatus, { label: string; tone: Tone; icon: typeof Check }> = {
-    parsing: { label: "解析中", tone: "gold", icon: RefreshCw },
-    ready: { label: "已检测", tone: "emerald", icon: Check },
-    converting: { label: "转换中", tone: "gold", icon: RefreshCw },
-    error: { label: "解析失败", tone: "redstone", icon: X },
-};
-
 export function PackCard({
     manifest,
     status,
@@ -38,7 +31,15 @@ export function PackCard({
     onChangeFile,
     onPrimary,
 }: PackCardProps) {
-    const badge = BADGE[status];
+    const t = useT();
+    // 状态 → 芯片色调/图标/文案（表建在渲染里：顶层建会把 label 冻在首次加载的语言上）
+    const badgeTable: Record<PackCardStatus, { label: string; tone: Tone; icon: typeof Check }> = {
+        parsing: { label: t("lib.parsing", "解析中"), tone: "gold", icon: RefreshCw },
+        ready: { label: t("home.detected", "已检测"), tone: "emerald", icon: Check },
+        converting: { label: t("common.converting", "转换中"), tone: "gold", icon: RefreshCw },
+        error: { label: t("home.parse-failed", "解析失败"), tone: "redstone", icon: X },
+    };
+    const badge = badgeTable[status];
     const parsing = status === "parsing";
     const failed = status === "error";
     /** 读数区（分隔线 + 四格）该不该摆：解析中要摆骨架，有 manifest 要摆真值。
@@ -53,7 +54,7 @@ export function PackCard({
             {/* 头部：标题 + 状态芯片 */}
             <div className="flex w-full items-center justify-between gap-3">
                 <span className="text-[12px] leading-[18px] font-semibold text-text-2">
-                    检测到的整合包
+                    {t("home.detected-modpack", "检测到的整合包")}
                 </span>
                 <ToneChip tone={badge.tone} icon={badge.icon}>
                     {badge.label}
@@ -61,14 +62,23 @@ export function PackCard({
             </div>
 
             {error && (
-                <p className="text-[12px] leading-[16px] font-normal text-redstone">{error}</p>
+                /*i18n:
+                    解析失败
+                    缺少 modrinth.index.json，不是有效的 Modrinth 整合包
+                    modrinth.index.json 缺少 dependencies.minecraft（无法确定 Minecraft 版本）
+                    整合包中没有任何模组文件（mods 目录为空）
+                    mods 目录中没有任何 .jar 模组文件
+                    未找到 mods 目录，不是可识别的整合包（推荐直接使用 .mrpack）
+                    暂不支持 .7z 格式，请先解压为 zip 或改用 .mrpack
+                */
+                <p className="text-[12px] leading-[16px] font-normal text-redstone">{tSource(error)}</p>
             )}
 
             {/* 文件名行 */}
             <div className="flex min-w-0 items-center gap-2">
                 <Archive className="size-4 shrink-0 text-amethyst" />
                 <span className="truncate font-mono text-[13px] leading-[20px] font-medium text-text-1">
-                    {truncateMiddle(manifest?.fileName ?? fileName ?? "等待选择文件…", 30)}
+                    {truncateMiddle(manifest?.fileName ?? fileName ?? t("home.awaiting-file", "等待选择文件…"), 30)}
                 </span>
             </div>
 
@@ -80,7 +90,7 @@ export function PackCard({
                     <div className="flex flex-col gap-2">
                         <div className="flex gap-2">
                             <MetaCell
-                                label="加载器"
+                                label={t("home.loader", "加载器")}
                                 value={manifest?.loader}
                                 skeleton={parsing}
                                 valueClass="text-diamond"
@@ -93,12 +103,12 @@ export function PackCard({
                         </div>
                         <div className="flex gap-2">
                             <MetaCell
-                                label="模组数量"
-                                value={manifest ? `${manifest.modCount} 个` : undefined}
+                                label={t("home.mod-count", "模组数量")}
+                                value={manifest ? t("common.count", "{{count}} 个", { count: manifest.modCount }) : undefined}
                                 skeleton={parsing}
                             />
                             <MetaCell
-                                label="包体积"
+                                label={t("home.pack-size", "包体积")}
                                 value={manifest ? formatSize(manifest.sizeBytes) : undefined}
                                 skeleton={parsing}
                             />
@@ -111,7 +121,7 @@ export function PackCard({
             <div className="mt-auto flex w-full gap-2">
                 {!failed && (
                     <Btn className="flex-1 px-3.5" onClick={onChangeFile}>
-                        更换文件
+                        {t("home.change-file", "更换文件")}
                     </Btn>
                 )}
                 <Btn
@@ -120,7 +130,7 @@ export function PackCard({
                     disabled={parsing}
                     onClick={failed ? onChangeFile : onPrimary}
                 >
-                    {parsing ? "解析中…" : failed ? "重新选择" : "配置并转换"}
+                    {parsing ? t("home.parsing", "解析中…") : failed ? t("common.re-select", "重新选择") : t("home.set-convert", "配置并转换")}
                     {!parsing && !failed && <ChevronRight className="size-[13px]" />}
                 </Btn>
             </div>

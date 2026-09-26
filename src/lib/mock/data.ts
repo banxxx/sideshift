@@ -287,6 +287,7 @@ export const mockDefaultOptions: ConversionOptions = {
     memoryMb: 6144,
     generateScripts: true,
     nogui: false,
+    // 两档默认开，与 Rust 的默认一致：eula 关着做出来的包首次拒启；Aikar 是官方推荐参数组
     agreeEula: true,
     serverPort: 25565,
     motd: "A Minecraft server",
@@ -295,7 +296,7 @@ export const mockDefaultOptions: ConversionOptions = {
     difficulty: "easy",
     onlineMode: true,
     levelSeed: "",
-    useAikarFlags: false,
+    useAikarFlags: true,
     extraJvmArgs: "",
     outputOverride: "",
     keepDirs: [],

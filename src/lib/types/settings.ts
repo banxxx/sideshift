@@ -6,6 +6,15 @@ export type DownloadSource = "official" | "bmclapi";
 /** 更新渠道（Settings · 外观与关于）：正式版 / Beta，对应 GitHub release 的 prerelease 标志 */
 export type UpdateChannel = "stable" | "beta";
 
+/**
+ * 界面语言档位（Settings · 外观与关于；Rust: AppSettings.locale，serde camelCase 同源）。
+ *
+ * `auto` 是一档真语义：**跟随系统语言**，不是"还没选过"。它永远不会成为生效档
+ * （生效档只有三种，解析见 `@/lib/i18n/detection`），所以后端拿不到 `auto` 之外的歧义。
+ * 三种语言的自称（简体中文 / 繁體中文 / English）按行业惯例不翻，用户在自己的语言里才认得出。
+ */
+export type AppLocale = "auto" | "zhCn" | "zhTw" | "enUs";
+
 export interface AppSettings {
     /** 服务端输出目录（报告页输出路径） */
     outputDir: string;
@@ -40,6 +49,11 @@ export interface AppSettings {
     installLoaderLocally: boolean;
     /** 装出来的 loader 留在 `{cacheDir}/installs/` 供后续任务复用（默认开）；关 = 每次现装现丢 */
     reuseLoaderInstalls: boolean;
+    /**
+     * 界面语言。**生效判定在前端**（翻译目录打进 bundle，见 `@/lib/i18n`），这里只是那一份持久化选择，
+     * 所以切换语言不需要重启，也不需要后端参与翻译。缺省 `auto` = 跟随系统。
+     */
+    locale: AppLocale;
 }
 
 /**

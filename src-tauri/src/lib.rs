@@ -1,6 +1,7 @@
 // Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
 mod commands;
 mod core;
+mod l10n;
 mod models;
 mod task_engine;
 

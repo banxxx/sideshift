@@ -11,6 +11,7 @@ import { AnimatePresence, motion } from "motion/react";
 import type { ModDisposition, PlanMod } from "@/lib/types";
 import { Btn, Collapse, LinkBtn, Panel, PanelHead, SegTabs } from "@/components/ui";
 import { cn } from "@/lib/utils";
+import { useT } from "@/lib/i18n";
 import { PLAN_LAND, PLAN_LAYOUT } from "@/lib/springs";
 import { badgeFor, PlanModRow } from "./PlanModRow";
 import { LAND_MAX_STEPS, LAND_STAGGER_MS } from "./constants";
@@ -87,6 +88,7 @@ export function ModPlanCard({
        （这就是「重跑分类时五行一起出现」的原因；切页签看着正常只是骗人——外层 mode="wait"
        要等旧页签淡出，新行挂载时 effect 早就补好了档位）。
        用 rows 的引用当幂等闩：同一批数据只算一次，StrictMode 双跑也只算一次。 */
+    const t = useT();
     const cadence = useRef({
         rows: null as PlanMod[] | null,
         tab: "" as ModDisposition,
@@ -118,13 +120,17 @@ export function ModPlanCard({
     return (
         <Panel gap={14} className="h-[260px]">
             <PanelHead
-                title="模组方案"
+                title={t("convert.mod-plan", "模组方案")}
                 right={
                     <SegTabs
                         items={[
-                            { key: "remove" as ModDisposition, label: "剔除", count: counts.remove },
-                            { key: "keep" as ModDisposition, label: "保留", count: counts.keep },
-                            { key: "add" as ModDisposition, label: "新增", count: counts.add },
+                            {
+                                key: "remove" as ModDisposition,
+                                label: t("convert.removed", "剔除"),
+                                count: counts.remove,
+                            },
+                            { key: "keep" as ModDisposition, label: t("convert.kept", "保留"), count: counts.keep },
+                            { key: "add" as ModDisposition, label: t("convert.added", "新增"), count: counts.add },
                         ]}
                         value={tab}
                         onChange={onTab}
@@ -151,10 +157,10 @@ export function ModPlanCard({
                                 {classifying
                                     ? totalRows === 0
                                         ? readingLabel
-                                        : "判定结果会逐条出现在这里"
+                                        : t("convert.results-appear", "判定结果会逐条出现在这里")
                                     : totalRows === 0 && emptyLabel
                                       ? emptyLabel
-                                      : "该分类下暂无模组"}
+                                      : t("convert.mods-group", "该分类下暂无模组")}
                             </p>
                         ) : (
                             /* 逐行进出：新进入可见列表的行从右侧一档一档插进来，
@@ -224,24 +230,39 @@ export function ModPlanCard({
                             <div key={missing.id} className="flex items-center gap-2">
                                 <AlertTriangle className="size-3.5 shrink-0 text-gold" />
                                 <span className="min-w-0 flex-1 truncate text-[11px] leading-[16px] text-gold">
-                                    {hosts
-                                        .slice(0, 2)
-                                        .map((h) => h.name)
-                                        .join("、")}
-                                    {hosts.length > 2 ? ` 等 ${hosts.length} 项` : ""} 依赖被
-                                    {missing.disabled ? "停用" : "剔除"}的 {missing.name}
+                                    {t("convert.hosts-depend", "{{hosts}} 依赖被{{action}}的 {{name}}", {
+                                        // 整句一个键 + 槽：英文的「depend on …」词序和中文同轴，拆成两截就拼不回来
+                                        hosts:
+                                            hosts
+                                                .slice(0, 2)
+                                                .map((h) => h.name)
+                                                .join("、") +
+                                            (hosts.length > 2
+                                                ? t("convert.count", " 等 {{count}} 项", { count: hosts.length })
+                                                : ""),
+                                        action: missing.disabled ? t("convert.disabled", "停用") : t("convert.removed", "剔除"),
+                                        name: missing.name,
+                                        // 模组名/版本是数据：关掉 i18next 的 HTML 转义，
+                                        // 否则 `Alex's Mobs` 这类名字会显示成 `Alex&#39;s Mobs`
+                                        interpolation: { escapeValue: false },
+                                    })}
                                 </span>
                                 {!readOnly && (
                                     <LinkBtn size="sm" onClick={() => onRestoreDep?.(missing)}>
-                                        恢复
+                                        {t("convert.restore", "恢复")}
                                     </LinkBtn>
                                 )}
                             </div>
                         ))}
                         {depWarnings.length > 2 && (
                             <span className="pl-[22px] text-[10px] leading-[14px] text-gold">
-                                … 另有 {depWarnings.length - 2} 组依赖冲突
-                                {readOnly ? "（回看只记当时结论，不在此处理）" : "，可逐项恢复处理"}
+                                {readOnly
+                                    ? t("convert.count-conflict", "… 另有 {{count}} 组依赖冲突（回看只记当时结论，不在此处理）", {
+                                          count: depWarnings.length - 2,
+                                      })
+                                    : t("convert.count-conflict-group", "… 另有 {{count}} 组依赖冲突，可逐项恢复处理", {
+                                          count: depWarnings.length - 2,
+                                      })}
                             </span>
                         )}
                     </div>
@@ -257,7 +278,7 @@ export function ModPlanCard({
                             <span className="shrink-0 text-[11px] leading-[16px] text-text-3">
                                 {totalRows === 0
                                     ? readingLabel
-                                    : "自动分类中 · 判定完成的模组逐条归组"}
+                                    : t("convert.auto-classifying", "自动分类中 · 判定完成的模组逐条归组")}
                             </span>
                             {/* 不确定式扫描条（复用 Shift Rail 的 sheen 语言）：在线反查按批回结论，
                                 按批算百分比会一步跳到 100%，所以这里只说「还在跑」，
@@ -278,8 +299,11 @@ export function ModPlanCard({
                             {(tab === "remove" || tab === "keep") && (
                                 <>
                                     <LinkBtn chevron onClick={() => onOpenList(tab)}>
-                                        查看全部 {tab === "remove" ? counts.remove : counts.keep} 项
-                                        {tab === "remove" ? "剔除" : "保留"}清单
+                                        {t("convert.show-count", "查看全部 {{count}} 项{{kind}}清单", {
+                                            count:
+                                                tab === "remove" ? counts.remove : counts.keep,
+                                            kind: tab === "remove" ? t("convert.removed", "剔除") : t("convert.kept", "保留"),
+                                        })}
                                     </LinkBtn>
                                     {/* 自动分类出口：进页已默认跑过，这里只给重跑与回退手动改动的入口；
                                         判不出两端的行已归进剔除清单，这里给一句汇总。
@@ -287,14 +311,14 @@ export function ModPlanCard({
                                         灰化已经说了「点不动」，这句只回答「为什么」，不再给每枚控件挂气泡 */}
                                     {readOnly ? (
                                         <span className="shrink-0 text-[11px] leading-[16px] text-text-3">
-                                            只读快照 · 不可修改
+                                            {t("convert.read-only", "只读快照 · 不可修改")}
                                         </span>
                                     ) : (
                                         <div className="flex min-w-0 items-center gap-2.5">
                                             {/* 两枚计数提示已收进弹窗：待确认数 = 剔除清单的「需人工确认」tab，
                                                 同装数 = 保留清单每行说明尾部，卡底只留操作 */}
                                             <LinkBtn size="sm" onClick={() => onReclassify?.()}>
-                                                重新自动分类
+                                                {t("convert.reclassify", "重新自动分类")}
                                             </LinkBtn>
                                             {manualEdits > 0 &&
                                                 (confirmClear ? (
@@ -304,14 +328,16 @@ export function ModPlanCard({
                                                             className="text-redstone"
                                                             onClick={() => onClearEdits?.()}
                                                         >
-                                                            确认清空 {manualEdits} 项
+                                                            {t("convert.confirm-clear", "确认清空 {{count}} 项", {
+                                                                count: manualEdits,
+                                                            })}
                                                         </LinkBtn>
                                                         <LinkBtn
                                                             size="sm"
                                                             className="text-text-3"
                                                             onClick={() => onConfirmClear?.(false)}
                                                         >
-                                                            取消
+                                                            {t("common.cancel", "取消")}
                                                         </LinkBtn>
                                                     </>
                                                 ) : (
@@ -320,7 +346,7 @@ export function ModPlanCard({
                                                         className="text-text-2"
                                                         onClick={() => onConfirmClear?.(true)}
                                                     >
-                                                        清空我的修改
+                                                        {t("convert.clear-edits", "清空我的修改")}
                                                     </LinkBtn>
                                                 ))}
                                         </div>
@@ -332,7 +358,9 @@ export function ModPlanCard({
                                     <div className="flex min-w-0 items-center gap-2.5">
                                         {counts.addTotal > 0 && (
                                             <LinkBtn chevron onClick={() => onOpenList("add")}>
-                                                查看全部 {counts.addTotal} 项新增清单
+                                                {t("convert.show-count-added", "查看全部 {{count}} 项新增清单", {
+                                                    count: counts.addTotal,
+                                                })}
                                             </LinkBtn>
                                         )}
                                     </div>
@@ -351,7 +379,7 @@ export function ModPlanCard({
                                                 className="px-[18px] font-semibold text-text-1"
                                                 onClick={() => onAddLocal?.()}
                                             >
-                                                从本地添加
+                                                {t("convert.add-local", "从本地添加")}
                                             </Btn>
                                             <Btn
                                                 variant="primary"
@@ -360,7 +388,7 @@ export function ModPlanCard({
                                                 className="px-[18px] font-semibold"
                                                 onClick={() => onAddOnline?.()}
                                             >
-                                                从网络添加
+                                                {t("convert.add-online", "从网络添加")}
                                             </Btn>
                                         </div>
                                     )}

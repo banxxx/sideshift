@@ -22,6 +22,7 @@ import { PackCard } from "@/features/home/PackCard";
 import type { PackCardStatus } from "@/features/home/PackCard";
 import { ShiftRail } from "@/components/shared/ShiftRail";
 import { PageHeader } from "@/components/ui";
+import { useT } from "@/lib/i18n";
 import { MORPH, RAIL_RISE } from "@/lib/springs";
 
 /** idle 分支容器：具名 variants 把 show/hide 标签向后代（HelpRow 三卡）传播；
@@ -34,6 +35,7 @@ const IDLE_BRANCH: Variants = {
 
 export function HomePage() {
     const { navigate } = useNavigation();
+    const t = useT();
     const { manifest, parsing, error, errorName, selectedAt, parse, pickByDialog, reset } =
         usePackStore();
     const { active, ready } = useActiveTask();
@@ -89,16 +91,18 @@ export function HomePage() {
             <PageHeader
                 title={
                     <span className="inline-flex items-center gap-2">
-                        客户端
+                        {t("home.client", "客户端")}
                         <LineDotRightHorizontal
                             aria-hidden
                             className="size-[19px] text-accent"
                             strokeWidth={2.5}
                         />
-                        服务端
+                        {t("home.server", "服务端")}
                     </span>
                 }
-                sub="拖入整合包，SideShift 自动剔除客户端专属内容，补齐服务端依赖，生成可直接运行的服务器包。"
+                sub={t(
+                    "home.drop-modpack", "拖入整合包，SideShift 自动剔除客户端专属内容，补齐服务端依赖，生成可直接运行的服务器包。"
+                )}
             />
 
             {/* idle ↔ cards 布局切换：
@@ -180,8 +184,8 @@ export function HomePage() {
                                         rail
                                             ? rail.status
                                             : parsing
-                                              ? { label: "解析中", tone: "gold" }
-                                              : { label: "已检测 · 待转换", tone: "emerald" }
+                                              ? { label: t("lib.parsing", "解析中"), tone: "gold" }
+                                              : { label: t("home.detected-ready", "已检测 · 待转换"), tone: "emerald" }
                                     }
                                     logs={rail?.logs ?? []}
                                     runFrac={rail?.runFrac}
@@ -193,8 +197,10 @@ export function HomePage() {
                                     }
                                     waiting={
                                         rail?.waiting ?? {
-                                            title: "等待开始转换",
-                                            detail: `已选择 ${truncateMiddle(manifest?.fileName ?? "", 40)} · 点击「配置并转换」进入转换配置`,
+                                            title: t("lib.waiting-start", "等待开始转换"),
+                                            detail: t("home.selected-name", "已选择 {{name}} · 点击「配置并转换」进入转换配置", {
+                                                name: truncateMiddle(manifest?.fileName ?? "", 40),
+                                            }),
                                         }
                                     }
                                     onOpenTask={

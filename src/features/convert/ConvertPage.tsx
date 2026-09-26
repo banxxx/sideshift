@@ -24,6 +24,7 @@ import { usePackStore, type PlanDraft } from "@/lib/pack-store";
 import { useNavigation } from "@/lib/navigation";
 import { notify } from "@/lib/notify";
 import { formatSize, loaderLabel, outputNameOf, reviewFirst, truncateMiddle } from "@/lib/format";
+import { useT } from "@/lib/i18n";
 import type {
     AppSettings,
     ConversionOptions,
@@ -56,6 +57,7 @@ import { CARD_RISE, PAGE_RISE } from "@/lib/page-motion";
 import { KEEP_DIR_PRESETS, PREVIEW_ROWS, toOption } from "./constants";
 
 export function ConvertPage() {
+    const t = useT();
     const { entry, navigate, switchPrimary } = useNavigation();
     const manifest = entry.params?.manifest as PackManifest | undefined;
     const { getDraft, saveDraft } = usePackStore();
@@ -122,15 +124,18 @@ export function ConvertPage() {
                 const remove = res.plan.filter((m) => m.disposition === "remove").length;
                 notify(
                     res.onlinePending
-                        ? `离线层判定剔除 ${remove} 项 · 联网反查进行中`
-                        : `已重新自动分类：剔除 ${remove} · 保留 ${res.plan.length - remove}`,
+                        ? t("convert.offline-pass", "离线层判定剔除 {{count}} 项 · 联网反查进行中", { count: remove })
+                        : t("convert.reclassified-removed", "已重新自动分类：剔除 {{removed}} · 保留 {{kept}}", {
+                              removed: remove,
+                              kept: res.plan.length - remove,
+                          }),
                     "success"
                 );
             }
         } catch {
             setReclassifying(false);
             if (manual) setPlan(prevPlan);
-            notify("自动分类失败，当前方案保持不变", "error");
+            notify(t("convert.auto-classify", "自动分类失败，当前方案保持不变"), "error");
             setClassifying(false);
         }
     }
@@ -234,7 +239,7 @@ export function ConvertPage() {
                 // 离线那次推送只是先给结论，本轮结束（done）才停「分类中」
                 if (!e.done) return;
                 setClassifying(false);
-                if (!e.complete) notify("联网反查未全部完成，剩余行沿用离线结论", "warn");
+                if (!e.complete) notify(t("convert.online-lookup", "联网反查未全部完成，剩余行沿用离线结论"), "warn");
             })
             .then((f) => {
                 if (alive) off = f;
@@ -425,7 +430,7 @@ export function ConvertPage() {
         setOverrides({});
         setDisabledIds(new Set());
         setConfirmClear(false);
-        notify("已清空手动修改，方案回到自动分类结果", "success");
+        notify(t("convert.manual-edits", "已清空手动修改，方案回到自动分类结果"), "success");
     };
 
     /** 卡片行内移除单个保留目录（批量增删走 DirPickerModal 应用回写） */
@@ -444,7 +449,11 @@ export function ConvertPage() {
         });
         if (disable && m.autoSupplement) {
             notify(
-                `已停用 ${m.name}：服务端必需前置，缺失可能导致依赖它的模组失效`,
+                t("convert.name-disabled", "已停用 {{name}}：服务端必需前置，缺失可能导致依赖它的模组失效", {
+                    name: m.name,
+                    // 模组名是数据：不关掉转义的话 `Alex's Mobs` 会显示成 `Alex&#39;s Mobs`
+                    interpolation: { escapeValue: false },
+                }),
                 "warn"
             );
         }
@@ -561,7 +570,14 @@ export function ConvertPage() {
             setExtras((e) => e.map((m) => (m.id === mod.id ? row : m)));
             // 版本确有变化才提示；覆盖发生在弹窗内，反馈走侧栏底部全局提示区
             if (replaced.version !== version.versionNumber) {
-                notify(`已将 ${mod.name} 的构建换为 ${version.versionNumber}`, "success");
+                notify(
+                    t("convert.switched-name", "已将 {{name}} 的构建换为 {{version}}", {
+                        name: mod.name,
+                        version: version.versionNumber,
+                        interpolation: { escapeValue: false },
+                    }),
+                    "success"
+                );
             }
         } else {
             setExtras((e) => [...e, row]);
@@ -589,7 +605,7 @@ export function ConvertPage() {
             // 停用行不下发：后端方案里根本没有它，无需感知停用概念
             const { taskId, queued } = await api.startConversion(options, manifest, activeMods);
             // 同一时间只跑一条转换：有任务在跑时本次进排队队列
-            if (queued) notify("已有转换正在进行，本次任务已加入队列", "info");
+            if (queued) notify(t("convert.conversion-running", "已有转换正在进行，本次任务已加入队列"), "info");
             navigate("task", { taskId });
         } catch {
             setStarting(false);
@@ -599,12 +615,17 @@ export function ConvertPage() {
     if (!manifest) {
         return (
             <div className="flex flex-col gap-5 py-6">
-                <PageHeader title="转换配置" />
+                <PageHeader title={t("convert.conversion-setup", "转换配置")} />
                 <Panel className="items-center py-16">
                     <Layers className="size-6 text-text-3" />
-                    <p className="text-[13px] text-text-2">还没有选择整合包，无法配置转换。</p>
-                    <Btn variant="primary" size="sm" className="mt-1" onClick={() => switchPrimary("home")}>
-                        返回首页选择整合包
+                    <p className="text-[13px] text-text-2">{t("convert.modpack-selected", "还没有选择整合包，无法配置转换。")}</p>
+                    <Btn
+                        variant="primary"
+                        size="sm"
+                        className="mt-1"
+                        onClick={() => switchPrimary("home")}
+                    >
+                        {t("convert.go-home", "返回首页选择整合包")}
                     </Btn>
                 </Panel>
             </div>
@@ -616,7 +637,7 @@ export function ConvertPage() {
     /** 方案是否已有行（分类首屏的空卡要说「正在读取整合包…」而不是「暂无模组」） */
     const totalRows = mods.length;
     /** 手动重跑会先清空方案，那一瞬不能说「正在读取整合包」（包早就读过了） */
-    const readingLabel = reclassifying ? "正在重新自动分类…" : "正在读取整合包…";
+    const readingLabel = reclassifying ? t("convert.reclassifying", "正在重新自动分类…") : t("convert.reading-modpack", "正在读取整合包…");
     const loader = loaderLabel(manifest.loader);
     const patch = (p: Partial<ConversionOptions>) => setOptions((o) => (o ? { ...o, ...p } : o));
 
@@ -638,8 +659,10 @@ export function ConvertPage() {
         >
             <motion.div variants={CARD_RISE}>
                 <PageHeader
-                    title="转换配置"
-                    sub={`${truncateMiddle(manifest.fileName, 34)} · ${loader} · Minecraft ${manifest.mcVersion} · 检测完成，确认转换方案后开始构建`}
+                    title={t("convert.conversion-setup", "转换配置")}
+                    // 前半截全是数据（文件名 / Loader / 版本号），不过 t：
+                    // i18next 默认转义插值值，文件名里的 `&` `'` `/` 会被写成实体
+                    sub={`${truncateMiddle(manifest.fileName, 34)} · ${loader} · Minecraft ${manifest.mcVersion} · ${t("convert.detection-finished", "检测完成，确认转换方案后开始构建")}`}
                 />
             </motion.div>
 
@@ -715,30 +738,34 @@ export function ConvertPage() {
                 {/* 右栏：转换摘要（280px 固定宽） */}
                 <motion.aside variants={CARD_RISE} className="flex w-[280px] shrink-0 flex-col gap-4">
                     <Panel gap={14}>
-                        <PanelHead title="转换摘要" />
-                        <CountRow label="剔除客户端模组" count={counts.remove} tone="gold" />
-                        <CountRow label="保留服务端模组" count={counts.keep} tone="emerald" />
-                        <CountRow label="新增服务端模组" count={counts.add} tone="accent" />
+                        <PanelHead title={t("convert.conversion-summary", "转换摘要")} />
+                        <CountRow label={t("convert.client-mods", "剔除客户端模组")} count={counts.remove} tone="gold" />
+                        <CountRow label={t("convert.server-mods", "保留服务端模组")} count={counts.keep} tone="emerald" />
+                        <CountRow label={t("convert.server-mods-added", "新增服务端模组")} count={counts.add} tone="accent" />
                         <Divider />
                         <NoteRow icon={Download}>
                             {estimate.downloadBytes > 0
-                                ? `预计下载 ${formatSize(estimate.downloadBytes)}`
-                                : "无需联网下载 · 全部来自整合包与本地"}
-                            {!estimate.complete && estimate.downloadBytes > 0 && "（估算）"}
+                                ? t("convert.estimated-download", "预计下载 {{size}}", { size: formatSize(estimate.downloadBytes) })
+                                : t("convert.downloads-needed", "无需联网下载 · 全部来自整合包与本地")}
+                            {!estimate.complete &&
+                                estimate.downloadBytes > 0 &&
+                                t("convert.estimated", "（估算）")}
                         </NoteRow>
-                        <NoteRow icon={Archive}>输出 {outputNameOf(manifest.fileName)}</NoteRow>
+                        <NoteRow icon={Archive}>
+                            {t("convert.output", "输出")} {outputNameOf(manifest.fileName)}
+                        </NoteRow>
                         <NoteRow icon={Folder}>
                             {effectiveOutputDir
                                 ? truncateMiddle(effectiveOutputDir, 26)
-                                : "默认输出目录"}
+                                : t("convert.default-output", "默认输出目录")}
                         </NoteRow>
                         <div className="flex w-full items-center justify-between gap-2">
                             <LinkBtn size="sm" onClick={() => void chooseOutputDir()}>
-                                {outputOverride ? "更换本次目录…" : "本次改用其他目录…"}
+                                {outputOverride ? t("convert.change-folder", "更换本次目录…") : t("convert.use-another", "本次改用其他目录…")}
                             </LinkBtn>
                             {!!outputOverride && (
                                 <LinkBtn size="sm" onClick={() => patch({ outputOverride: "" })}>
-                                    恢复全局
+                                    {t("convert.restore-global", "恢复全局")}
                                 </LinkBtn>
                             )}
                         </div>
@@ -755,11 +782,11 @@ export function ConvertPage() {
                             }
                             onClick={() => void start()}
                         >
-                            {starting ? "创建任务中…" : "开始转换"}
+                            {starting ? t("convert.creating-task", "创建任务中…") : t("convert.start-conversion", "开始转换")}
                             {!starting && <ChevronRight className="size-[13px]" />}
                         </Btn>
                         <Btn size="sm" full className="font-medium" onClick={() => switchPrimary("home")}>
-                            返回首页
+                            {t("convert.back-home", "返回首页")}
                         </Btn>
                         <p
                             className={`w-full text-center text-[10px] leading-[14px] font-normal ${
@@ -767,14 +794,14 @@ export function ConvertPage() {
                             }`}
                         >
                             {classifying
-                                ? "自动分类进行中，方案落定后方可开始构建"
+                                ? t("convert.auto-classifying-wait", "自动分类进行中，方案落定后方可开始构建")
                                 : javaBlocked
-                                  ? "请先在「运行环境」里处理好 Java，本次装不了 Loader"
+                                  ? t("convert.fix-java", "请先在「运行环境」里处理好 Java，本次装不了 Loader")
                                   : portBlocked
-                                    ? "请先在「服务端设置」里填一个 1–65535 的端口"
+                                    ? t("convert.enter-port", "请先在「服务端设置」里填一个 1–65535 的端口")
                                     : options && !options.loaderVersion.trim()
-                                      ? "正在获取 Loader 版本列表，选定后方可开始转换"
-                                      : "转换过程可随时取消，已下载依赖自动缓存复用"}
+                                      ? t("convert.fetching-loader", "正在获取 Loader 版本列表，选定后方可开始转换")
+                                      : t("convert.cancel-anytime", "转换过程可随时取消，已下载依赖自动缓存复用")}
                         </p>
                     </Panel>
                 </motion.aside>

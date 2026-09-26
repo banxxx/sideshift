@@ -10,29 +10,34 @@ import { Trash2 } from "lucide-react";
 import { Btn, ListRow, ToneChip, type Tone } from "@/components/ui";
 import { SWAP } from "@/lib/page-motion";
 import { formatSize, loaderLabel, truncateMiddle } from "@/lib/format";
+import { t, useT, type TranslateFn } from "@/lib/i18n";
 import { notify } from "@/lib/notify";
 import { restoreDeleted, useTrash } from "@/lib/trash-store";
 import type { TaskStatus, TrashEntry } from "@/lib/types";
 
-/** 状态芯片：回收站只收终态（运行中的行后端拒绝删除），排队中是唯一的非终态例外 */
-const STATUS: Record<TaskStatus, { label: string; tone: Tone }> = {
-    queued: { label: "排队中", tone: "muted" },
-    running: { label: "转换中", tone: "gold" },
-    success: { label: "已完成", tone: "emerald" },
-    failed: { label: "已失败", tone: "redstone" },
-    cancelled: { label: "已取消", tone: "muted" },
-};
+/**
+ * 状态芯片：回收站只收终态（运行中的行后端拒绝删除），排队中是唯一的非终态例外。
+ * 表建在函数里、每格一条 `t(字面量)`：顶层建表会把词冻在首次加载的语言上。
+ */
+const statusMeta = (t: TranslateFn): Record<TaskStatus, { label: string; tone: Tone }> => ({
+    queued: { label: t("lib.queued", "排队中"), tone: "muted" },
+    running: { label: t("common.converting", "转换中"), tone: "gold" },
+    success: { label: t("lib.entry-2", "已完成"), tone: "emerald" },
+    failed: { label: t("lib.failed-2", "已失败"), tone: "redstone" },
+    cancelled: { label: t("lib.canceled", "已取消"), tone: "muted" },
+});
 
 /** 相对时间：弹窗开着的几分钟内不会自己跳字，为这个再挂一个定时器不值 */
 function ago(ts: number): string {
     const s = Math.max(0, Math.round((Date.now() - ts) / 1000));
-    if (s < 60) return `${s} 秒前删除`;
+    if (s < 60) return t("tasks.deleted-count-ago-2", "{{count}} 秒前删除", { count: s });
     const m = Math.round(s / 60);
-    if (m < 60) return `${m} 分钟前删除`;
-    return `${Math.round(m / 60)} 小时前删除`;
+    if (m < 60) return t("tasks.deleted-count", "{{count}} 分钟前删除", { count: m });
+    return t("tasks.deleted-count-ago", "{{count}} 小时前删除", { count: Math.round(m / 60) });
 }
 
 export function TrashList() {
+    const t = useT();
     const entries = useTrash();
     /**
      * 一层 AnimatePresence 同时管两件事：单行撤回要从眼前滑走（撤回的语义是「这行被拿回去了」，
@@ -54,7 +59,7 @@ export function TrashList() {
                         className="flex flex-1 flex-col items-center justify-center gap-2 text-text-3"
                     >
                         <Trash2 className="size-5" />
-                        <span className="font-mono text-[11px] leading-[16px]">回收站已清空</span>
+                        <span className="font-mono text-[11px] leading-[16px]">{t("tasks.trash-emptied", "回收站已清空")}</span>
                     </motion.div>
                 ) : (
                     entries.map((e) => (
@@ -75,14 +80,18 @@ export function TrashList() {
 }
 
 function TrashRow({ entry }: { entry: TrashEntry }) {
-    const st = STATUS[entry.status];
+    const t = useT();
+    const st = statusMeta(t)[entry.status];
     const restore = async () => {
         try {
             await restoreDeleted(entry.taskId);
             // 成功不提示：行刚从眼前消失、列表那边刚多一行，这本身就是回执。
             // 弹窗是常驻挂着的，再来一条左下角提示只是噪音。
         } catch (e) {
-            notify(`撤回失败：${e instanceof Error ? e.message : String(e)}`, "error");
+            notify(
+                t("tasks.couldn-restore", "撤回失败：{{reason}}", { reason: e instanceof Error ? e.message : String(e) }),
+                "error"
+            );
         }
     };
     return (
@@ -104,7 +113,7 @@ function TrashRow({ entry }: { entry: TrashEntry }) {
                 {st.label}
             </ToneChip>
             <Btn size="xs" className="shrink-0" onClick={() => void restore()}>
-                撤回
+                {t("tasks.restore", "撤回")}
             </Btn>
         </ListRow>
     );

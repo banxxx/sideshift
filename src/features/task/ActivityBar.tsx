@@ -8,6 +8,7 @@
  * 为什么不走日志行：逐块字节进度写进日志环会把日志撑爆
  * （日志量级 = 前端性能预算），后端因此按 150ms 窗口只发 activity 事件。
  */
+import { t } from "@/lib/i18n";
 import { formatRate, formatSize } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import type { ActivityInfo, ActivityKind } from "@/lib/types";
@@ -15,9 +16,10 @@ import type { ActivityInfo, ActivityKind } from "@/lib/types";
 /**
  * 实时条动词。三种动作三种说法：「下载」是收字节、「打包」是写 zip，
  * 而本机安装是**跑一个外部进程**（分钟级、总量拿不到），不能混叫成下载。
+ * 只用于显示（调用处不再比较这个返回值），所以这里直接过 `t`。
  */
 export function activityVerb(kind: ActivityKind): string {
-    return kind === "net" ? "下载" : kind === "install" ? "本机安装" : "打包";
+    return kind === "net" ? t("lib.download", "下载") : kind === "install" ? t("tasks.local-install", "本机安装") : t("tasks.packaging", "打包");
 }
 
 /** 分母优先字节量；字节未知（响应无 Content-Length）退回条目数，两者都未知按不定态 */
@@ -51,9 +53,10 @@ export function activityMeasure(a: ActivityInfo): string {
     const bytes =
         a.totalBytes > 0
             ? `${formatSize(a.doneBytes)} / ${formatSize(a.totalBytes)}`
-            : `${formatSize(a.doneBytes)} · 总量未知`;
-    const retry = a.attempt > 1 ? `第 ${a.attempt} 次尝试 · ` : "";
+            : `${formatSize(a.doneBytes)} · ${t("tasks.total-unknown", "总量未知")}`;
+    const retry = a.attempt > 1 ? `${t("tasks.attempt-count", "第 {{count}} 次尝试", { count: a.attempt })} · ` : "";
     // 安装器没有总量接口，能如实报的只有「已经装出多少个文件」，字节是写进目录的量而非下载量
-    const lead = a.kind === "install" ? `已装出 ${a.itemsDone} 个文件 · ` : "";
+    const lead =
+        a.kind === "install" ? `${t("tasks.count-file", "已装出 {{count}} 个文件", { count: a.itemsDone })} · ` : "";
     return `${retry}${lead}${bytes} · ${formatRate(a.rateBps)}`;
 }

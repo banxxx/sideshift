@@ -1,4 +1,5 @@
 /** Convert 页的静态配置与纯函数：下拉选项、行落位节拍、目录树定位 */
+import { t } from "@/lib/i18n";
 import type { SelectOption } from "@/components/ui";
 import type { PackDirNode, VersionOption } from "@/lib/types";
 
@@ -34,16 +35,24 @@ export const LAND_MAX_STEPS = PREVIEW_ROWS - 1;
 
 /** 页面入场节拍（容器 PAGE_RISE + 各块 CARD_RISE）已上收到 src/lib/page-motion.ts，全站共用 */
 
-export const GAMEMODE_OPTIONS: SelectOption[] = [
-    { value: "survival", label: "生存" },
-    { value: "creative", label: "创造" },
-    { value: "adventure", label: "冒险" },
-    { value: "spectator", label: "旁观" },
-];
+/** 游戏模式下拉项。`value` 是写进 server.properties / 发给后端的档位值，不翻；
+ *  表建在函数体里（每格一条 `t(字面量)`）：顶层建表会把标签冻在首次加载的语言上，
+ *  且「表里存中文再查表」那种写法自检认不出键 */
+export function gamemodeOptions(): SelectOption[] {
+    return [
+        { value: "survival", label: t("convert.survival", "生存") },
+        { value: "creative", label: t("convert.creative", "创造") },
+        { value: "adventure", label: t("convert.adventure", "冒险") },
+        { value: "spectator", label: t("convert.spectator", "旁观") },
+    ];
+}
 
-export const DIFFICULTY_OPTIONS: SelectOption[] = [
-    { value: "peaceful", label: "和平" },
-    { value: "easy", label: "简单" },
-    { value: "normal", label: "普通" },
-    { value: "hard", label: "困难" },
-];
+/** 难度下拉项（同 gamemodeOptions：档位值不翻，表在函数体里现建） */
+export function difficultyOptions(): SelectOption[] {
+    return [
+        { value: "peaceful", label: t("convert.peaceful", "和平") },
+        { value: "easy", label: t("convert.easy", "简单") },
+        { value: "normal", label: t("convert.normal", "普通") },
+        { value: "hard", label: t("convert.hard", "困难") },
+    ];
+}

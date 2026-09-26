@@ -9,6 +9,7 @@ import {
     sideTagOf,
     type SideTag,
 } from "@/lib/format";
+import { t, useT } from "@/lib/i18n";
 import type { ModDisposition, PlanMod } from "@/lib/types";
 import {
     Btn,
@@ -31,7 +32,7 @@ export type ListFocus = ModDisposition;
  * 剔除窗默认全不勾（勾上 = 改判保留），保留/新增窗默认全勾（取消 = 改判剔除 / 停用）。
  * 金色告警态只跟随「被改判了、还没应用」，不跟随勾选位——否则剔除窗一进来就是满屏黄。
  */
-const LIST_COPY: Record<
+const listCopy = (): Record<
     ListFocus,
     {
         title: string;
@@ -46,32 +47,32 @@ const LIST_COPY: Record<
         /** 改判态行的说明文字 */
         rowOff: string;
     }
-> = {
+> => ({
     remove: {
-        title: "剔除清单",
-        sub: "不进服务端包的模组（含判不出两端的待确认项）",
-        editNote: "可逐项改回保留",
-        note: (on, off) => `${on} 项将剔除 · ${off} 项改为保留`,
-        offBadge: "待恢复",
-        rowOff: "勾选后改为保留 · 服务端将不剔除",
+        title: t("convert-modals.removed-list", "剔除清单"),
+        sub: t("convert-modals.mods-server", "不进服务端包的模组（含判不出两端的待确认项）"),
+        editNote: t("convert-modals.re-kept", "可逐项改回保留"),
+        note: (on, off) => t("convert-modals.remove-off", "{{on}} 项将剔除 · {{off}} 项改为保留", { on, off }),
+        offBadge: t("convert-modals.restore", "待恢复"),
+        rowOff: t("convert-modals.check-keep", "勾选后改为保留 · 服务端将不剔除"),
     },
     keep: {
-        title: "保留清单",
-        sub: "将随服务端包构建的模组",
-        editNote: "可逐项改回剔除",
-        note: (on, off) => `${on} 项将保留 · ${off} 项改为剔除`,
-        offBadge: "待剔除",
-        rowOff: "取消勾选改为剔除 · 不再进入服务端包",
+        title: t("convert-modals.kept-list", "保留清单"),
+        sub: t("convert-modals.mods-built", "将随服务端包构建的模组"),
+        editNote: t("convert-modals.re-removed", "可逐项改回剔除"),
+        note: (on, off) => t("convert-modals.keep-off", "{{on}} 项将保留 · {{off}} 项改为剔除", { on, off }),
+        offBadge: t("convert-modals.remove", "待剔除"),
+        rowOff: t("convert-modals.uncheck-remove", "取消勾选改为剔除 · 不再进入服务端包"),
     },
     add: {
-        title: "新增清单",
-        sub: "本次转换新增的模组 · 右侧标注端归属",
-        editNote: "取消勾选即停用，行保留可随时勾回",
-        note: (on, off) => `${on} 项将新增 · ${off} 项停用`,
-        offBadge: "已停用",
-        rowOff: "停用中 · 不进入服务端包，勾选即恢复",
+        title: t("convert-modals.added-list", "新增清单"),
+        sub: t("convert-modals.mods-added", "本次转换新增的模组 · 右侧标注端归属"),
+        editNote: t("convert-modals.uncheck-disable", "取消勾选即停用，行保留可随时勾回"),
+        note: (on, off) => t("convert-modals.active-off", "{{on}} 项将新增 · {{off}} 项停用", { on, off }),
+        offBadge: t("convert-modals.disabled", "已停用"),
+        rowOff: t("convert-modals.disabled-server", "停用中 · 不进入服务端包，勾选即恢复"),
     },
-};
+});
 
 /**
  * 行尾芯片 = 筛选档位（同一个 `rowTagOf` 判出来，筛出来的一类必然就是行上看到的那枚标签）：
@@ -98,17 +99,18 @@ function rowTagOf(m: PlanMod, focus: ListFocus): RowTag {
 }
 
 function rowTagLabel(tag: RowTag): string {
-    return tag === "autoSupplement" ? "自动补齐" : sideTagLabel(tag);
+    return tag === "autoSupplement" ? t("convert.auto-added", "自动补齐") : sideTagLabel(tag);
 }
 
 /** 行尾那枚芯片：优先级只在 `rowTagOf` 一处定义，调用处别再各判一遍 */
 function RowTagChip({ m, focus }: { m: PlanMod; focus: ListFocus }) {
+    const t = useT();
     const tag = rowTagOf(m, focus);
-    if (tag === "autoSupplement") return <TagChip square>自动补齐</TagChip>;
+    if (tag === "autoSupplement") return <TagChip square>{t("convert.auto-added", "自动补齐")}</TagChip>;
     if (tag === "review")
         return (
             <TagChip square tone="gold">
-                需人工确认
+                {t("lib.needs-review", "需人工确认")}
             </TagChip>
         );
     return <SideChip sides={m} square warnClient={focus === "add"} />;
@@ -118,50 +120,66 @@ function RowTagChip({ m, focus }: { m: PlanMod; focus: ListFocus }) {
 function stripReason(m: PlanMod): string {
     // 判不出两端：它不是「客户端专属」，是等人来定——措辞必须留出「勾回保留」这条路
     if ((m.envSource ?? "unknown") === "unknown" && m.needsReview) {
-        return (
-            "无法判定 · 请人工确认：服务端需要就勾回保留" +
-            (m.bytecodeHint === "clientOnlyShape" ? " · 字节码形状像纯客户端" : "")
+        return t(
+            "convert-modals.undecided-review", "无法判定 · 请人工确认：服务端需要就勾回保留{{hint}}",
+            {
+                hint:
+                    m.bytecodeHint === "clientOnlyShape"
+                        ? t("convert-modals.bytecode-looks", " · 字节码形状像纯客户端")
+                        : "",
+            }
         );
     }
     const why =
         m.serverSide === "unsupported"
-            ? "服务端不支持"
+            ? t("convert-modals.server-unsupported", "服务端不支持")
             : m.serverSide === "optional"
               ? m.clientSide === "required"
-                    ? "客户端必需、服务端仅可选"
-                    : "服务端仅可选"
+                    ? t("convert-modals.client-required", "客户端必需、服务端仅可选")
+                    : t("convert-modals.server-only", "服务端仅可选")
               : m.clientSide === "required"
-                ? "客户端必需、服务端没声明"
-                : "服务端没声明支持";
-    return (
-        `剔除原因：${why} · 依据：${evidenceLabel(m.envSource)}` +
-        `${m.envConflict ? " · 与整合包声明不一致" : ""}` +
-        `${m.needsReview ? " · 待人工确认" : ""}`
+                ? t("convert-modals.client-required-server", "客户端必需、服务端没声明")
+                : t("convert-modals.server-support", "服务端没声明支持");
+    return t(
+        "convert-modals.remove-reason", "剔除原因：{{why}} · 依据：{{evidence}}{{conflict}}{{review}}",
+        {
+            why,
+            evidence: evidenceLabel(m.envSource),
+            conflict: m.envConflict ? t("convert-modals.differs-modpack", " · 与整合包声明不一致") : "",
+            review: m.needsReview ? t("convert-modals.needs-review", " · 待人工确认") : "",
+        }
     );
 }
 
 /** 保留行的原因：没有端证据时必须说「无依据」，不能替模组宣称服务端可用 */
 function keepReason(m: PlanMod): string {
-    if (m.autoSupplement) return "自动补齐的服务端依赖 · 剔除可能导致启动失败";
+    if (m.autoSupplement) return t("convert-modals.auto-added", "自动补齐的服务端依赖 · 剔除可能导致启动失败");
     const hint =
         m.bytecodeHint === "serverCode"
-            ? " · jar 内确有服务端注册"
+            ? t("convert-modals.jar-server", " · jar 内确有服务端注册")
             : m.bytecodeHint === "clientOnlyShape"
-              ? " · 字节码形状像纯客户端"
+              ? t("convert-modals.bytecode-looks", " · 字节码形状像纯客户端")
               : "";
     const why =
         m.serverSide === "required"
-            ? "服务端必需"
+            ? t("convert-modals.server-required", "服务端必需")
             : m.serverSide === "optional"
-              ? "服务端可选"
+              ? t("lib.server-optional", "服务端可选")
               : m.serverSide === "unsupported"
-                ? "服务端不支持，本行未自动剔除"
+                ? t("convert-modals.server-unsupported-auto", "服务端不支持，本行未自动剔除")
                 : null;
     // 两端必需 = 光进服务端包不算装完，长句说清「还要通知玩家」这件事
-    const both = clientInstallNeeded(m) ? " · 玩家客户端需同装" : "";
     return why
-        ? `保留原因：${why} · 依据：${evidenceLabel(m.envSource)}${m.envConflict ? " · 与整合包声明不一致" : ""}${both}`
-        : `无端证据 · 未自动判定，本行由你保留在包里${hint}`;
+        ? t(
+            "convert-modals.keep-reason", "保留原因：{{why}} · 依据：{{evidence}}{{conflict}}{{both}}",
+            {
+                why,
+                evidence: evidenceLabel(m.envSource),
+                conflict: m.envConflict ? t("convert-modals.differs-modpack", " · 与整合包声明不一致") : "",
+                both: clientInstallNeeded(m) ? t("convert-modals.players-install", " · 玩家客户端需同装") : "",
+            }
+        )
+        : t("convert-modals.side-evidence", "无端证据 · 未自动判定，本行由你保留在包里{{hint}}", { hint });
 }
 
 /** 处于该清单处置下的行说明（一律由证据推导，无证据就承认无证据） */
@@ -169,18 +187,18 @@ function rowOnSub(m: PlanMod, focus: ListFocus): string {
     if (focus === "remove") return stripReason(m);
     if (focus === "add") {
         const base = m.autoSupplement
-            ? "自动补齐的服务端基础库 · 停用可能导致依赖它的模组失效"
+            ? t("convert-modals.auto-added-server", "自动补齐的服务端基础库 · 停用可能导致依赖它的模组失效")
             : m.localPath
-              ? "本地 jar · 构建时直接复制"
-              : "在线添加 · 已钉住所选构建";
+              ? t("convert-modals.local-jar", "本地 jar · 构建时直接复制")
+              : t("convert-modals.added-online", "在线添加 · 已钉住所选构建");
         // 误下载最常见的就是这条：把「服务端不需要」写在行上，而不是等人自己猜
         const tag = sideTagOf(m);
         if (tag === "clientRequired" || tag === "clientOptional") {
-            return `${base} · 判为客户端模组，服务端包通常不需要`;
+            return t("convert-modals.base-client", "{{base}} · 判为客户端模组，服务端包通常不需要", { base });
         }
         // 两端都必需 = 装进服务端包还不够，玩家客户端也得装同一个
         if (clientInstallNeeded(m)) {
-            return `${base} · 两端必需，玩家客户端需同装`;
+            return t("convert-modals.base-sides", "{{base}} · 两端必需，玩家客户端需同装", { base });
         }
         return base;
     }
@@ -206,7 +224,8 @@ export function PlanListModal({
     /** 「应用」时回写：只对最终处置与原值不同的行调用；只读视图不传（没有「应用」这枚按钮） */
     onDisposition?: (id: string, d: ModDisposition) => void;
 }) {
-    const copy = LIST_COPY[focus];
+    const t = useT();
+    const copy = listCopy()[focus];
     const [query, setQuery] = useState("");
     /** 行标签筛选档位（与行尾芯片同源），all = 不按标签筛 */
     const [tagFilter, setTagFilter] = useState<RowTag | "all">("all");
@@ -227,13 +246,13 @@ export function PlanListModal({
     const tagItems = useMemo(() => {
         const present = new Set<RowTag>(mods.map((m) => rowTagOf(m, focus)));
         return [
-            { key: "all" as RowTag | "all", label: "全部" },
-            ...ROW_TAG_ORDER.filter((t) => present.has(t)).map((t) => ({
-                key: t,
-                label: rowTagLabel(t),
+            { key: "all" as RowTag | "all", label: t("common.entry-2", "全部") },
+            ...ROW_TAG_ORDER.filter((tt) => present.has(tt)).map((tt) => ({
+                key: tt,
+                label: rowTagLabel(tt),
             })),
         ];
-    }, [mods, focus]);
+    }, [mods, focus, t]);
 
     // 待人工确认的行永远在最前（与模组方案卡同一口径）；搜索与标签是 AND
     const filtered = useMemo(
@@ -306,13 +325,20 @@ export function PlanListModal({
             persistent
             width={640}
             height={480}
-            title={`${copy.title} · ${mods.length} 个模组`}
-            sub={readOnly ? copy.sub : `${copy.sub} · ${copy.editNote}`}
+            title={t("convert-modals.title-count", "{{title}} · {{count}} 个模组", { title: copy.title, count: mods.length })}
+            sub={
+                readOnly
+                    ? copy.sub
+                    : t("convert-modals.sub-edit-note", "{{sub}} · {{editNote}}", {
+                          sub: copy.sub,
+                          editNote: copy.editNote,
+                      })
+            }
             footerNote={readOnly ? undefined : copy.note(onN, mods.length - onN)}
             footerActions={
                 <>
                     <Btn size="sm" className="px-3.5" onClick={onClose}>
-                        {readOnly ? "关闭" : "取消"}
+                        {readOnly ? t("common.close", "关闭") : t("common.cancel", "取消")}
                     </Btn>
                     {!readOnly && (
                         <Btn
@@ -321,7 +347,7 @@ export function PlanListModal({
                             className="px-3.5 font-semibold"
                             onClick={apply}
                         >
-                            应用
+                            {t("convert-modals.apply", "应用")}
                         </Btn>
                     )}
                 </>
@@ -330,7 +356,7 @@ export function PlanListModal({
             <SearchBox
                 value={query}
                 onChange={setQuery}
-                placeholder="搜索模组名称…"
+                placeholder={t("convert-modals.search-mod", "搜索模组名称…")}
                 className="border border-stroke"
             />
 
@@ -354,7 +380,7 @@ export function PlanListModal({
                         )}
                         {/* 名称不随视角定制（「全部勾回保留」这类自造词有歧义）：
                             勾/不勾的语义由行勾选位本身表达，这里只做可见行的全选 */}
-                        {batchDone ? "取消全部" : "全部"}
+                        {batchDone ? t("convert-modals.unselect-2", "取消全部") : t("common.entry-2", "全部")}
                     </button>
                 )}
                 {/* 极端组合（六档全有 + 长计数）兜一层横向滚动，不把 Tab 挤成换行 */}
@@ -415,7 +441,9 @@ export function PlanListModal({
                         );
                     })}
                     {filtered.length === 0 && (
-                        <span className="py-8 text-center text-[11px] text-text-3">无匹配模组</span>
+                        <span className="py-8 text-center text-[11px] text-text-3">
+                            {t("convert-modals.matching-mods", "无匹配模组")}
+                        </span>
                     )}
                 </Swap>
             </div>

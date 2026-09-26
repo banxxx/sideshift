@@ -34,7 +34,8 @@ import {
     type SelectOption,
 } from "@/components/ui";
 import { cn } from "@/lib/utils";
-import { findDirNode, DIFFICULTY_OPTIONS, GAMEMODE_OPTIONS } from "./constants";
+import { useT } from "@/lib/i18n";
+import { difficultyOptions, findDirNode, gamemodeOptions } from "./constants";
 
 /** 单包参数覆写入口（来自 ConvertPage 的 options state） */
 type Patch = (p: Partial<ConversionOptions>) => void;
@@ -92,6 +93,7 @@ export function RuntimeEnvCard({
     onJavaProbe?: () => void;
     readOnly?: boolean;
 }) {
+    const t = useT();
     const installLoader = options?.installLoaderLocally ?? true;
     // Fabric 没有 installer 可跑：它的 loader jar 与 launcher 直接从版本表取，这一档对本包是空开关
     // （实测：meta 给的 server/jar 是「首启自装」的启动器，不是一份装好的树）。
@@ -123,21 +125,21 @@ export function RuntimeEnvCard({
     /** note 里那个带颜色的词：自动态说"自动选择"，手选态说那枚的显示名（序号现算，不进快照） */
     const pickedWord =
         javaValue === JAVA_AUTO
-            ? "自动选择"
-            : (installs.find((j) => j.path === javaValue)?.label ?? "自动选择");
+            ? t("convert.auto-select", "自动选择")
+            : (installs.find((j) => j.path === javaValue)?.label ?? t("convert.auto-select", "自动选择"));
     const required = javaProbe?.requiredMajor ?? null;
 
     return (
         <Panel gap={14}>
-            <PanelHead title="运行环境" />
+            <PanelHead title={t("convert.runtime", "运行环境")} />
             <div className="flex w-full gap-3">
                 <SearchSelect
                     className="flex-1"
-                    label="Minecraft 版本"
+                    label={t("convert.minecraft-version", "Minecraft 版本")}
                     value={options?.mcVersion ?? manifest.mcVersion}
                     options={mcOptions}
                     searchable
-                    searchPlaceholder="搜索版本…"
+                    searchPlaceholder={t("convert.search-versions", "搜索版本…")}
                     readOnly={readOnly}
                     onChange={(v) => patch({ mcVersion: v })}
                 />
@@ -147,7 +149,7 @@ export function RuntimeEnvCard({
                     value={options?.loaderVersion ?? ""}
                     options={loaderOptions}
                     searchable
-                    searchPlaceholder="搜索版本…"
+                    searchPlaceholder={t("convert.search-versions", "搜索版本…")}
                     readOnly={readOnly}
                     onChange={(v) => patch({ loaderVersion: v })}
                 />
@@ -155,16 +157,16 @@ export function RuntimeEnvCard({
                     className="flex-1"
                     // 标签说"本机 Java"而不是"Java 版本"：这一档列的是这台机器上装了的那几枚，
                     // 包要什么那一档是需求线，写在下面那行提示里
-                    label="本地 Java 环境"
+                    label={t("convert.local-java", "本地 Java 环境")}
                     value={javaValue}
                     options={
                         javaLive
                             ? [
-                                  { value: JAVA_AUTO, label: "自动选择" },
+                                  { value: JAVA_AUTO, label: t("convert.auto-select", "自动选择") },
                                   ...installs.map((j) => ({ value: j.path, label: j.label })),
                               ]
                             : // 灰化那一态既不探测也没得选，只把「自动选择」这一项摆着
-                              [{ value: JAVA_AUTO, label: "自动选择" }]
+                              [{ value: JAVA_AUTO, label: t("convert.auto-select", "自动选择") }]
                     }
                     readOnly={!javaLive}
                     onOpen={onJavaProbe}
@@ -172,7 +174,7 @@ export function RuntimeEnvCard({
                 />
             </div>
             <Divider />
-            <InlineRow label="生成启动脚本（start.sh / start.bat）">
+            <InlineRow label={t("convert.generate-start", "生成启动脚本（start.sh / start.bat）")}>
                 <Toggle
                     checked={options?.generateScripts ?? true}
                     readOnly={readOnly}
@@ -182,7 +184,7 @@ export function RuntimeEnvCard({
             {/* 两格都走 Collapse：关了开关时提示行是当场卸载的，卡高硬跳、下面五张卡同帧重排
                 （Panel 是 gap=14 的 flex 列 ⇒ gap={14}，理由见 @/components/ui/Collapse） */}
             <Collapse when={needsInstaller} gap={14}>
-                <InlineRow label="本机安装 Loader（产物上传即开服）">
+                <InlineRow label={t("convert.install-loader", "本机安装 Loader（产物上传即开服）")}>
                     <Toggle
                         checked={installLoader}
                         readOnly={readOnly}
@@ -198,12 +200,14 @@ export function RuntimeEnvCard({
                     {javaProbe ? (
                         noJava ? (
                             <>
-                                本机没有检测到 Java
-                                {required ? `（本次需要 Java ${required} 及以上）` : ""}
+                                {t("convert.java-detected", "本机没有检测到 Java")}
+                                {required
+                                    ? t("convert.requires-java", "（本次需要 Java {{major}} 及以上）", { major: required })
+                                    : ""}
                             </>
                         ) : (
                             <>
-                                本次使用{" "}
+                                {t("convert.using", "本次使用")}{" "}
                                 <span
                                     className={cn(
                                         TIP_TRIGGER,
@@ -215,24 +219,30 @@ export function RuntimeEnvCard({
                                         "underline decoration-1 underline-offset-2"
                                     )}
                                     // 气泡是纯 hover 的，读屏与键盘要有一条同等信息的出口
-                                    aria-label={javaProbe.javaPath ?? "本机没有可用的 Java"}
+                                    aria-label={
+                                        javaProbe.javaPath ?? t("convert.usable-java", "本机没有可用的 Java")
+                                    }
                                 >
                                     {pickedWord}
                                     {/* 手选那枚靠 `(1)/(2)` 分得开，但"到底用的哪一份"只有路径答得出：
                                         悬浮给全路径，长路径交给 wide 那档等宽断行 */}
                                     <Tip
-                                        label={javaProbe.javaPath ?? "本机没有可用的 Java"}
+                                        label={javaProbe.javaPath ?? t("convert.usable-java", "本机没有可用的 Java")}
                                         wide
                                         align="start"
                                         side="top"
                                     />
                                 </span>
-                                {required ? `（本次需要 Java ${required} 及以上）` : ""}
-                                {selectedMissing ? " · 方案里指定的那枚已不在本机" : ""}
+                                {required
+                                    ? t("convert.requires-java", "（本次需要 Java {{major}} 及以上）", { major: required })
+                                    : ""}
+                                {selectedMissing
+                                    ? t("convert.jdk-picked", " · 方案里指定的那枚已不在本机")
+                                    : ""}
                             </>
                         )
                     ) : (
-                        "正在检测本机 Java…"
+                        t("convert.detecting-local", "正在检测本机 Java…")
                     )}
                 </NoteRow>
             </Collapse>
@@ -262,14 +272,20 @@ export function KeepDirsCard({
     readOnly?: boolean;
 }) {
     const keepDirs = options?.keepDirs ?? [];
+    const t = useT();
     return (
         <Panel gap={14}>
             <PanelHead
-                title="客户端保留目录"
+                title={t("convert.kept-client", "客户端保留目录")}
                 right={
                     readOnly ? undefined : (
-                        <Btn size="sm" icon={Plus} disabled={packDirs.length === 0} onClick={() => onPick?.()}>
-                            添加目录
+                        <Btn
+                            size="sm"
+                            icon={Plus}
+                            disabled={packDirs.length === 0}
+                            onClick={() => onPick?.()}
+                        >
+                            {t("convert.add-folder", "添加目录")}
                         </Btn>
                     )
                 }
@@ -280,12 +296,12 @@ export function KeepDirsCard({
                 {keepDirs.length === 0 ? (
                     <p className="w-full py-3 text-center text-[11px] text-text-3">
                         {readOnly
-                            ? "该任务未保留任何包内目录"
+                            ? t("convert.task-kept", "该任务未保留任何包内目录")
                             : packDirs.length === 0
                               ? parsed
-                                    ? "包内未检测到可保留的目录（mods 之外没有资源文件）"
-                                    : "源包已不在原位置 · 该任务未保留任何包内目录"
-                              : "尚未选择目录 · 点击上方「添加目录」从包内勾选"}
+                                    ? t("convert.keepable-folders", "包内未检测到可保留的目录（mods 之外没有资源文件）")
+                                    : t("convert.source-pack-missing", "源包已不在原位置 · 该任务未保留任何包内目录")
+                              : t("convert.folder-selected", "尚未选择目录 · 点击上方「添加目录」从包内勾选")}
                     </p>
                 ) : (
                     <div className="flex w-full flex-col gap-1">
@@ -308,13 +324,13 @@ export function KeepDirsCard({
                                         </span>
                                         {dir && (
                                             <span className="shrink-0 font-mono text-[11px] leading-[16px] tabular-nums text-emerald">
-                                                {dir.fileCount} 文件
+                                                {t("convert.count-file", "{{count}} 文件", { count: dir.fileCount })}
                                             </span>
                                         )}
                                         {!readOnly && (
                                             <button
                                                 onClick={() => onRemove?.(p)}
-                                                aria-label="移除"
+                                                aria-label={t("convert.remove", "移除")}
                                                 className={cn(
                                                     TIP_TRIGGER,
                                                     "size-6 rounded-md text-text-3",
@@ -324,7 +340,7 @@ export function KeepDirsCard({
                                                 )}
                                             >
                                                 <X className="size-3" />
-                                                <Tip label="移除" />
+                                                <Tip label={t("convert.remove", "移除")} />
                                             </button>
                                         )}
                                     </motion.div>
@@ -336,10 +352,10 @@ export function KeepDirsCard({
             </Swap>
             <NoteRow icon={Info}>
                 {readOnly
-                    ? "这些目录当时按原层级从源包复制进了服务端包（支持子目录）"
+                    ? t("convert.folders-copied", "这些目录当时按原层级从源包复制进了服务端包（支持子目录）")
                     : parsed
-                      ? "勾选的目录按原层级从源包复制到服务端（支持子目录）"
-                      : "源包已不在原位置 · 无法浏览包内目录，已有条目仍可移除"}
+                      ? t("convert.selected-folders", "勾选的目录按原层级从源包复制到服务端（支持子目录）")
+                      : t("convert.source-pack", "源包已不在原位置 · 无法浏览包内目录，已有条目仍可移除")}
             </NoteRow>
         </Panel>
     );
@@ -356,10 +372,11 @@ export function LaunchArgsCard({
     patch: Patch;
     readOnly?: boolean;
 }) {
+    const t = useT();
     return (
         <Panel gap={14}>
-            <PanelHead title="启动参数" />
-            <InlineRow label="服务器内存上限">
+            <PanelHead title={t("convert.launch-args", "启动参数")} />
+            <InlineRow label={t("convert.max-server", "服务器内存上限")}>
                 <Stepper
                     value={Math.round((options?.memoryMb ?? 6144) / 1024)}
                     min={1}
@@ -369,34 +386,34 @@ export function LaunchArgsCard({
                     onChange={(v) => patch({ memoryMb: v * 1024 })}
                 />
             </InlineRow>
-            <InlineRow label="无界面模式启动（--nogui）">
+            <InlineRow label={t("convert.start-headless", "无界面模式启动（--nogui）")}>
                 <Toggle
                     checked={options?.nogui ?? false}
                     readOnly={readOnly}
                     onChange={(v) => patch({ nogui: v })}
                 />
             </InlineRow>
-            <InlineRow label="自动写入 eula=true（同意 Mojang EULA）">
+            <InlineRow label={t("convert.write-eula", "自动写入 eula=true（同意 Mojang EULA）")}>
                 <Toggle
                     checked={options?.agreeEula ?? true}
                     readOnly={readOnly}
                     onChange={(v) => patch({ agreeEula: v })}
                 />
             </InlineRow>
-            <InlineRow label="Aikar's flags 优化参数组（G1GC 推荐）">
+            <InlineRow label={t("convert.aikar-flags", "Aikar's flags 优化参数组（G1GC 推荐）")}>
                 <Toggle
-                    checked={options?.useAikarFlags ?? false}
+                    checked={options?.useAikarFlags ?? true}
                     readOnly={readOnly}
                     onChange={(v) => patch({ useAikarFlags: v })}
                 />
             </InlineRow>
-            <InlineRow label="附加 JVM 参数">
+            <InlineRow label={t("convert.extra-jvm", "附加 JVM 参数")}>
                 <TextInput
                     className="w-[240px]"
                     value={options?.extraJvmArgs ?? ""}
                     readOnly={readOnly}
                     onChange={(e) => patch({ extraJvmArgs: e.target.value })}
-                    placeholder="原样拼入 start 脚本"
+                    placeholder={t("convert.appended-start", "原样拼入 start 脚本")}
                     spellCheck={false}
                 />
             </InlineRow>
@@ -415,29 +432,30 @@ export function ServerSettingsCard({
     patch: Patch;
     readOnly?: boolean;
 }) {
+    const t = useT();
     return (
         <Panel gap={14}>
-            <PanelHead title="服务端设置" />
+            <PanelHead title={t("convert.server-settings", "服务端设置")} />
             <div className="flex w-full gap-3">
                 <SearchSelect
                     className="flex-1"
-                    label="游戏模式"
+                    label={t("convert.game-mode", "游戏模式")}
                     value={options?.gamemode ?? "survival"}
-                    options={GAMEMODE_OPTIONS}
+                    options={gamemodeOptions()}
                     readOnly={readOnly}
                     onChange={(v) => patch({ gamemode: v as ConversionOptions["gamemode"] })}
                 />
                 <SearchSelect
                     className="flex-1"
-                    label="难度"
+                    label={t("convert.difficulty", "难度")}
                     value={options?.difficulty ?? "easy"}
-                    options={DIFFICULTY_OPTIONS}
+                    options={difficultyOptions()}
                     readOnly={readOnly}
                     onChange={(v) => patch({ difficulty: v as ConversionOptions["difficulty"] })}
                 />
             </div>
             <div className="grid w-full grid-cols-2 gap-3">
-                <Field label="服务器端口">
+                <Field label={t("convert.server-port", "服务器端口")}>
                     <NumField
                         value={options?.serverPort ?? 25565}
                         min={SERVER_PORT_RANGE.min}
@@ -447,7 +465,7 @@ export function ServerSettingsCard({
                         onCommit={(v) => patch({ serverPort: v })}
                     />
                 </Field>
-                <Field label="最大人数">
+                <Field label={t("convert.max-players", "最大人数")}>
                     <NumField
                         value={options?.maxPlayers ?? 20}
                         min={1}
@@ -457,28 +475,28 @@ export function ServerSettingsCard({
                     />
                 </Field>
             </div>
-            <Field label="服务器描述（MOTD）">
+            <Field label={t("convert.server-description", "服务器描述（MOTD）")}>
                 <TextInput
                     className="w-full"
                     value={options?.motd ?? ""}
                     readOnly={readOnly}
                     onChange={(e) => patch({ motd: e.target.value })}
-                    placeholder="显示在服务器列表中的一行描述"
+                    placeholder={t("convert.shown-server", "显示在服务器列表中的一行描述")}
                     spellCheck={false}
                 />
             </Field>
-            <Field label="世界种子（留空 = 随机生成）">
+            <Field label={t("convert.world-seed", "世界种子（留空 = 随机生成）")}>
                 <TextInput
                     className="w-full"
                     value={options?.levelSeed ?? ""}
                     readOnly={readOnly}
                     onChange={(e) => patch({ levelSeed: e.target.value })}
-                    placeholder="如 4045151867437057206"
+                    placeholder={t("convert.4045151867437057206", "如 4045151867437057206")}
                     spellCheck={false}
                 />
             </Field>
             <Divider />
-            <InlineRow label="正版验证（online-mode）">
+            <InlineRow label={t("convert.verified-accounts", "正版验证（online-mode）")}>
                 <Toggle
                     checked={options?.onlineMode ?? true}
                     readOnly={readOnly}
@@ -486,7 +504,7 @@ export function ServerSettingsCard({
                 />
             </InlineRow>
             <NoteRow icon={Info}>
-                以上字段写入包内 server.properties；整合包自带该文件时保留原文件
+                {t("convert.writes-server", "以上字段写入包内 server.properties；整合包自带该文件时保留原文件")}
             </NoteRow>
         </Panel>
     );

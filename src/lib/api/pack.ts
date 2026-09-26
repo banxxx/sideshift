@@ -7,6 +7,7 @@ import type {
     VersionOption,
 } from "@/lib/types";
 import * as mock from "@/lib/mock";
+import { t } from "@/lib/i18n";
 import { invokeOrMock, isTauri } from "./client";
 
 /** 打开系统文件选择器，返回选中的 .mrpack/.zip 路径（取消为 null）
@@ -17,7 +18,8 @@ export async function pickPackFile(): Promise<string | null> {
     const { open } = await import("@tauri-apps/plugin-dialog");
     const picked = await open({
         multiple: false,
-        filters: [{ name: "整合包", extensions: ["mrpack", "zip"] }],
+        // 系统文件对话框里的类型名，跟着界面语言走（在调用时求值，不是模块顶层）
+        filters: [{ name: t("lib.modpack", "整合包"), extensions: ["mrpack", "zip"] }],
     });
     return typeof picked === "string" ? picked : null;
 }
@@ -28,7 +30,7 @@ export async function pickJarFile(): Promise<string | null> {
     const { open } = await import("@tauri-apps/plugin-dialog");
     const picked = await open({
         multiple: false,
-        filters: [{ name: "模组文件", extensions: ["jar"] }],
+        filters: [{ name: t("lib.mod-files", "模组文件"), extensions: ["jar"] }],
     });
     return typeof picked === "string" ? picked : null;
 }

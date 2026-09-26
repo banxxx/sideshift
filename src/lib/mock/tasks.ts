@@ -458,6 +458,16 @@ export function mockClearTrash(): number {
     return n;
 }
 
+/** 镜像 Rust 的 `msg!` + `check()`：一条模板句同时给出「渲染好的中文整句」和「模板 + 参数」。
+ *  两边口径必须一致——mock 里只给整句的话，界面上那条永远翻不出来，真机却翻得出来，
+ *  自测就会在两种数据下看到两套语言。 */
+function msg(key: string, args?: Record<string, unknown>) {
+    const zh = key.replace(/\{\{\s*(\w+)\s*\}\}/g, (_, slot: string) =>
+        String(args?.[slot] ?? `{{${slot}}}`)
+    );
+    return { detail: zh, detailMsg: { key, args: args ?? null, zh } };
+}
+
 export function mockReport(taskId: string): ConversionReport | undefined {
     ensureSeeded();
     const task = tasks.get(taskId);
@@ -469,37 +479,48 @@ export function mockReport(taskId: string): ConversionReport | undefined {
     // 自检明细只在开关打开时给（与 Rust 侧一致：关着不该凭空冒出一张卡）
     const checks: CheckResult[] = mockLoadSettings().verifyAfterBuild
         ? [
-              { id: "files", label: "取件完整", status: "pass", detail: `模组 ${mods} 个全部落位` },
-              { id: "jars", label: "jar 可用", status: "pass", detail: `${mods + 1} 个 jar 容器可读` },
-              { id: "deps", label: "依赖闭合", status: "pass", detail: "12 条依赖引用全部指向包内" },
+              { id: "files", label: "取件完整", status: "pass", ...msg("模组 {{count}} 个全部落位", { count: mods }) },
+              { id: "jars", label: "jar 可用", status: "pass", ...msg("{{count}} 个 jar 容器可读", { count: mods + 1 }) },
+              { id: "deps", label: "依赖闭合", status: "pass", ...msg("{{count}} 条依赖引用全部指向包内", { count: 12 }) },
               o.generateScripts
                   ? {
                         id: "start",
                         label: "启动指向",
                         status: "pass",
-                        detail: "fabric-server-launch.jar 就位 · 首次运行会联网装出 loader（需本机 Java 与网络）",
+                        ...msg(
+                            "{{jar}} 就位 · 首次运行会联网装出 loader（需本机 Java 与网络）",
+                            { jar: "fabric-server-launch.jar" }
+                        ),
                     }
                   : {
                         id: "start",
                         label: "启动指向",
                         status: "warn",
-                        detail: "fabric-server-launch.jar 就位；本次未生成启动脚本，需自行按包内文件启动",
+                        ...msg(
+                            "{{jar}} 就位；本次未生成启动脚本，需自行按包内文件启动",
+                            { jar: "fabric-server-launch.jar" }
+                        ),
                     },
               // 假数据走的是「没本机安装」那一档：加载器要首启现装，所以这一行是提示档而非通过档
               {
                   id: "loader",
                   label: "Loader 就位",
                   status: "warn",
-                  detail: "只有 fabric-server-launch.jar·首次运行才联网装出加载器",
+                  ...msg("只有 {{jar}}·首次运行才联网装出加载器", {
+                      jar: "fabric-server-launch.jar",
+                  }),
               },
-              { id: "root", label: "包根文件", status: "pass", detail: `包根 ${generated.length} 个文件全部就位` },
+              { id: "root", label: "包根文件", status: "pass", ...msg("包根 {{count}} 个文件全部就位", { count: generated.length }) },
               ...(o.keepDirs.length
                   ? [
                         {
                             id: "keep",
                             label: "保留目录",
                             status: "pass" as const,
-                            detail: `${o.keepDirs.length} 个目录 · 12 个文件已带入`,
+                            ...msg("{{dirs}} 个目录 · {{files}} 个文件已带入", {
+                                dirs: o.keepDirs.length,
+                                files: 12,
+                            }),
                         },
                     ]
                   : []),

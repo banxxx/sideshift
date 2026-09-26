@@ -1,6 +1,7 @@
 /* ---------------- 方案行（mod-row）：勾选框 16 + 名称/版本横排 + 右侧徽章（可删行悬停露出 ×） ---------------- */
 import { X } from "lucide-react";
 import type { PlanMod } from "@/lib/types";
+import { t, useT } from "@/lib/i18n";
 import { CheckBox, TagChip, Tip, TIP_TRIGGER, ToneChip } from "@/components/ui";
 import { cn } from "@/lib/utils";
 import { SideChip } from "./modals";
@@ -20,6 +21,8 @@ export function PlanModRow({
     /** 仅用户自行添加的新增行提供显式删除；缺省 = 不渲染 × */
     onRemove?: () => void;
 }) {
+    // 组件内一律 useT（切语言才重渲染）：它遮住模块级 `t` 的导入，那枚只给下面的 `badgeFor` 用
+    const t = useT();
     // 勾选语义：剔除项未勾选；新增行取消勾选 = 停用（行保留），整行压暗表意不参与构建
     const included = mod.disposition !== "remove" && !mod.disabled;
 
@@ -49,7 +52,7 @@ export function PlanModRow({
             {onRemove && (
                 <button
                     onClick={onRemove}
-                    aria-label="从方案移除"
+                    aria-label={t("convert.remove-plan", "从方案移除")}
                     className={cn(
                         // 具名组：本行父级已经是无名 `group`（悬停露出 ×），同名会互相误触发
                         TIP_TRIGGER,
@@ -60,7 +63,7 @@ export function PlanModRow({
                     )}
                 >
                     <X className="size-3" />
-                    <Tip label="从方案移除" />
+                    <Tip label={t("convert.remove-plan", "从方案移除")} />
                 </button>
             )}
         </div>
@@ -72,10 +75,10 @@ export function PlanModRow({
  *  （两端必需的保留行可能成批出现，卡底那句汇总才是它们该被看见的方式）；
  *  新增行 = 用户自己塞进来的（误下载、本地乱拿都在这一步），所以当场就要看到它是哪一端 */
 export function badgeFor(mod: PlanMod, local: boolean): React.ReactNode {
-    if (mod.autoSupplement) return <TagChip>自动补齐</TagChip>;
-    if (mod.needsReview) return <ToneChip tone="gold" size="sm">需人工确认</ToneChip>;
+    if (mod.autoSupplement) return <TagChip>{t("convert.auto-added", "自动补齐")}</TagChip>;
+    if (mod.needsReview) return <ToneChip tone="gold" size="sm">{t("lib.needs-review", "需人工确认")}</ToneChip>;
     if (mod.disposition === "add")
         return <SideChip sides={mod} warnClient />;
-    if (local) return <TagChip>本地</TagChip>;
+    if (local) return <TagChip>{t("convert.local", "本地")}</TagChip>;
     return undefined;
 }

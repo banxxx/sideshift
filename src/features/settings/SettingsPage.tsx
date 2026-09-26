@@ -20,6 +20,7 @@ import { notify, type NoticeKind } from "@/lib/notify";
 import { CARD_RISE, PAGE_RISE } from "@/lib/page-motion";
 import { usePackStore } from "@/lib/pack-store";
 import { switchTheme, useTheme, type Theme } from "@/lib/theme";
+import { LOCALE_OPTIONS, LOCALE_TO_WIRE, applyLocaleChoice, systemLocale, t, tSource, useT, type AppLocale, type Locale, type TranslateFn } from "@/lib/i18n";
 import type { AppSettings, CacheUsage, CleanReport, UpdateChannel } from "@/lib/types";
 import { cn } from "@/lib/utils";
 import {
@@ -39,39 +40,81 @@ import {
     type SelectOption,
 } from "@/components/ui";
 
-const THEME_TABS: Array<{ key: Theme; label: string; icon: typeof Sun }> = [
-    { key: "light", label: "浅色", icon: Sun },
-    { key: "dark", label: "深色", icon: Moon },
-    { key: "system", label: "系统", icon: Monitor },
-];
+/** 主题三态分段：`key` 是档位 id（不翻），`label` 过 `t`；表建在函数里，避免顶层求值冻在首帧语言上 */
+function themeTabs(): Array<{ key: Theme; label: string; icon: typeof Sun }> {
+    return [
+        { key: "light", label: t("settings.light", "浅色"), icon: Sun },
+        { key: "dark", label: t("common.dark", "深色"), icon: Moon },
+        { key: "system", label: t("settings.system", "系统"), icon: Monitor },
+    ];
+}
 
 type UpdateState = "idle" | "checking" | "latest" | "available";
 
 /** 更新渠道两档：SegTabs 的 value 取解析后的档位，所以「跟随当前构建」在界面上不占第三态 */
-const CHANNEL_TABS: Array<{ key: UpdateChannel; label: string }> = [
-    { key: "stable", label: "正式版" },
-    { key: "beta", label: "Beta" },
-];
+function channelTabs(): Array<{ key: UpdateChannel; label: string }> {
+    return [
+        { key: "stable", label: t("settings.stable", "正式版") },
+        { key: "beta", label: "Beta" },
+    ];
+}
 
-const UPDATE_LABEL: Record<UpdateState, string> = {
-    idle: "检查更新",
-    checking: "检查中…",
-    latest: "已是最新版本",
-    available: "发现新版本",
-};
+/** 检查更新按钮的四态文案（函数内建表，每格一条 `t(字面量)`） */
+function updateLabel(state: UpdateState): string {
+    return {
+        idle: t("settings.check-updates-2", "检查更新"),
+        checking: t("settings.checking", "检查中…"),
+        latest: t("settings.date", "已是最新版本"),
+        available: t("settings.update-found", "发现新版本"),
+    }[state];
+}
 
-/** invoke reject 回来的可能是 Error 也可能是 Rust 的字符串消息 */
-const errOf = (e: unknown) => (e instanceof Error ? e.message : String(e));
+/**
+ * 语言四档（「外观与关于」的第一行）。
+ *
+ * 三种语言的**自称按原样显示、不进翻译目录**——这是行业惯例：用户在自己的语言里才一眼认出
+ * 「繁體中文」，翻成 "Traditional Chinese" 反而要他想一下是哪档。只有「跟随系统」是普通文案，
+ * 所以这张表要在渲染时过一层 `t`（见 `localeOptions`）。
+ */
+const LOCALE_TABS: SelectOption[] = LOCALE_OPTIONS.map(({ value, label }) => ({
+    value,
+    label,
+}));
+
+const localeOptions = (t: TranslateFn): SelectOption[] =>
+    LOCALE_TABS.map((o) => (o.value === "auto" ? { ...o, label: t("settings.system-default", "跟随系统") } : o));
+
+/** 生效档 → 自称（「跟随系统」那行的说明要说出现在实际是哪一档） */
+const endonymOf = (lng: Locale) =>
+    LOCALE_OPTIONS.find((o) => o.value === LOCALE_TO_WIRE[lng])?.label ?? lng;
+
+/** invoke reject 回来的可能是 Error 也可能是 Rust 的字符串消息。
+ *  Rust 那边有一批写死的句子（闸门、存档失败…）会直接进提示区，所以这里过一遍目录：
+ *  查得到就翻，查不到（带文件名的诊断串）原样出中文。 */
+const errOf = (e: unknown) =>
+    tSource(
+        /*i18n:
+            有任务正在转换或排队中，清空缓存会删掉它在用的文件
+            找不到应用配置目录，设置未能保存
+            这条任务已经不在列表里（可能刚被撤回或重复删除）
+            更新列表返回了意外结构
+            回收站里已经没有这条任务（可能刚被清空）
+            任务列表里已经有这条任务，撤回没有执行
+        */
+        e instanceof Error ? e.message : String(e)
+    );
 
 /** 三种清理：无用文件 / 只清过期缓存 / 清空全部缓存 */
 type CleanKind = "junk" | "stale" | "all";
 
 /** 播报文案的名词，与按钮上的说法一致，免得提示和界面两种叫法 */
-const CLEAN_LABEL: Record<CleanKind, string> = {
-    junk: "无用文件",
-    stale: "过期缓存",
-    all: "下载缓存",
-};
+function cleanLabel(kind: CleanKind): string {
+    return {
+        junk: t("settings.junk-files", "无用文件"),
+        stale: t("settings.expired-cache", "过期缓存"),
+        all: t("settings.download-cache", "下载缓存"),
+    }[kind];
+}
 
 /** 灰掉也要能悬出原因：Btn/IconBtn 给禁用态关了 pointer-events，不放开就永远弹不出 Tip */
 const STILL_HOVERABLE = "disabled:pointer-events-auto disabled:cursor-not-allowed";
@@ -93,19 +136,25 @@ const junkBytes = (u: CacheUsage) => u.partsBytes + u.orphanBytes;
 const channelOf = (s: AppSettings) => s.updateChannel ?? api.AUTO_UPDATE_CHANNEL;
 
 /** 渠道的中文说法，行说明与确认弹窗共用，免得一处写「Beta」一处写「测试版」 */
-const channelLabel = (c: UpdateChannel) => (c === "beta" ? "测试版（Beta）" : "正式版");
+function channelLabel(c: UpdateChannel): string {
+    return c === "beta" ? t("settings.beta", "测试版（Beta）") : t("settings.stable", "正式版");
+}
 
 /** 结果播报按真实回收量说话；删不动的要显出来，不能混在成功里 */
 function cleanNotice(kind: CleanKind, r: CleanReport): { text: string; kind: NoticeKind } {
-    const name = CLEAN_LABEL[kind];
+    const name = cleanLabel(kind);
     if (!r.items) {
         return r.failed
-            ? { text: `${name}正被其它程序占用，一项都没能删掉`, kind: "warn" }
-            : { text: `没有需要清理的${name}`, kind: "info" };
+            ? { text: t("settings.use-another", "{{name}}正被其它程序占用，一项都没能删掉", { name }), kind: "warn" }
+            : { text: t("settings.nothing-clean", "没有需要清理的{{name}}", { name }), kind: "info" };
     }
-    const text = `已清理${name} ${r.items} 项 · ${formatSize(r.bytes)}`;
+    const text = t("settings.name-count", "已清理{{name}} {{count}} 项 · {{size}}", {
+        name,
+        count: r.items,
+        size: formatSize(r.bytes),
+    });
     return r.failed
-        ? { text: `${text}；另有 ${r.failed} 项占用中未删`, kind: "warn" }
+        ? { text: text + t("settings.count-still", "；另有 {{count}} 项占用中未删", { count: r.failed }), kind: "warn" }
         : { text, kind: "success" };
 }
 
@@ -138,6 +187,7 @@ export function SettingsPage() {
     const [cleaning, setCleaning] = useState<CleanKind | null>(null);
     /** 改到影响判定口径的全局开关时，作废转换页那份跨页草稿（见 pack-store） */
     const { clearDraft } = usePackStore();
+    const t = useT();
     const [theme] = useTheme();
     const [update, setUpdate] = useState<UpdateState>("idle");
     /** 切到 Beta 的二次确认：改动的是"以后会装上什么包"，点一下就换太轻率 */
@@ -152,7 +202,7 @@ export function SettingsPage() {
         void api
             .getSettings()
             .then(setSettings)
-            .catch((e) => notify(`读取设置失败：${errOf(e)}`, "error"));
+            .catch((e) => notify(t("settings.failed-read-settings", "读取设置失败：{{reason}}", { reason: errOf(e) }), "error"));
         void api
             .listDownloadSources()
             .then((list) => {
@@ -160,11 +210,11 @@ export function SettingsPage() {
                 cachedSources = next;
                 setSources(next);
             })
-            .catch((e) => notify(`读取下载源失败：${errOf(e)}`, "error"));
+            .catch((e) => notify(t("settings.failed-read", "读取下载源失败：{{reason}}", { reason: errOf(e) }), "error"));
     }, []);
 
     /** 占用数字读的是磁盘：只在「这个进程还没扫过」、换缓存目录、手动刷新、清理完这四件事
-     * 之后各扫一遍，不轮询、也不跟换页重挂载走。
+     *之后各扫一遍，不轮询、也不跟换页重挂载走。
      * `refreshing` 是这一趟的在飞标记——刷新键是纯图标按钮，没有「统计中…」的文字可挂，
      * 只能靠它让图标转起来。收尾跟着 promise 走（自己掐表准不了真实耗时），
      * 但补一个最短时长：小缓存十几毫秒就回来，true→false 挤进同一次绘制等于一帧没画。 */
@@ -180,7 +230,7 @@ export function SettingsPage() {
                 const dir = api.peekSettings()?.cacheDir;
                 if (dir) lastUsage = { dir, usage: u };
             })
-            .catch((e) => notify(`读取缓存占用失败：${errOf(e)}`, "error"))
+            .catch((e) => notify(t("settings.failed-read-cache", "读取缓存占用失败：{{reason}}", { reason: errOf(e) }), "error"))
             .finally(() => {
                 const left = SPIN_MIN_MS - (performance.now() - startedAt);
                 if (left > 0) window.setTimeout(() => setRefreshing(false), left);
@@ -211,7 +261,7 @@ export function SettingsPage() {
             }
             return true;
         } catch (e) {
-            notify(`设置未能保存：${errOf(e)}`, "error");
+            notify(t("settings.couldn-save", "设置未能保存：{{reason}}", { reason: errOf(e) }), "error");
             // 后端拒绝写入时内存里还是旧值：重读一次，别让界面留着没生效的新值
             void api.getSettings().then(setSettings);
             return false;
@@ -225,7 +275,7 @@ export function SettingsPage() {
             if (!dir) return;
             await patch(key === "cacheDir" ? { cacheDir: dir } : { outputDir: dir });
         } catch (e) {
-            notify(`打开目录选择器失败：${errOf(e)}`, "error");
+            notify(t("settings.couldn-open", "打开目录选择器失败：{{reason}}", { reason: errOf(e) }), "error");
         }
     };
 
@@ -240,8 +290,28 @@ export function SettingsPage() {
         const v = cfKey.trim();
         if (v === (settings?.curseforgeApiKey ?? "").trim()) return;
         if (await patch({ curseforgeApiKey: v || null })) {
-            notify(v ? "已保存 CurseForge API Key" : "已清除 CurseForge API Key", "success");
+            notify(t("settings.curseforge-api", "已保存 CurseForge API Key"), "success");
         }
+    };
+
+    /**
+     * 语言：**先落盘，再切当前进程**。
+     *
+     * 反过来的时候这里出过错（旧顺序：`applyLocaleChoice` → `patch`）：`applyLocaleChoice` 会让
+     * `LocaleGate` 换 key 重挂整棵视图，设置页当场被拆掉，于是
+     *  1. `patch` 里那次 `setSettings` 落在已卸载的实例上（React 直接丢弃），算好的新档位没人接；
+     *  2. 新实例挂载时又要读一次设置，这一趟 `get_settings` 与上一趟 `set_settings` 抢同一个文件，
+     *     读赢了就把改档**之前**的那份装回下拉框：界面已经是新语言，下拉却指着旧一档；
+     *     再去点那一档撞上 `settings.locale === next` 提前返回，看着就是「选的语言不对、点了没反应」。
+     *
+     * 先写盘就没那个岔口：重挂之后首帧吃的 `peekSettings()` 与重读的那一趟都是新档。
+     * 生效地确实在前端（翻译目录打进 bundle），但这一趟等的只是本机一次文件写；换来的是
+     * 「下拉显示的选择 == 磁盘那份 == 当前语言」三方一致。写盘失败时 `patch` 自己弹「未能保存」
+     * 并重读设置，语言压根没切过，不必再往回翻一次整个界面。
+     */
+    const chooseLocale = async (next: AppLocale) => {
+        if (!settings || settings.locale === next) return;
+        if (await patch({ locale: next })) await applyLocaleChoice(next);
     };
 
     /**
@@ -257,7 +327,7 @@ export function SettingsPage() {
             notify(n.text, n.kind);
         } catch (e) {
             // 后端的拒绝是有原因的（比如转换进行中要清空全部），原话贴出来，别自己编
-            notify(`清理${CLEAN_LABEL[kind]}失败：${errOf(e)}`, "error");
+            notify(t("settings.failed-clean", "清理{{name}}失败：{{reason}}", { name: cleanLabel(kind), reason: errOf(e) }), "error");
         } finally {
             setCleaning(null);
             readUsage();
@@ -275,13 +345,13 @@ export function SettingsPage() {
             setUpdate(r.hasUpdate ? "available" : "latest");
             notify(
                 r.hasUpdate
-                    ? `发现新版本 v${r.latest}（当前 v${r.current}）`
-                    : `已是最新版本 v${r.current}`,
+                    ? t("settings.new-version", "发现新版本 v{{latest}}（当前 v{{current}}）", { latest: r.latest, current: r.current })
+                    : t("settings.already-date", "已是最新版本 v{{current}}", { current: r.current }),
                 r.hasUpdate ? "info" : "success"
             );
         } catch (e) {
             // 网络不通、仓库还没发过 release 都会走到这里：只报错，不许顶着一个假的"已是最新"
-            notify(`检查更新失败：${errOf(e)}`, "error");
+            notify(t("settings.update-check", "检查更新失败：{{reason}}", { reason: errOf(e) }), "error");
             setUpdate("idle");
             return;
         }
@@ -298,7 +368,7 @@ export function SettingsPage() {
     const confirmBetaChannel = async () => {
         setConfirmBeta(false);
         if (await patch({ updateChannel: "beta" })) {
-            notify("已切到 Beta：之后检查更新收到的会是测试版", "warn");
+            notify(t("settings.switched-beta", "已切到 Beta：之后检查更新收到的会是测试版"), "warn");
         }
     };
 
@@ -313,12 +383,12 @@ export function SettingsPage() {
             animate="show"
             className="flex flex-col gap-5 py-6"
         >
-            <PageHeader compact title="设置" sub="转换行为、存储、网络与外观偏好" />
+            <PageHeader compact title={t("common.settings", "设置")} sub={t("settings.conversion-storage", "转换行为、存储、网络与外观偏好")} />
 
             <div className="flex w-full flex-col gap-5">
                 {/* ---- 转换选项 ---- */}
-                <Section title="转换选项">
-                    <SettingRow label="服务端输出目录" desc="转换完成的整合包落位目录">
+                <Section title={t("settings.conversion-options", "转换选项")}>
+                    <SettingRow label={t("settings.server-output", "服务端输出目录")} desc={t("settings.where-finished", "转换完成的整合包落位目录")}>
                         <TextInput
                             plain
                             icon={Folder}
@@ -328,12 +398,12 @@ export function SettingsPage() {
                             className="w-[300px] cursor-pointer"
                         />
                         <Btn size="sm" onClick={() => void pickDir("outputDir")}>
-                            选择
+                            {t("settings.choose", "选择")}
                         </Btn>
                     </SettingRow>
                     <SettingRow
-                        label="剔除客户端专属资源"
-                        desc="按端证据自动移除光影、小地图等客户端模组"
+                        label={t("settings.strip-client", "剔除客户端专属资源")}
+                        desc={t("settings.auto-removes", "按端证据自动移除光影、小地图等客户端模组")}
                     >
                         <Toggle
                             size="md"
@@ -342,8 +412,8 @@ export function SettingsPage() {
                         />
                     </SettingRow>
                     <SettingRow
-                        label="构建后自检"
-                        desc="打包完成后离线对账产物：模组是否齐、jar 是否完整、依赖是否被误剔"
+                        label={t("settings.verify-after", "构建后自检")}
+                        desc={t("settings.post-build", "打包完成后离线对账产物：模组是否齐、jar 是否完整、依赖是否被误剔")}
                     >
                         <Toggle
                             size="md"
@@ -352,8 +422,8 @@ export function SettingsPage() {
                         />
                     </SettingRow>
                     <SettingRow
-                        label="本机安装 Loader"
-                        desc="Forge / NeoForge 转换时在本机跑 installer，产物上传即可开服（需本机 Java）"
+                        label={t("settings.install-loader", "本机安装 Loader")}
+                        desc={t("settings.runs-forge", "Forge / NeoForge 转换时在本机跑 installer，产物上传即可开服（需本机 Java）")}
                     >
                         <Toggle
                             size="md"
@@ -367,8 +437,8 @@ export function SettingsPage() {
                         壳是末子元素时 `.divide-y > :not(:last-child)` 不会给它加边框 */}
                     <Collapse when={settings.installLoaderLocally} gap={0}>
                         <SettingRow
-                            label="复用已装的 Loader"
-                            desc="按加载器与版本存进缓存，同版本的第二包起不再重下重装"
+                            label={t("settings.reuse-installed", "复用已装的 Loader")}
+                            desc={t("settings.cache-loader", "按加载器与版本存进缓存，同版本的第二包起不再重下重装")}
                         >
                             <Toggle
                                 size="md"
@@ -380,8 +450,8 @@ export function SettingsPage() {
                 </Section>
 
                 {/* ---- 存储与缓存 ---- */}
-                <Section title="存储与缓存">
-                    <SettingRow label="工作缓存目录" desc="下载缓存、解包与构建中间产物">
+                <Section title={t("settings.storage-cache", "存储与缓存")}>
+                    <SettingRow label={t("settings.cache-folder", "工作缓存目录")} desc={t("settings.download-cache-extraction", "下载缓存、解包与构建中间产物")}>
                         <TextInput
                             plain
                             icon={Folder}
@@ -391,27 +461,34 @@ export function SettingsPage() {
                             className="w-[300px] cursor-pointer"
                         />
                         <Btn size="sm" onClick={() => void pickDir("cacheDir")}>
-                            选择
+                            {t("settings.choose", "选择")}
                         </Btn>
                     </SettingRow>
                     <SettingRow
-                        label="下载缓存"
+                        label={t("settings.download-cache", "下载缓存")}
                         desc={
                             !usage
-                                ? "占用统计中…"
+                                ? t("settings.counting-usage", "占用统计中…")
                                 : usage.filesCount === 0
-                                  ? "还没有下载过模组文件"
-                                  : `${usage.filesCount} 个文件 · ${formatSize(usage.filesBytes)}` +
+                                  ? t("settings.mod-files", "还没有下载过模组文件")
+                                  : t("settings.count-file", "{{count}} 个文件 · {{size}}", {
+                                        count: usage.filesCount,
+                                        size: formatSize(usage.filesBytes),
+                                    }) +
                                     (usage.staleCount > 0
-                                        ? `｜${usage.staleDays} 天未再使用 ${usage.staleCount} 个 · ${formatSize(usage.staleBytes)}`
-                                        : `｜${usage.staleDays} 天内都用过，没有过期项`) +
+                                        ? t("settings.count-file-unused", "｜{{days}} 天未再使用 {{count}} 个 · {{size}}", {
+                                              days: usage.staleDays,
+                                              count: usage.staleCount,
+                                              size: formatSize(usage.staleBytes),
+                                          })
+                                        : t("settings.used-days", "｜{{days}} 天内都用过，没有过期项", { days: usage.staleDays })) +
                                     // 灰掉的按钮悬不出气泡（pointer-events 关了），所以这句话得写在明面上
-                                    (usage.busy ? "｜转换进行中，暂不能清空全部" : "")
+                                    (usage.busy ? t("settings.converting-clear", "｜转换进行中，暂不能清空全部") : "")
                         }
                     >
                         <IconBtn
                             icon={RefreshCw}
-                            title="重新统计占用"
+                            title={t("settings.recount-usage", "重新统计占用")}
                             /* 转圈只给图标本体（`[&>svg]`），不给按钮：整块转会把悬停底色和
                              * 按压缩放一起带歪。禁用态照 `cleaning` 那一档的规矩灰下来，
                              * 顺带挡住连点——两趟扫描并发回话会是后发先至的假数字。 */
@@ -424,7 +501,7 @@ export function SettingsPage() {
                             disabled={!usage || usage.staleCount === 0 || !!cleaning}
                             onClick={() => void runClean("stale")}
                         >
-                            {cleaning === "stale" ? "清理中…" : "清过期"}
+                            {cleaning === "stale" ? t("settings.cleaning", "清理中…") : t("settings.clean-expired", "清过期")}
                         </Btn>
                         <Btn
                             size="sm"
@@ -434,18 +511,23 @@ export function SettingsPage() {
                             }
                             onClick={() => void runClean("all")}
                         >
-                            {cleaning === "all" ? "清理中…" : "清空全部"}
+                            {cleaning === "all" ? t("settings.cleaning", "清理中…") : t("settings.clear", "清空全部")}
                         </Btn>
                     </SettingRow>
                     <SettingRow
-                        label="无用文件"
+                        label={t("settings.junk-files", "无用文件")}
                         desc={
                             !usage
-                                ? "占用统计中…"
+                                ? t("settings.counting-usage", "占用统计中…")
                                 : junkCount(usage) === 0
-                                  ? "下载错误、崩溃留下的暂存目录、空壳目录"
-                                  : `${junkBytes(usage) ? `${formatSize(junkBytes(usage))}：` : ""}半截下载 ${usage.partsCount} 个 · 残留暂存 ${usage.orphanCount} 个 · 空壳目录 ${usage.emptyDirs} 个` +
-                                    (usage.busy ? "｜转换进行中，正在写的半截下载不计入" : "")
+                                  ? t("settings.leftover-staging", "下载错误、崩溃留下的暂存目录、空壳目录")
+                                  : `${junkBytes(usage) ? `${formatSize(junkBytes(usage))}：` : ""}` +
+                                    t("settings.parts-partial", "半截下载 {{parts}} 个 · 残留暂存 {{orphan}} 个 · 空壳目录 {{empty}} 个", {
+                                        parts: usage.partsCount,
+                                        orphan: usage.orphanCount,
+                                        empty: usage.emptyDirs,
+                                    }) +
+                                    (usage.busy ? t("settings.converting-partial", "｜转换进行中，正在写的半截下载不计入") : "")
                         }
                     >
                         <Btn
@@ -454,34 +536,34 @@ export function SettingsPage() {
                             disabled={!usage || !!cleaning}
                             onClick={() => void runClean("junk")}
                         >
-                            {cleaning === "junk" ? "清理中…" : "清理"}
+                            {cleaning === "junk" ? t("settings.cleaning", "清理中…") : t("settings.clean", "清理")}
                         </Btn>
                     </SettingRow>
                 </Section>
 
                 {/* ---- 网络 ---- */}
-                <Section title="网络">
-                    <SettingRow label="下载源" desc="版本表与加载器 jar 优先走国内镜像，不通自动回落官方">
+                <Section title={t("settings.network", "网络")}>
+                    <SettingRow label={t("settings.download-source", "下载源")} desc={t("settings.prefer-cn", "版本表与加载器 jar 优先走国内镜像，不通自动回落官方")}>
                         <SearchSelect
                             plain
                             value={settings.downloadSource}
                             options={sources}
                             onChange={(v) => void patch({ downloadSource: v as AppSettings["downloadSource"] })}
-                            className="w-[160px]"
+                            className="w-[196px]"
                         />
                     </SettingRow>
                     <SettingRow
                         label="CurseForge API Key"
                         desc={
                             settings.curseforgeApiKey
-                                ? "已配置：网络添加里的 CurseForge 搜索与构建列表可用"
-                                : "未配置：CurseForge API Key，点「获取」填表申请"
+                                ? t("settings.set-curseforge", "已配置：网络添加里的 CurseForge 搜索与构建列表可用")
+                                : t("settings.set-use", "未配置：CurseForge API Key，点「获取」填表申请")
                         }
                     >
                         <TextInput
                             plain
                             value={cfKey}
-                            placeholder="粘贴 API Key"
+                            placeholder={t("settings.paste-api", "粘贴 API Key")}
                             spellCheck={false}
                             autoComplete="off"
                             className="w-[220px]"
@@ -497,12 +579,12 @@ export function SettingsPage() {
                             icon={ExternalLink}
                             onClick={() => void api.openExternal(api.CURSEFORGE_APPLY_FORM)}
                         >
-                            获取
+                            {t("settings.get", "获取")}
                         </Btn>
                     </SettingRow>
                     <SettingRow
-                        label="联网反查端信息"
-                        desc="包内证据不足时，按 sha1 向 Modrinth 查该构建的端支持度并本地缓存"
+                        label={t("settings.online-side", "联网反查端信息")}
+                        desc={t("settings.query-modrinth", "包内证据不足时，按 sha1 向 Modrinth 查该构建的端支持度并本地缓存")}
                     >
                         <Toggle
                             size="md"
@@ -511,8 +593,8 @@ export function SettingsPage() {
                         />
                     </SettingRow>
                     <SettingRow
-                        label="并发下载数"
-                        desc="同时拉取模组 jar 与反查端信息的线程数（1–16）"
+                        label={t("settings.parallel-downloads", "并发下载数")}
+                        desc={t("settings.threads-mod", "同时拉取模组 jar 与反查端信息的线程数（1–16）")}
                     >
                         <Stepper
                             plain
@@ -525,32 +607,51 @@ export function SettingsPage() {
                 </Section>
 
                 {/* ---- 外观与关于 ---- */}
-                <Section title="外观与关于">
-                    <SettingRow label="主题" desc="默认跟随系统，也可锁定浅色 / 深色">
+                <Section title={t("settings.appearance-about", "外观与关于")}>
+                    <SettingRow
+                        label={t("settings.language", "界面语言")}
+                        desc={
+                            settings.locale === "auto"
+                                ? t("settings.follows-system", "跟随系统（当前：{{name}}）", { name: endonymOf(systemLocale()) })
+                                : t("settings.pinned-choice-longer", "已按你的选择固定，不再随系统语言变化")
+                        }
+                    >
+                        {/* 四档一行下拉，不用 SegTabs：English/繁體中文 这类自称当分段标签会把行撑得比别处宽 */}
+                        <SearchSelect
+                            plain
+                            value={settings.locale}
+                            options={localeOptions(t)}
+                            onChange={(v) => void chooseLocale(v as AppLocale)}
+                            className="w-[184px]"
+                        />
+                    </SettingRow>
+                    <SettingRow label={t("settings.theme", "主题")} desc={t("settings.defaults-system", "默认跟随系统，也可锁定浅色 / 深色")}>
                         {/* 圆心取被点的那一格：胶囊滑到位之后颜色才从它铺开，两处入口时序一致 */}
-                        <SegTabs items={THEME_TABS} value={theme} onChange={(t, el) => switchTheme(t, el)} />
+                        <SegTabs items={themeTabs()} value={theme} onChange={(t, el) => switchTheme(t, el)} />
                     </SettingRow>
                     <SettingRow
-                        label="更新渠道"
+                        label={t("settings.update-channel", "更新渠道")}
                         desc={
                             settings.updateChannel
-                                ? "已按你的选择固定，不再看本机版本号判档"
-                                : `未固定：跟随当前构建（现在收${channelLabel(channelOf(settings))}）`
+                                ? t("settings.pinned-choice", "已按你的选择固定，不再看本机版本号判档")
+                                : t("settings.pinned-follows", "未固定：跟随当前构建（现在收{{channel}}）", {
+                                      channel: channelLabel(channelOf(settings)),
+                                  })
                         }
                     >
                         <SegTabs
-                            items={CHANNEL_TABS}
+                            items={channelTabs()}
                             value={channelOf(settings)}
                             onChange={chooseChannel}
                         />
                     </SettingRow>
                     <SettingRow
-                        label="版本"
+                        label={t("settings.version", "版本")}
                         descMono
                         desc={`v${api.APP_VERSION}`}
                     >
                         <Btn size="sm" icon={RefreshCw} onClick={() => void checkUpdate()}>
-                            {UPDATE_LABEL[update]}
+                            {updateLabel(update)}
                         </Btn>
                     </SettingRow>
                 </Section>
@@ -562,24 +663,25 @@ export function SettingsPage() {
                 onClose={() => setConfirmBeta(false)}
                 persistent
                 width={420}
-                title="切到测试版（Beta）渠道"
-                sub="之后「检查更新」找到的是还没定型的测试包"
+                title={t("settings.switch-beta", "切到测试版（Beta）渠道")}
+                sub={t("settings.check-updates", "之后「检查更新」找到的是还没定型的测试包")}
                 icon={FlaskConical}
-                footerNote="随时能切回正式版；测试包可能带着没测出来的问题"
+                footerNote={t("settings.switch-back", "随时能切回正式版；测试包可能带着没测出来的问题")}
                 footerActions={
                     <>
                         <Btn size="sm" onClick={() => setConfirmBeta(false)}>
-                            取消
+                            {t("common.cancel", "取消")}
                         </Btn>
                         <Btn size="sm" variant="primary" onClick={() => void confirmBetaChannel()}>
-                            确认切换
+                            {t("settings.confirm-switch", "确认切换")}
                         </Btn>
                     </>
                 }
             >
                 <p className="text-[12px] leading-[20px] text-text-2">
-                    测试版先拿到新功能，也先拿到新问题：转换结果、任务存档都可能出没见过的状况。
-                    建议只在愿意顺手报 bug 的时候切过来。
+                    {t(
+                        "settings.beta-gets", "测试版先拿到新功能，也先拿到新问题：转换结果、任务存档都可能出没见过的状况。建议只在愿意顺手报 bug 的时候切过来。"
+                    )}
                 </p>
             </ModalShell>
         </motion.div>
@@ -603,15 +705,16 @@ function Section({ title, children }: { title: string; children: ReactNode }) {
 
 /** 读设置的往返期间占位：按真实分组与行数排，免得整页先白一下再蹦出内容 */
 function SettingsSkeleton() {
+    const t = useT();
     const groups: Array<[string, number]> = [
-        ["转换选项", 2],
-        ["存储与缓存", 3],
-        ["网络", 5],
-        ["外观与关于", 3],
+        [t("settings.conversion-options", "转换选项"), 2],
+        [t("settings.storage-cache", "存储与缓存"), 3],
+        [t("settings.network", "网络"), 5],
+        [t("settings.appearance-about", "外观与关于"), 4],
     ];
     return (
         <div className="flex flex-col gap-5 py-6">
-            <PageHeader compact title="设置" sub="转换行为、存储、网络与外观偏好" />
+            <PageHeader compact title={t("common.settings", "设置")} sub={t("settings.conversion-storage", "转换行为、存储、网络与外观偏好")} />
             <div className="flex w-full flex-col gap-5">
                 {groups.map(([title, rows]) => (
                     <Section key={title} title={title}>

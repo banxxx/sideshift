@@ -14,6 +14,7 @@
  */
 import { useEffect, useMemo, useState } from "react";
 import * as api from "@/lib/api";
+import { useT } from "@/lib/i18n";
 import { loaderLabel, reviewFirst } from "@/lib/format";
 import type {
     ConversionOptions,
@@ -35,6 +36,7 @@ export function PlanReviewView({
     taskId: string;
     manifest: PackManifest;
 }) {
+    const t = useT();
     const [options, setOptions] = useState<ConversionOptions | null>(null);
     const [plan, setPlan] = useState<PlanMod[]>([]);
     const [packDirs, setPackDirs] = useState<PackDirNode[]>([]);
@@ -134,7 +136,7 @@ export function PlanReviewView({
                 classifying={false}
                 totalRows={plan.length}
                 readingLabel=""
-                emptyLabel="该任务暂无可用的方案记录"
+                emptyLabel={t("convert.plan-saved", "该任务暂无可用的方案记录")}
                 depWarnings={depWarnings}
                 localIds={localIds}
                 removableIds={new Set<string>()}

@@ -16,6 +16,7 @@
 import { Trash2 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { Btn, ModalShell } from "@/components/ui";
+import { useT } from "@/lib/i18n";
 import { notify } from "@/lib/notify";
 import { clearDeleted, useTrash } from "@/lib/trash-store";
 import { cn } from "@/lib/utils";
@@ -54,6 +55,7 @@ const SQUASH: Keyframe[] = [
 ];
 
 export function TrashBin() {
+    const t = useT();
     const entries = useTrash();
     const count = entries.length;
     const shown = count > 0;
@@ -85,9 +87,12 @@ export function TrashBin() {
     const empty = async () => {
         try {
             const n = await clearDeleted();
-            notify(`已清空回收站，${n} 条记录的暂存文件一并删除`, "info");
+            notify(t("tasks.trash-emptied-count", "已清空回收站，{{count}} 条记录的暂存文件一并删除", { count: n }), "info");
         } catch (e) {
-            notify(`清空回收站失败：${e instanceof Error ? e.message : String(e)}`, "error");
+            notify(
+                t("tasks.couldn-empty", "清空回收站失败：{{reason}}", { reason: e instanceof Error ? e.message : String(e) }),
+                "error"
+            );
         }
     };
 
@@ -140,7 +145,7 @@ export function TrashBin() {
                 ref={btnRef}
                 type="button"
                 data-trash-bin=""
-                aria-label="回收站"
+                aria-label={t("tasks.trash", "回收站")}
                 aria-hidden={!shown}
                 tabIndex={shown ? 0 : -1}
                 className={cn(
@@ -196,10 +201,10 @@ export function TrashBin() {
                 persistent
                 width={560}
                 height={420}
-                title="回收站"
+                title={t("tasks.trash", "回收站")}
                 icon={Trash2}
-                sub={`本次会话删除的 ${count} 条任务 · 关闭应用后自动清空`}
-                footerNote="撤回会把任务原样放回列表；清空才会删掉它的暂存文件"
+                sub={t("tasks.count-task", "本次会话删除的 {{count}} 条任务 · 关闭应用后自动清空", { count })}
+                footerNote={t("tasks.restore-returns", "撤回会把任务原样放回列表；清空才会删掉它的暂存文件")}
                 footerActions={
                     <>
                         <Btn
@@ -208,10 +213,10 @@ export function TrashBin() {
                             disabled={count === 0}
                             onClick={() => void empty()}
                         >
-                            清空
+                            {t("tasks.clear", "清空")}
                         </Btn>
                         <Btn size="xs" onClick={() => setOpen(false)}>
-                            关闭
+                            {t("common.close", "关闭")}
                         </Btn>
                     </>
                 }
