@@ -45,8 +45,16 @@ function remove(id: number) {
     emit();
 }
 
-/** 推入一条提示；返回 id，可提前 dismissNotice。超上限时立即挤掉最早一条 */
+/** 推入一条提示；返回 id，可提前 dismissNotice。超上限时立即挤掉最早一条。
+ *  同一句话（同 kind 同文案）不重复挂卡：已经在屏上就只把它的停留时间重新计一遍。
+ *  同一事件被推多次、或人连着点同一个动作时，提示区不该长出三张一模一样的卡。 */
 export function notify(text: string, kind: NoticeKind = "info"): number {
+    const dup = notices.find((n) => n.text === text && n.kind === kind);
+    if (dup) {
+        clearTimeout(timers.get(dup.id));
+        timers.set(dup.id, setTimeout(() => remove(dup.id), DURATIONS[kind]));
+        return dup.id;
+    }
     const id = ++seq;
     notices = [...notices.slice(-(MAX_VISIBLE - 1)), { id, kind, text }];
     if (notices.length > MAX_VISIBLE) remove(notices[0].id);

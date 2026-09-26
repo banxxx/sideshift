@@ -27,6 +27,77 @@ pub enum DownloadError {
     Refused(String),
 }
 
+/// 只取主机名：`https://api.modrinth.com/v2/x?y=1` → `api.modrinth.com`。
+/// 界面要说「谁没响应」，路径与查询串对使用者是噪声，对排查者也不如状态码有用。
+pub fn host_of(url: &str) -> &str {
+    let tail = url.split_once("://").map(|(_, r)| r).unwrap_or(url);
+    let host = tail.split(['/', '?', '#']).next().unwrap_or(tail);
+    if host.is_empty() {
+        "unknown"
+    } else {
+        host
+    }
+}
+
+/// 状态码 → 失败种类。`0` = 根本没收到响应（断网 / DNS / 超时 / 被掐），
+/// 对用户来说这三种的表现就是同一句话，所以不再分；认不出的码原样带上，界面上不显示，
+/// 但会留在「复制诊断信息」里。
+fn net_kind(status: u16) -> &'static str {
+    match status {
+        0 => "offline",
+        401 | 403 => "denied",
+        404 => "notfound",
+        429 => "busy",
+        500..=599 => "server",
+        _ => "http",
+    }
+}
+
+/// 一条稳定代码（`net:种类:主机[:状态码]`）：前端 `errOf()` 据此挑本地化文案。
+pub fn net_code(url: &str, status: u16) -> String {
+    let host = host_of(url);
+    let kind = net_kind(status);
+    if kind == "http" {
+        return format!("net:{kind}:{host}:{status}");
+    }
+    format!("net:{kind}:{host}")
+}
+
+/// 不经 `Downloader` 的那几条 reqwest 调用（`check_update` 直连 GitHub）走同一套代码，
+/// 否则界面会露出 reqwest 自己那句英文 `error sending request for url (...)`。
+pub fn reqwest_code(e: &reqwest::Error, url: &str) -> String {
+    match e.status() {
+        Some(s) => net_code(url, s.as_u16()),
+        None if e.is_timeout() => format!("net:timeout:{}", host_of(url)),
+        None => net_code(url, 0),
+    }
+}
+
+impl DownloadError {
+    /// 能归类的出代码，归不了类的回 `None`（那句本来就是写给人看的中文，套码反而丢信息）
+    pub fn net_code(&self) -> Option<String> {
+        Some(match self {
+            DownloadError::Http { url, status } => net_code(url, *status),
+            // `NotFound` 的 payload 有两种形状：一条 URL（client.rs 的「候选链全部没拿到」）
+            // 和一个模组名/中文短语（`cloth-config`、「CurseForge 构建 x/y 的下载链接」）。
+            // 只有前者能说出「是谁没找到」；把短语当主机名喂给界面会吐出一句乱码 ⇒ 归不了类，原句照旧
+            DownloadError::NotFound(s) if s.contains("://") => net_code(s, 404),
+            DownloadError::NotFound(_) => return None,
+            DownloadError::Api(_) => "net:parse".to_string(),
+            DownloadError::Io(_) => "net:io".to_string(),
+            // attempts=0 的 `Failed` 是包内/本地读失败，不是网络的事，保留原句
+            DownloadError::Failed { attempts: 0, .. } => return None,
+            DownloadError::Failed { .. } => "net:retry".to_string(),
+            DownloadError::Refused(_) => return None,
+        })
+    }
+
+    /// 过 IPC 的错误载荷：有代码出代码，没代码出原本那句中文
+    pub fn ipc_msg(&self) -> String {
+        self.net_code().unwrap_or_else(|| self.to_string())
+    }
+}
+
 /// 文件来源：远程 URL、本地 zip 包内条目（裸 zip 整合包免网络直提）、或本地单文件
 #[derive(Debug, Clone)]
 pub enum Fetch {
@@ -99,3 +170,78 @@ pub struct TransferProgress {
 }
 
 pub(crate) type OnTransfer = dyn Fn(&TransferProgress) + Send + Sync;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn http(url: &str, status: u16) -> DownloadError {
+        DownloadError::Http {
+            url: url.to_string(),
+            status,
+        }
+    }
+
+    #[test]
+    fn only_the_host_survives_into_the_code() {
+        // 这条断言就是本次改动的靶心：路径与查询串不许跟着进界面
+        assert_eq!(
+            net_code("https://api.modrinth.com/v2/project/cloth-config/version?page=1", 0),
+            "net:offline:api.modrinth.com"
+        );
+        assert_eq!(host_of("api.curseforge.com/v1/b"), "api.curseforge.com");
+        assert_eq!(host_of(""), "unknown");
+    }
+
+    #[test]
+    fn status_codes_fold_into_kinds_and_the_rest_keep_the_number() {
+        assert_eq!(net_code("u", 403), "net:denied:u");
+        assert_eq!(net_code("u", 401), "net:denied:u");
+        assert_eq!(net_code("u", 404), "net:notfound:u");
+        assert_eq!(net_code("u", 429), "net:busy:u");
+        assert_eq!(net_code("u", 503), "net:server:u");
+        // 认不出的码：种类是 http、原值留在最后一段（界面不显示，诊断信息里有）
+        assert_eq!(net_code("u", 418), "net:http:u:418");
+    }
+
+    #[test]
+    fn errors_that_are_already_plain_chinese_stay_verbatim() {
+        // 缺 Key 那句要给「去设置里填」的出口，套上代码就把意思抽掉了
+        let refused = DownloadError::Refused("还没有配置 CurseForge API Key".into());
+        assert_eq!(refused.net_code(), None);
+        assert_eq!(refused.ipc_msg(), "还没有配置 CurseForge API Key");
+        // 没重试过的 Failed = 包内/本地读失败，不是网络的事
+        let local = DownloadError::Failed {
+            file_name: "x.jar".into(),
+            attempts: 0,
+            cause: "包内没有这个条目".into(),
+        };
+        assert_eq!(local.net_code(), None);
+        // NotFound 装的是模组名/中文短语时，那句已经是给人看的话，别把「构建 x/y」当域名说出去
+        let named = DownloadError::NotFound("CurseForge 构建 1/2 的下载链接".into());
+        assert_eq!(named.net_code(), None);
+        assert_eq!(named.ipc_msg(), "未找到可用版本：CurseForge 构建 1/2 的下载链接");
+    }
+
+    #[test]
+    fn network_shaped_errors_become_codes() {
+        assert_eq!(
+            http("https://meta.modrinth.cn/x", 500).ipc_msg(),
+            "net:server:meta.modrinth.cn"
+        );
+        assert_eq!(
+            DownloadError::NotFound("https://api.modrinth.com/x".into()).ipc_msg(),
+            "net:notfound:api.modrinth.com"
+        );
+        assert_eq!(
+            DownloadError::Api(serde_json::from_str::<u8>("not json").unwrap_err()).ipc_msg(),
+            "net:parse"
+        );
+        let retried = DownloadError::Failed {
+            file_name: "x.jar".into(),
+            attempts: 3,
+            cause: "https://y 请求失败（HTTP 500）".into(),
+        };
+        assert_eq!(retried.ipc_msg(), "net:retry");
+    }
+}

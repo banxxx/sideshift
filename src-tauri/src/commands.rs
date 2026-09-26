@@ -9,7 +9,7 @@ use tauri_plugin_opener::OpenerExt;
 
 use crate::core::cleanup;
 use crate::core::detector;
-use crate::core::downloader::Downloader;
+use crate::core::downloader::{Downloader, net_code, reqwest_code};
 use crate::core::env;
 use crate::core::java;
 use crate::core::parser;
@@ -92,7 +92,7 @@ pub async fn list_mc_versions(state: S<'_>) -> Result<Vec<VersionOption>, String
     downloader_of(&state)
         .list_mc_versions()
         .await
-        .map_err(|e| e.to_string())
+        .map_err(|e| e.ipc_msg())
 }
 
 #[tauri::command]
@@ -106,7 +106,7 @@ pub async fn list_loader_versions(
     downloader_of(&state)
         .list_loader_versions(&mc_version, loader)
         .await
-        .map_err(|e| e.to_string())
+        .map_err(|e| e.ipc_msg())
 }
 
 /// 本机 JDK 探测（Rust: `probe_java`）。开关打开时这条要在**点转换之前**就在转换页上看得见：
@@ -266,6 +266,8 @@ fn current_plan(state: &S<'_>) -> Vec<PlanMod> {
 /// `force=false` 且这一包的端证据还在缓存里（= 同一个包第二次问）时直接复用取证结果：
 /// 离线探测整轮跳过（那是这页最贵的重复劳动），方案按当前设置现算。
 /// `force=true`（「重新自动分类」按钮）永远真重探一遍。
+/// 但**联网那一轮不叠**：这一包已经有一轮在跑就不再起第二轮，离线重探照常做，
+/// 剩下的行由在跑那一轮收尾时一起推（`online_pending=true` 让前端继续转圈）。
 #[tauri::command]
 pub async fn classify_pack(
     app: AppHandle,
@@ -379,13 +381,17 @@ pub async fn classify_pack(
     let plan = detector::build_plan(&parsed, strip, &ev, &code);
     // 离线那次推送：还有在线层要跑就说明本轮没结束（done=false，前端继续转圈）
     let offline_final = !online || pending.is_empty();
+    // 这一包是否已经有一轮联网反查在飞。**必须在下面立标记之前读**——那个标记写的就是
+    // 「本轮还要联网」，先写后读会永远读到「有人在跑」，于是第二轮起不来、剩下的行再没人查。
+    let round_running = !offline_final && online_running_of(&lock(&state));
     {
         let mut inner = lock(&state);
         inner.env_evidence = ev.clone();
         inner.env_code = code;
         inner.env_evidence_file = Some(file_name.clone());
-        // 本轮确实还要联网：立个标记，让之后的缓存命中路径知道「结论还没最终化」
-        if !offline_final {
+        // 本轮确实还要联网：立个标记，让之后的缓存命中路径知道「结论还没最终化」。
+        // 已有轮在跑时不重立：标记归那一轮清，我们这一趟并不起新轮，清了会把它的收尾闸门拆掉
+        if !offline_final && !round_running {
             inner.env_online_file = Some(file_name.clone());
         }
     }
@@ -399,6 +405,29 @@ pub async fn classify_pack(
 
     // 在线层：只查离线没答上的那些行
     if online && !pending.is_empty() {
+        // 同一包的联网轮不叠第二个：上一轮还在跑就把这一轮的收尾交给它。
+        // 叠轮不只是多几条提示——两三轮查的是同一批行，白付一遍请求和时间，
+        // 而每一轮各推一次收尾，前端就把同一句结论报好几遍。
+        if round_running {
+            // 方案现算、标记现读：那一轮可能刚好在这一趟期间收尾并把结论并进了证据表——
+            // 拿上面那份离线 plan 回去会把它的结果吐掉，硬报 online_pending=true 则让前端一直转圈
+            let (fresh, still_running) = {
+                let g = lock(&state);
+                let p = last_parsed_of(&g).map(|parsed| {
+                    detector::build_plan(
+                        &parsed,
+                        g.settings.strip_client_only,
+                        &g.env_evidence,
+                        &g.env_code,
+                    )
+                });
+                (p, g.env_online_file.as_deref() == Some(file_name.as_str()))
+            };
+            return Ok(PlanClassification {
+                plan: fresh.unwrap_or(plan),
+                online_pending: still_running,
+            });
+        }
         let app = app.clone();
         let state = state.inner().clone();
         let targets = targets.clone();
@@ -410,6 +439,15 @@ pub async fn classify_pack(
                 .lock()
                 .map(|g| g.env_evidence.clone())
                 .unwrap_or_default();
+            // 本轮会改写哪些行：收尾时按这份清单增量并回，不整表覆盖
+            let touched: Vec<String> = pending
+                .iter()
+                .map(|i| targets[*i].path.clone())
+                .collect();
+            // 联网轮的读数（诊断用）：一次真请求至少一两百毫秒，所以"待查 N 行 + 用时几毫秒"
+            // 就是"这一轮一条请求都没发出去"的铁证。发请求那条链在 Rust 进程里（不是 webview），
+            // 前端的 Network 面板永远看不到，只能从这里出。
+            let started = std::time::Instant::now();
             // 整轮墙钟预算：单次请求已经各掐 10s（downloader::client::METADATA_TIMEOUT），
             // 这一档掐的是"一百多个各慢一点"累出来的总账。到点就掐——`resolve_online` 按批
             // 落盘、结论又是就地写进 `ev` 的，所以已拿到的那部分照常生效（`out` 借用留在原地），
@@ -431,19 +469,42 @@ pub async fn classify_pack(
                 Ok(ok) => ok,
                 Err(_) => false,
             };
+            let answered = touched.iter().filter(|p| ev.contains_key(p.as_str())).count();
+            println!(
+                "[env] 源={} 待查 {} 行 → 有结论 {} 行 · 完整={} · 用时 {}ms",
+                if mirror { "麦块" } else { "官方" },
+                pending.len(),
+                answered,
+                complete,
+                started.elapsed().as_millis()
+            );
             let (plan, file) = {
                 let mut g = lock(&state);
+                // 本轮收尾：只摘自己的标记。必须在下面换包那道闸门**之前**清——换包时这一趟会
+                // 直接 return，写在闸门后面就永远清不掉；而标记留着，下次回到这个包会被
+                // `round_running` 当成「还有一轮在跑」，于是那一包再也不会起联网轮（静默零请求）。
+                // 换包那一趟已把标记写成新包的名字，所以这条 `== file_name` 的判断仍不会替它清。
+                if g.env_online_file.as_deref() == Some(file_name.as_str()) {
+                    g.env_online_file = None;
+                }
                 // 反查期间用户可能换了包：不是同一个包就不落库、不推事件
                 if g.env_evidence_file.as_deref() != Some(file_name.as_str()) {
                     return;
                 }
-                // 本轮收尾：只摘自己的标记（换包后重跑的那一轮另立了标记，别替它清）
-                if g.env_online_file.as_deref() == Some(file_name.as_str()) {
-                    g.env_online_file = None;
+                // 只并回本轮查到的那些行，不整表覆盖：反查期间用户可能又点了一次「重新自动分类」，
+                // 那一趟刚写过一批新的离线证据（还带着新的字节码事实），整表替换会把它们抹掉
+                for path in &touched {
+                    if let Some(one) = ev.get(path) {
+                        g.env_evidence.insert(path.clone(), *one);
+                    }
                 }
-                g.env_evidence = ev.clone();
                 let plan = last_parsed_of(&g).map(|p| {
-                    detector::build_plan(&p, g.settings.strip_client_only, &ev, &g.env_code)
+                    detector::build_plan(
+                        &p,
+                        g.settings.strip_client_only,
+                        &g.env_evidence,
+                        &g.env_code,
+                    )
                 });
                 (plan, file_name.clone())
             };
@@ -620,7 +681,7 @@ pub async fn search_mods(
     let page = downloader_of(&state)
         .search_mods(&query)
         .await
-        .map_err(|e| e.to_string())?;
+        .map_err(|e| e.ipc_msg())?;
     let added: Vec<String> = current_plan(&state)
         .into_iter()
         .filter(|m| m.disposition == ModDisposition::Add)
@@ -651,7 +712,7 @@ pub async fn list_mod_versions(
     downloader_of(&state)
         .list_mod_versions(source, &mod_id, &mc)
         .await
-        .map_err(|e| e.to_string())
+        .map_err(|e| e.ipc_msg())
 }
 
 #[tauri::command]
@@ -662,7 +723,7 @@ pub async fn list_mod_categories(
     downloader_of(&state)
         .list_mod_categories(source)
         .await
-        .map_err(|e| e.to_string())
+        .map_err(|e| e.ipc_msg())
 }
 
 /// 详情页那枚「翻译」按钮要的中文译文（麦块镜像 `detail/{slug}` 的 `title_zh` + `description_zh`，
@@ -679,7 +740,7 @@ pub async fn mod_translate_zh(
     downloader_of(&state)
         .translate_zh(source, &slug)
         .await
-        .map_err(|e| e.to_string())
+        .map_err(|e| e.ipc_msg())
 }
 
 /* ---------------- 任务生命周期 ---------------- */
@@ -849,22 +910,22 @@ pub async fn check_update(app: AppHandle, state: S<'_>) -> Result<UpdateInfo, St
     let want_prerelease = picked.map(|c| c == UpdateChannel::Beta).unwrap_or(!cur.pre.is_empty());
 
     let dl = downloader_of(&state);
+    const UPDATE_URL: &str = "https://api.github.com/repos/banxxx/sideshift/releases?per_page=30";
     let v = dl
         .client
-        .get("https://api.github.com/repos/banxxx/sideshift/releases?per_page=30")
+        .get(UPDATE_URL)
         .send()
         .await
-        .map_err(|e| e.to_string())?
+        .map_err(|e| reqwest_code(&e, UPDATE_URL))?
         .json::<serde_json::Value>()
         .await
-        .map_err(|e| e.to_string())?;
-    // 仓库还没有任何 release 时 GitHub 回的是 `{"message": "Not Found"}` 对象，不是数组：
-    // 这句话要原样递到界面上，不能装作"已是最新版本"
+        .map_err(|e| reqwest_code(&e, UPDATE_URL))?;
+    // 仓库还没有任何 release 时 GitHub 回的是 `{"message": "Not Found"}` 对象，不是数组。
+    // 失败这件事要原样递到界面上（不能装作"已是最新版本"），但它那句英文不用：按同一口径归类，
+    // 前端出「GitHub 上没有找到对应内容」。限流单独归 `busy`——两者给用户的下一动作不一样
     let list = v.as_array().ok_or_else(|| {
-        v["message"]
-            .as_str()
-            .unwrap_or("更新列表返回了意外结构")
-            .to_string()
+        let msg = v["message"].as_str().unwrap_or("");
+        net_code(UPDATE_URL, if msg.contains("rate limit") { 429 } else { 404 })
     })?;
 
     let mut best: Option<semver::Version> = None;

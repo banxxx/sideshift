@@ -18,6 +18,7 @@ import { useEffect, useRef, useState } from "react";
 import { Btn, ModalShell } from "@/components/ui";
 import { useT } from "@/lib/i18n";
 import { notify } from "@/lib/notify";
+import { errOf } from "@/lib/errors";
 import { clearDeleted, useTrash } from "@/lib/trash-store";
 import { cn } from "@/lib/utils";
 import { TrashList } from "./TrashModal";
@@ -90,7 +91,7 @@ export function TrashBin() {
             notify(t("tasks.trash-emptied-count", "已清空回收站，{{count}} 条记录的暂存文件一并删除", { count: n }), "info");
         } catch (e) {
             notify(
-                t("tasks.couldn-empty", "清空回收站失败：{{reason}}", { reason: e instanceof Error ? e.message : String(e) }),
+                t("tasks.couldn-empty", "清空回收站失败：{{reason}}", { reason: errOf(e) }),
                 "error"
             );
         }

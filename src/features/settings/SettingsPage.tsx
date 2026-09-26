@@ -20,7 +20,8 @@ import { notify, type NoticeKind } from "@/lib/notify";
 import { CARD_RISE, PAGE_RISE } from "@/lib/page-motion";
 import { usePackStore } from "@/lib/pack-store";
 import { switchTheme, useTheme, type Theme } from "@/lib/theme";
-import { LOCALE_OPTIONS, LOCALE_TO_WIRE, applyLocaleChoice, systemLocale, t, tSource, useT, type AppLocale, type Locale, type TranslateFn } from "@/lib/i18n";
+import { LOCALE_OPTIONS, LOCALE_TO_WIRE, applyLocaleChoice, systemLocale, t, useT, type AppLocale, type Locale, type TranslateFn } from "@/lib/i18n";
+import { errOf } from "@/lib/errors";
 import type { AppSettings, CacheUsage, CleanReport, UpdateChannel } from "@/lib/types";
 import { cn } from "@/lib/utils";
 import {
@@ -97,22 +98,6 @@ const envLookupOptions = (t: TranslateFn): SelectOption[] => [
 /** 生效档 → 自称（「跟随系统」那行的说明要说出现在实际是哪一档） */
 const endonymOf = (lng: Locale) =>
     LOCALE_OPTIONS.find((o) => o.value === LOCALE_TO_WIRE[lng])?.label ?? lng;
-
-/** invoke reject 回来的可能是 Error 也可能是 Rust 的字符串消息。
- *  Rust 那边有一批写死的句子（闸门、存档失败…）会直接进提示区，所以这里过一遍目录：
- *  查得到就翻，查不到（带文件名的诊断串）原样出中文。 */
-const errOf = (e: unknown) =>
-    tSource(
-        /*i18n:
-            有任务正在转换或排队中，清空缓存会删掉它在用的文件
-            找不到应用配置目录，设置未能保存
-            这条任务已经不在列表里（可能刚被撤回或重复删除）
-            更新列表返回了意外结构
-            回收站里已经没有这条任务（可能刚被清空）
-            任务列表里已经有这条任务，撤回没有执行
-        */
-        e instanceof Error ? e.message : String(e)
-    );
 
 /** 三种清理：无用文件 / 只清过期缓存 / 清空全部缓存 */
 type CleanKind = "junk" | "stale" | "all";

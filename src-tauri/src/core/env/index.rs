@@ -127,10 +127,16 @@ pub fn apply_index(index: &EnvIndex, targets: &[Target], out: &mut EvidenceMap) 
     pending
 }
 
-/// 逐行项目/搜索反查的请求上限：超大包剩下的行留未判定（离线结论照常有效），
-/// 免得一次转换打满 Modrinth 限流（300 req/min）影响后续下载。
-/// 限流按**总请求数**算，所以下面那点并发只压时间、不抬高总量，与这一档不冲突。
+/// 逐行项目/搜索反查的请求上限：超大包剩下的行留未判定（方案照出，不为一轮跑上几分钟）。
+/// **它挡的不是 429**：2026-09-27 实测 `X-Ratelimit-Limit: 300` 配 1 秒窗口（连发十几发才看得见
+/// `Remaining` 从 300 往下掉，隔秒再发就回满），而我们只有 4 路并发，离那条线差两个数量级。
+/// 真正会被顶到的是 `ONLINE_BUDGET` 那 60 秒和「一次进页打几百发」的时间账。
 const MAX_LOOKUP_REQUESTS: usize = 150;
+
+/// 第 3 层一批发多少个哈希。接口一次能吃 1000，但元数据请求**不重试**，一发挂了这一批
+/// 本轮就全没结论；1000 份构建对象的响应拿 `METADATA_TIMEOUT` 那 10 秒去兜也不算宽裕。
+/// 取 500：请求数是旧写法（200）的五分之二，失败半径只到接口顶的一半。
+const SHA1_BATCH: usize = 500;
 
 /// 项目/搜索反查的并发宽度：这些行互不依赖，串行时一个慢请求就拖住整队（整轮慢的主因）。
 /// 4 路对齐 jar 扫描的线程数，也够把上限内的 150 次查询从分钟级压到十秒级。
@@ -245,14 +251,14 @@ pub async fn resolve_online(
     }
     let mut ok = true;
 
-    // 第 3 层：按 sha1 批量反查构建（接口上限 1000 个哈希，这里按 200 分批）
+    // 第 3 层：按 sha1 批量反查构建（接口上限 1000 个哈希，分批见 `SHA1_BATCH`）
     let hashes: Vec<String> = pending
         .iter()
         .filter_map(|i| targets[*i].sha1.clone())
         .map(|h| h.to_lowercase())
         .collect();
     let mut hits: HashMap<String, ModrinthEnv> = HashMap::new();
-    for chunk in hashes.chunks(200) {
+    for chunk in hashes.chunks(SHA1_BATCH) {
         match dl.version_env_by_sha1(chunk).await {
             Ok(m) => hits.extend(m),
             Err(_) => ok = false,
@@ -719,7 +725,7 @@ mod tests {
             .collect();
         let all: Vec<usize> = (0..targets.len()).collect();
         let (queue, no_cand, used, capped) = project_queue(&targets, &all, 5);
-        assert_eq!(used, 5, "预留数不能超发：超了就是在跟 Modrinth 的限流赌");
+        assert_eq!(used, 5, "预留数不能超发：超了就是这一轮的额度形同不存在");
         assert!(capped, "还剩 47 行没查，必须报未全部完成");
         assert!(no_cand.is_empty());
         // 前 2 行整链进队，第 3 行只分到 1 个候选，后面的行一条没发

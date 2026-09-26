@@ -51,6 +51,7 @@ import {
     truncateMiddle,
 } from "@/lib/format";
 import { t, tSource, useT } from "@/lib/i18n";
+import { errOf } from "@/lib/errors";
 import type { ActivityInfo, ConversionReport, ConversionTask } from "@/lib/types";
 import { TaskErrorCard } from "@/features/task/TaskErrorCard";
 import { ActivitySubBar, activityMeasure, activityVerb } from "@/features/task/ActivityBar";
@@ -280,7 +281,7 @@ export function TaskDetailPage() {
             await api.openDir(api.dirOf(outPath));
         } catch (e) {
             notify(
-                t("tasks.couldn-open", "打开输出目录失败：{{reason}}", { reason: e instanceof Error ? e.message : String(e) }),
+                t("tasks.couldn-open", "打开输出目录失败：{{reason}}", { reason: errOf(e) }),
                 "error"
             );
         }
@@ -294,7 +295,7 @@ export function TaskDetailPage() {
             window.setTimeout(() => setPlanCopied(false), 2000);
         } catch (e) {
             notify(
-                t("tasks.couldn-copy", "复制方案失败：{{reason}}", { reason: e instanceof Error ? e.message : String(e) }),
+                t("tasks.couldn-copy", "复制方案失败：{{reason}}", { reason: errOf(e) }),
                 "error"
             );
         }

@@ -5,6 +5,7 @@ import * as api from "@/lib/api";
 import { formatSize, loaderLabel } from "@/lib/format";
 import { activeLocale, tSource, useT } from "@/lib/i18n";
 import { notify } from "@/lib/notify";
+import { errOf } from "@/lib/errors";
 import type {
     LoaderKind,
     ModSearchResult,
@@ -81,6 +82,8 @@ export function OnlineAddModal({
      * 否则打开瞬间会先闪一帧「无匹配结果 · 共 0 个结果」。
      */
     const [loading, setLoading] = useState(true);
+    /** 失败原因存后端原文（网络类是 `net:种类:主机` 这种代码），渲染处过 `errOf` 才换语言：
+     *  在捕获处就翻译的话，切语言之后这句还挂在屏上、不会跟着变 */
     const [error, setError] = useState<string | null>(null);
     /**
      * CurseForge 的 API Key，开弹窗时读一次设置：`null` = 设置还没读到，`""` = 读到了、确实没配。
@@ -224,7 +227,7 @@ export function OnlineAddModal({
                 setZhLoading(false);
                 notify(
                     t("convert-modals.zh-load", "中文译文获取失败 · {{error}}", {
-                        error: e instanceof Error ? e.message : String(e),
+                        error: errOf(e),
                     }),
                     "error"
                 );
@@ -365,7 +368,7 @@ export function OnlineAddModal({
                         <ListSkeleton rows={5} />
                     ) : versionsError ? (
                         <span className="py-8 text-center text-[11px] text-gold">
-                            {t("convert-modals.version-load", "版本加载失败 · {{error}}", { error: versionsError })}
+                            {t("convert-modals.version-load", "版本加载失败 · {{error}}", { error: errOf(versionsError) })}
                         </span>
                     ) : (
                         <>
@@ -536,7 +539,7 @@ export function OnlineAddModal({
                     </div>
                 ) : error ? (
                     <span className="py-8 text-center text-[11px] text-gold">
-                        {t("convert-modals.load-failed", "加载失败 · {{error}}", { error })}
+                        {t("convert-modals.load-failed", "加载失败 · {{error}}", { error: errOf(error) })}
                     </span>
                 ) : (
                     <>

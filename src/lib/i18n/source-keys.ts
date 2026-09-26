@@ -68,7 +68,6 @@ export const SOURCE_KEYS: Readonly<Record<string, string>> = {
     "回收站里已经没有这条任务（可能刚被清空）": "backend.task-longer",
     "这条任务已经不在列表里（可能刚被撤回或重复删除）": "backend.task-longer-list",
     "应用退出时任务尚未完成，可重试": "backend.task-still",
-    "更新列表返回了意外结构": "backend.update-list",
     "全部构建": "common.builds",
     "最新": "common.latest",
     "推荐": "common.recommended",

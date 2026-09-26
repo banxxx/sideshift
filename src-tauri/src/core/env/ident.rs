@@ -98,7 +98,7 @@ pub fn slugs_from_file_name(file_name: &str) -> Vec<String> {
 
 /// 供 commands 层组装 Target 列表（保持取证口径单一）。
 /// `env_trusted` = 整包 `files[].env` 有区分度（见 detector 的同名判定）。可信时，已声明的行
-/// 不必再联网：裁决表里 client/server 任一有值就能定案，重复查只会白烧 300/5min 的限流额度。
+/// 不必再联网：裁决表里 client/server 任一有值就能定案，重复查只是白烧请求数和整轮那 60 秒。
 /// 全表刷成 required/required 的那种默认值包必须照查——那层声明本身就是错的。
 pub fn targets_for(files: &[PackFile], env_trusted: bool) -> Vec<Target> {
     files

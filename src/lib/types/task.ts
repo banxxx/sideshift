@@ -93,6 +93,9 @@ export interface TaskError {
     title: string;
     /** 详情 */
     detail: string;
+    /** 错误种类代码（`net:offline:api.modrinth.com` 这类），界面按它出本地化提示；
+     *  `detail` 保留原句给「复制诊断信息」。旧存档没有这个字段，回落 `detail`。 */
+    code?: string;
     /** 是否可重试 */
     retryable: boolean;
     /** 已重试次数（下载失败用） */

@@ -12,6 +12,7 @@ import { SWAP } from "@/lib/page-motion";
 import { formatSize, loaderLabel, truncateMiddle } from "@/lib/format";
 import { t, useT, type TranslateFn } from "@/lib/i18n";
 import { notify } from "@/lib/notify";
+import { errOf } from "@/lib/errors";
 import { restoreDeleted, useTrash } from "@/lib/trash-store";
 import type { TaskStatus, TrashEntry } from "@/lib/types";
 
@@ -89,7 +90,7 @@ function TrashRow({ entry }: { entry: TrashEntry }) {
             // 弹窗是常驻挂着的，再来一条左下角提示只是噪音。
         } catch (e) {
             notify(
-                t("tasks.couldn-restore", "撤回失败：{{reason}}", { reason: e instanceof Error ? e.message : String(e) }),
+                t("tasks.couldn-restore", "撤回失败：{{reason}}", { reason: errOf(e) }),
                 "error"
             );
         }

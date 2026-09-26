@@ -28,6 +28,7 @@ import { motion } from "motion/react";
 import * as api from "@/lib/api";
 import { notify } from "@/lib/notify";
 import { t, tSource, useT, type TranslateFn } from "@/lib/i18n";
+import { errOf } from "@/lib/errors";
 import { useNavigation } from "@/lib/navigation";
 import { BAR_COLOR, needsNetwork, progressChip, runCounts, stageLabel } from "@/lib/rail-view";
 import { formatDuration, formatElapsed, formatSize, loaderLabel, outputNameOf, truncateMiddle } from "@/lib/format";
@@ -231,7 +232,7 @@ export function TasksPage() {
                     unstageDeleted(task.id);
                     notify(
                         t("tasks.couldn-delete", "删除任务失败：{{reason}}", {
-                            reason: failure instanceof Error ? failure.message : String(failure),
+                            reason: errOf(failure),
                         }),
                         "error"
                     );
@@ -330,7 +331,7 @@ async function restoreAfterCommit(id: string) {
         await restoreDeleted(id);
         notify(t("tasks.restored-task", "已追回，任务回到列表"), "info");
     } catch (e) {
-        notify(t("tasks.couldn-restore-reason", "追回失败：{{reason}}", { reason: e instanceof Error ? e.message : String(e) }), "error");
+        notify(t("tasks.couldn-restore-reason", "追回失败：{{reason}}", { reason: errOf(e) }), "error");
     }
 }
 
@@ -537,7 +538,7 @@ function TaskCard({ task, onDelete }: { task: ConversionTask; onDelete: () => vo
             await api.openDir(api.dirOf(p));
         } catch (e) {
             notify(
-                t("tasks.couldn-open", "打开输出目录失败：{{reason}}", { reason: e instanceof Error ? e.message : String(e) }),
+                t("tasks.couldn-open", "打开输出目录失败：{{reason}}", { reason: errOf(e) }),
                 "error"
             );
         }
@@ -585,7 +586,7 @@ function TaskCard({ task, onDelete }: { task: ConversionTask; onDelete: () => vo
             {task.status === "failed" && task.error && (
                 <div className="w-full rounded-lg border border-redstone-dim bg-bg-app px-4 py-3">
                     <span className="break-words font-mono text-[11px] leading-[16px] font-normal text-redstone">
-                        {tSource(task.error.title)} · {tSource(task.error.detail)}
+                        {tSource(task.error.title)} · {errOf(task.error.code ?? task.error.detail)}
                     </span>
                 </div>
             )}

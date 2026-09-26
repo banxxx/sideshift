@@ -126,6 +126,7 @@ pub fn load_tasks(app: &AppHandle, inner: &mut Inner) {
                 stage: t.stage.unwrap_or(PipelineStage::Parser),
                 title: "转换中断".into(),
                 detail: "应用退出时任务尚未完成，可重试".into(),
+                code: None,
                 retryable: true,
                 attempts: None,
                 log_tail: None,

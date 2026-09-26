@@ -15,6 +15,7 @@ import { Download, PackageOpen, RefreshCw, X, type LucideIcon } from "lucide-rea
 import type { TaskError } from "@/lib/types";
 import { truncateMiddle } from "@/lib/format";
 import { tSource, useT } from "@/lib/i18n";
+import { errOf } from "@/lib/errors";
 import { Btn, LinkBtn, ToneChip } from "@/components/ui";
 import { cn } from "@/lib/utils";
 
@@ -127,14 +128,17 @@ export function TaskErrorCard({
                 )}
             </div>
 
-            {/* 详情：带文件名/退出码/cause 的那些是诊断串，查不中目录就照原样出中文 */}
+            {/* 详情：网络类错误只说种类（后端给的 `code`），URL/状态码留在 `detail` 里给诊断信息；
+                非网络的那批诊断串（带文件名/退出码/cause）查不中目录就照原样出中文 */}
             {/*i18n:
                 找不到源整合包文件，请返回首页重新选择
                 裸 zip 包无法自动确定 Loader 版本，请在转换配置中选择后重试
                 应用退出时任务尚未完成，可重试
                 未检测到 Java（本机没有可用的 JDK）
             */}
-            <p className="text-[12px] leading-[18px] font-normal text-text-2">{tSource(error.detail)}</p>
+            <p className="text-[12px] leading-[18px] font-normal text-text-2">
+                {errOf(error.code ?? error.detail)}
+            </p>
 
             {/* 构建失败：日志尾块（等宽 10，末行 redstone） */}
             {builder && error.logTail && error.logTail.length > 0 && (

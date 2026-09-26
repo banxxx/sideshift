@@ -90,6 +90,7 @@ async fn run_pipeline(app: AppHandle, state: Arc<AppState>, id: String) {
                             stage: PipelineStage::Parser,
                             title: "解析失败".into(),
                             detail: "找不到源整合包文件，请返回首页重新选择".into(),
+                            code: None,
                             retryable: false,
                             attempts: None,
                             log_tail: None,
@@ -257,6 +258,7 @@ async fn run_pipeline(app: AppHandle, state: Arc<AppState>, id: String) {
                             stage: PipelineStage::Downloader,
                             title: "CurseForge 取链接失败".into(),
                             detail,
+                            code: e.net_code(),
                             retryable: true,
                             attempts: None,
                             log_tail: None,
@@ -332,6 +334,7 @@ async fn run_pipeline(app: AppHandle, state: Arc<AppState>, id: String) {
                         stage: PipelineStage::Downloader,
                         title: "依赖解析失败".into(),
                         detail,
+                        code: e.net_code(),
                         retryable: true,
                         attempts: None,
                         log_tail: None,
@@ -394,6 +397,7 @@ async fn run_pipeline(app: AppHandle, state: Arc<AppState>, id: String) {
             stage: PipelineStage::Downloader,
             title: "未选择加载器版本".into(),
             detail: "裸 zip 包无法自动确定 Loader 版本，请在转换配置中选择后重试".into(),
+            code: None,
             retryable: false,
             attempts: None,
             log_tail: None,
@@ -414,6 +418,7 @@ async fn run_pipeline(app: AppHandle, state: Arc<AppState>, id: String) {
                         stage: PipelineStage::Downloader,
                         title: "服务端加载器获取失败".into(),
                         detail: e.to_string(),
+                        code: e.net_code(),
                         retryable: true,
                         attempts: None,
                         log_tail: None,
@@ -862,6 +867,7 @@ async fn run_pipeline(app: AppHandle, state: Arc<AppState>, id: String) {
                 stage: PipelineStage::Builder,
                 title: "构建失败".into(),
                 detail: e.to_string(),
+                code: None,
                 retryable: true,
                 attempts: None,
                 log_tail: Some(vec![e.to_string()]),
@@ -874,6 +880,7 @@ async fn run_pipeline(app: AppHandle, state: Arc<AppState>, id: String) {
                 stage: PipelineStage::Builder,
                 title: "构建失败".into(),
                 detail: format!("构建线程异常：{e}"),
+                code: None,
                 retryable: true,
                 attempts: None,
                 log_tail: None,
@@ -1164,6 +1171,7 @@ async fn run_installer_stage(
                 stage: PipelineStage::Installer,
                 title: "本机没有可用的 Java".into(),
                 detail: probe.detail,
+                code: None,
                 retryable: true,
                 attempts: None,
                 log_tail: None,
@@ -1278,6 +1286,7 @@ async fn run_installer_stage(
             stage: PipelineStage::Installer,
             title: "本机安装异常".into(),
             detail: format!("安装线程异常：{e}"),
+            code: None,
             retryable: true,
             attempts: None,
             log_tail: None,
@@ -1336,6 +1345,7 @@ fn install_task_error(e: &installer::InstallError) -> TaskError {
         stage: PipelineStage::Installer,
         title: title.into(),
         detail,
+        code: None,
         retryable: true,
         attempts: None,
         log_tail: None,
@@ -1344,6 +1354,8 @@ fn install_task_error(e: &installer::InstallError) -> TaskError {
 }
 
 fn map_download_error(app: &AppHandle, state: &Arc<AppState>, id: &str, e: &DownloadError) {
+    // `detail` 是带 URL 与状态码的原句（只进「复制诊断信息」），`code` 才是界面上那句话的种类
+    let code = e.net_code();
     let (title, detail, attempts) = match e {
         DownloadError::Failed {
             file_name,
@@ -1370,6 +1382,7 @@ fn map_download_error(app: &AppHandle, state: &Arc<AppState>, id: &str, e: &Down
             stage: PipelineStage::Downloader,
             title,
             detail,
+            code,
             retryable: true,
             attempts,
             log_tail: None,

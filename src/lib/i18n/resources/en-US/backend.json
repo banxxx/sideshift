@@ -67,6 +67,5 @@
   "backend.task-converting": "A task is converting or queued; clearing the cache would delete files it uses",
   "backend.task-longer": "This task is no longer in the trash (it may have just been emptied)",
   "backend.task-longer-list": "This task is no longer in the list (it may have been restored or deleted again)",
-  "backend.task-still": "The task was still running when the app quit; retry it",
-  "backend.update-list": "The update list came back in an unexpected shape"
+  "backend.task-still": "The task was still running when the app quit; retry it"
 }

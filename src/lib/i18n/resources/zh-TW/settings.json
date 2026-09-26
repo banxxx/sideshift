@@ -4,7 +4,6 @@
   "backend.task-converting": "有任務正在轉換或排隊中，清空快取會刪掉它在用的檔案",
   "backend.task-longer": "回收站裡已經沒有這條任務（可能剛被清空）",
   "backend.task-longer-list": "這條任務已經不在列表裡（可能剛被撤回或重複刪除）",
-  "backend.update-list": "更新列表返回了意外結構",
   "common.settings": "設定",
   "settings.appearance-about": "外觀與關於",
   "settings.auto-removes": "按端證據自動移除光影、小地圖等客戶端模組",
