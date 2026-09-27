@@ -10,6 +10,7 @@ import { TitleBar } from "@/components/layout/TitleBar";
 import { PAGE_IN, PAGE_OUT } from "@/lib/page-motion";
 import { HomePage } from "@/features/home/HomePage";
 import { TasksPage } from "@/features/tasks/TasksPage";
+import { AboutPage } from "@/features/about/AboutPage";
 import { SettingsPage } from "@/features/settings/SettingsPage";
 import { ConvertPage } from "@/features/convert/ConvertPage";
 import { TaskDetailPage } from "@/features/task/TaskDetailPage";
@@ -31,6 +32,7 @@ import "./App.css";
 const pages: Record<PageKey, ComponentType> = {
     home: HomePage,
     tasks: TasksPage,
+    about: AboutPage,
     settings: SettingsPage,
     convert: ConvertPage,
     task: TaskDetailPage,
@@ -39,8 +41,13 @@ const pages: Record<PageKey, ComponentType> = {
 function Shell() {
     const { entry } = useNavigation();
     const Page = pages[entry.key];
-    // 最大化时把留白收成 0（见 App.css 的「最大化」段）：卡片铺满整窗、投影与把手一起退场
+    // 最大化时把留白收成 0（见 App.css 的「最大化」段）：卡片铺满整窗、投影与把手一起退场。
+    // 这个开关写在 <html> 而不是外壳 div 上：`--win-inset` 得让**body 层的 portal**（弹窗遮罩）
+    // 也读得到——遮罩收在卡片边沿上靠的就是这一个数，留在外壳 div 上时它只覆盖到那一棵子树。
     const { isMaximized } = useWindowControls();
+    useEffect(() => {
+        document.documentElement.toggleAttribute("data-win-max", isMaximized);
+    }, [isMaximized]);
 
     // 浏览器里把文件丢到拖放卡以外区域时，浏览器默认会导航/下载该文件（整页闪跳）；
     // 窗口级 preventDefault 关掉默认行为，真正的解析仍由 Dropzone 的 drop 处理。
@@ -58,7 +65,6 @@ function Shell() {
         // 两层外壳：外层只负责窗口四周的透明留白（`--win-inset`，投影要向外扩散就得有地方落），
         // 内层才是应用卡片本体。配套口径见 App.css 的「窗口外壳」段与 tauri.conf 的 transparent。
         <div
-            data-win-max={isMaximized || undefined}
             className="relative h-screen p-[var(--win-inset)]"
             onContextMenu={
                 import.meta.env.PROD ? (e) => e.preventDefault() : undefined

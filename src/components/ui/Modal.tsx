@@ -72,7 +72,9 @@ export function ModalShell({
                 {/* base-ui 在出入场过渡期挂 data-starting/ending-style，配 CSS 过渡做淡入+微缩放 */}
                 <DialogPrimitive.Backdrop
                     className={cn(
-                        "fixed inset-0 z-50 bg-black/50 transition-opacity duration-200",
+                        // inset 用 `--win-inset`（= 透明留白那一圈）而不是 0：遮罩只压到卡片边沿，
+                        // 四周的自绘投影不被染黑。最大化时那个变量本身是 0，这里不用另判状态
+                        "fixed inset-[var(--win-inset)] z-50 bg-black/50 transition-opacity duration-200",
                         "data-[starting-style]:opacity-0 data-[ending-style]:opacity-0"
                     )}
                 />

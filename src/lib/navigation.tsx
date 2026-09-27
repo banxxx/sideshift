@@ -1,7 +1,7 @@
 /**
  * SideShift 导航模型（对应 SS.pen v17 页面流转设计）
  *
- * - 一级页面（PrimaryPage）：侧栏常驻目的地（首页/任务列表/设置），标题栏【无】返回按钮
+ * - 一级页面（PrimaryPage）：侧栏常驻目的地（首页/任务列表/关于/设置），标题栏【无】返回按钮
  * - 二级页面（SecondaryPage）：从一级页面下钻进入（转换配置/任务详情），
  *   标题栏最小化左侧出现 undo-2 返回按钮 + 短竖线分隔，点击回退一层
  * - 实现方式：内存导航栈。navigate() 压栈，back() 弹栈，switchPrimary() 清栈重建
@@ -17,7 +17,7 @@ import {
 } from "react";
 
 /** 一级页面 key */
-export type PrimaryPage = "home" | "tasks" | "settings";
+export type PrimaryPage = "home" | "tasks" | "about" | "settings";
 
 /**
  * 二级页面 key：报告与方案不再是独立页面，它们收在任务详情的页签里

@@ -1,4 +1,5 @@
 {
+  "shell.about": "About",
   "shell.back": "Back",
   "shell.dismiss-notification": "Dismiss notification",
   "shell.following-system": "Following the system (now {{shade}}) · Click to lock to {{next}}",

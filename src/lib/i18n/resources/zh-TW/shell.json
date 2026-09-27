@@ -17,6 +17,7 @@
   "common.server-instance": "生成伺服器端實例",
   "common.server-pack": "伺服器端包",
   "common.view-task": "查看任務詳情",
+  "shell.about": "關於",
   "shell.back": "返回上一頁",
   "shell.dismiss-notification": "關閉提示",
   "shell.following-system": "跟隨系統（當前{{shade}}）· 點擊鎖定為{{next}}",

@@ -137,8 +137,11 @@
    * shadow 的第三个数字是模糊半径，越大越"扩散"，当前取值贴着"读得出边界但不糊成光晕"。
    * 一个数两头用：--win-inset 既是投影能扩散的距离，也是"边框外多宽能拖大"的下限
    * （原生那条缩放环焊在窗口外沿，收不掉），调它之前先想清楚这两头。
-   * 代价：模态遮罩 / 垃圾桶 / 删除飞行层那几处 `fixed` 仍按视口（=整窗）定位，
-   * 与卡片边缘差一个 inset。最大化时 inset 由 [data-win-max] 收成 0。
+   * 按视口（=整窗）定位的 `fixed` 件与卡片边缘差一个 inset：模态遮罩已经用
+   * `inset-[var(--win-inset)]` 收在卡片边沿，四周那圈投影不再被染黑；垃圾桶那类贴边浮件
+   * 要同办就用同一个变量，别另写死一个数。
+   * 最大化时把 inset 收成 0 的开关（`[data-win-max]`）挂在 <html> 而不是壳 div 上：
+   * 遮罩是 portal 到 body 的，挂在壳上时它读不到这个覆盖值。
    * 6px 是实测出来的：4px 时下沿那截尾巴被窗口裁掉，读出一条"被切平"的硬边，
    * 左右/底部的边界感也跟着变弱。0 2px 6px 要 ~6px 才走完尾巴。 */
   --win-inset: 6px;
@@ -263,6 +266,16 @@
   --dz-glow: color-mix(in srgb, var(--accent) 30%, transparent);
 }
 
+/* ============ 鸣谢名单卡（密排卡墙）视觉资源 ============ */
+/* 动画（入场 / 3D 倾斜 / 涟漪）由 AckWall.tsx 驱动，这里只留主题派生色：
+ * 悬浮时的描边是「accent 掺进 stroke」而不是「accent 加透明度」——前者压在卡底上仍是
+ * 一条实心边，后者会把底色透出来说话，深浅两档看起来不是同一件事。
+ * 两档同一个数：accent 本身就是按主题各给一份的（见上面 :root / .dark），掺完自动翻面。 */
+:root {
+  --ack-glow: color-mix(in srgb, var(--accent) 34%, transparent);
+  --ack-border: color-mix(in srgb, var(--accent) 55%, var(--stroke));
+}
+
 /* 蚂蚁线边框（SVG rect 描边，跑动由 motion 位移 stroke-dashoffset 驱动）：
  * rect 几何走 CSS 以便随卡片尺寸自适应，内缩 1px 让 2px 描边正好压在边缘上 */
 .dz-ants-rect {
@@ -365,7 +378,10 @@
  * 而系统会把带 WS_THICKFRAME 的窗口向外撑一个边框厚度（Win10 左/右/下各一截、上为 0）。
  * 于是 inset 归零后卡片正好落在屏幕边沿上——那截被撑出去的部分本就在屏外。
  * 投影同时被窗口边界裁掉：最大化不该有浮起感。
- * 与 :root 同优先级，靠源码顺序（本段在后）压过那条声明。 */
+ * 这条命中的是 <html>（App.tsx 把开关同步到 documentElement），而 <html> 就是 :root ⇒
+ * 与 :root 同优先级、同元素，靠源码顺序（本段在后）压过那条声明；portal 到 body 的遮罩
+ * 因此也继承得到 0。
+ */
 [data-win-max] {
   --win-inset: 0px;
   --win-edge-inside: 0px;
