@@ -123,6 +123,9 @@ function toBase64(buf: ArrayBuffer): string {
  * 一次都不会让可达性变差，只会让它少一次。
  */
 async function skinSource(url: string): Promise<{ src: string; persist: string | null }> {
+    // 内置那份默认皮肤（`/steve.png`，随包分发）不在贴图 CDN 上，两趟 IPC 都是白问：
+    // 后端那个缓存键要求地址带 `…/texture/<内容哈希>`，同源路径永远过不了门
+    if (!url.startsWith("http")) return { src: url, persist: null };
     const local = await api.loadTextureCache(url);
     if (local) return { src: `data:image/png;base64,${local}`, persist: null };
     let resp: Response;

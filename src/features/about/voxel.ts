@@ -181,6 +181,9 @@ interface Slot {
     yaw: number;
     pitch: number;
     dirty: boolean;
+    /** 静止那一帧已经交出去没有（烘档缓存只取这一次，取到就不再取） */
+    rested: boolean;
+    onRest?: (canvas: HTMLCanvasElement) => void;
 }
 
 /** 全应用一份的 WebGL 上下文。`tried` 之后不再重试：拿不到就是拿不到，重试只会每帧抛异常 */
@@ -476,6 +479,12 @@ function draw(s: Slot) {
     s.ctx.clearRect(0, 0, s.n, s.n);
     s.ctx.drawImage(cv, 0, 0);
     s.dirty = false;
+    /* 静止（正对镜头）那一帧就是"这枚头像长什么样"的那张图：交出去存一份，下次进页直接显示它。
+       建头的第一帧本来就是 0/0（偏转要等指针进来），所以这条不要求谁在画完之后再去触发一次重绘。 */
+    if (!s.rested && s.yaw === 0 && s.pitch === 0) {
+        s.rested = true;
+        s.onRest?.(s.ctx.canvas);
+    }
 }
 
 function flush() {
@@ -519,23 +528,30 @@ export interface HeadHandle {
 export function headPose(dx: number, dy: number): [number, number] {
     return [dx * FINE_GAIN, -dy * FINE_GAIN];
 }
+/** 画布边长（设备像素）：头像的排布尺寸与烘档缓存的键都读这一个数，别在调用点另算一份 */
+export function headCanvasSize(cssSize: number): number {
+    const dpr = Math.min(window.devicePixelRatio || 1, 2);
+    return Math.max(16, Math.round(cssSize * HEAD_BOX * dpr * SUPERSAMPLE));
+}
+
 /**
  * 挂一枚头。返回句柄；`null`＝这台机器不支持体素档（调用方落回平面头像）。
  * 卸载必须调用 `destroy()`：VBO 挂在唯一那份上下文上，页面切来切去不回收就是每次都新攒一份。
+ * `onRest` 在**静止那一帧画完**时回调一次（见 `draw`），给调用方把这张图存下来的机会。
  */
 export function createHead(
     canvas: HTMLCanvasElement,
     skin: SkinImage,
-    cssSize: number
+    cssSize: number,
+    onRest?: (canvas: HTMLCanvasElement) => void
 ): { handle: HeadHandle; destroy: () => void } | null {
     if (!ensure()) return null;
     const ctx = canvas.getContext("2d");
     if (!ctx) return null;
-    const dpr = Math.min(window.devicePixelRatio || 1, 2);
-    const n = Math.max(16, Math.round(cssSize * HEAD_BOX * dpr * SUPERSAMPLE));
+    const n = headCanvasSize(cssSize);
     canvas.width = n;
     canvas.height = n;
-    const slot: Slot = { ctx, n, skin, geom: null, yaw: 0, pitch: 0, dirty: true };
+    const slot: Slot = { ctx, n, skin, geom: null, yaw: 0, pitch: 0, dirty: true, rested: false, onRest };
     slots.add(slot);
     schedule();
     return {

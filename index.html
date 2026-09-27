@@ -38,20 +38,20 @@
         --sp-loop: 1600ms;
         position: fixed;
         /* 与卡片刻意同尺寸：窗口是透明的，四周那圈留白（App.css 的 --win-inset）必须露出来，
-         * 否则启动页会把整窗涂实、投影无处可显。inset 与两道阴影都是 App.css / App.tsx
+         * 否则启动页会把整窗涂实、投影无处可显。inset 与那道阴影都是 App.css / App.tsx
          * 的字面量副本——改 --win-inset 或 --win-shadow 时同步这里（沿用上面颜色的同步规矩）。
+         * 阴影两档主题共用一条，和 App.css 一样只在基础规则里写一次。
          * 阴影在启动页也要画，不然 React 挂载那一刻投影会凭空跳出来。 */
         inset: 6px;
         z-index: 9999;
         display: flex;
         align-items: center;
         justify-content: center;
-        box-shadow: 0 2px 6px rgba(15, 18, 26, 0.22);
+        box-shadow: 0 2px 7px rgba(0, 0, 0, 0.55);
         background: #f5f6f8;
       }
       .dark #splash {
         background: #121317;
-        box-shadow: 0 2px 7px rgba(0, 0, 0, 0.55);
       }
       .sp-wrap {
         display: flex;

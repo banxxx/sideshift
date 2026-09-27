@@ -48,6 +48,8 @@ import { useT } from "@/lib/i18n";
 import type { AckPerson } from "@/lib/types";
 import { cn } from "@/lib/utils";
 import { McHead, type McHeadHandle } from "./McHead";
+import { STEVE_URL as STEVE } from "./headCache";
+import type { AckStatus } from "./useContributors";
 
 /**
  * 首字兜底：连头像都没有时块上放的字符。
@@ -67,13 +69,13 @@ function initialsOf(name: string): string {
 
 
 /**
- * 头像取不到时的本地占位（`public/` 里那份，随安装包分发 ⇒ 不发请求，
- * 关于页「只有三种情形联网」那句话仍然是真话）。
+ * 默认头：`public/steve.png`（随安装包分发 ⇒ 不发请求，关于页「只有三种情形联网」那句仍然是真话）。
  *
- * 文件实际是 JPEG 却叫 `.png`：浏览器按内容嗅探，`<img>` 照渲不误；但要往 R2/CDN 传的时候
- * 别按扩展名给 content-type，那份会标错。
+ * 为什么这一档是 Steve 而不是一张占位图：游戏里没选皮肤的玩家显示的就是 Steve，所以这张脸是
+ * 协议内的真实行为。它必须是**真皮肤布局**（64×64 / 64×32，`skin.ts:72` 的尺寸门只认这两档），
+ * 而且喂的是最上面那层 3D（`McHead`），不是平面图。地址的单一出处在 `headCache.STEVE_URL`
+ * ——烘档的键要认它，那边改了这个路径这里跟着走，别在这抄一份字面量。
  */
-const AVATAR_FALLBACK = "/steve.png";
 
 
 /** 以下数值全部取自 `.scratch/about-proto.html` 挑定的那一档（样片参数快照），改这里就是改观感 */
@@ -130,7 +132,22 @@ function cardKeys(people: AckPerson[]): string[] {
     });
 }
 
-function AckCard({ p, skin, delay }: { p: AckPerson; skin?: string; delay: number }) {
+/**
+ * 一枚密排卡。头像那三层的落法见下面 `headUrl` 旁边那张表——**别照"回落链"三个字凭直觉改**，
+ * 那三格各自是一条被点过名的决定。
+ */
+function AckCard({
+    p,
+    skin,
+    skinReady,
+    delay,
+}: {
+    p: AckPerson;
+    skin?: string;
+    /** 这批人的皮肤地址查完了没（没查完不能给默认头，否则每个有皮肤的人都先闪一张 Steve） */
+    skinReady: boolean;
+    delay: number;
+}) {
     const btn = useRef<HTMLButtonElement>(null);
     /** 3D 头像的偏转走命令式：指针每动一次不该让整张卡重挂（见 `McHead` 的注释） */
     const head = useRef<McHeadHandle>(null);
@@ -138,7 +155,7 @@ function AckCard({ p, skin, delay }: { p: AckPerson; skin?: string; delay: numbe
     const back = useRef<Animation | null>(null);
     const reduced = useReducedMotion();
     /** 记的是「哪一份 URL 失败了」而不是一个 bool：版本对账换了头像地址时它自己失效，
-     *  不需要 effect 去复位（bool 会把这个人的新地址也一起压成占位图） */
+     *  不需要 effect 去复位（bool 会把这个人的新地址也一起压成首字块） */
     const [failedSrc, setFailedSrc] = useState<string | null>(null);
 
     /* ---- 指针 → 姿态的那条跟随器 -------------------------------------
@@ -263,18 +280,8 @@ function AckCard({ p, skin, delay }: { p: AckPerson; skin?: string; delay: numbe
         []
     );
 
-    /** 回落链的下面两层（自带 avatar → 名字首字）：皮肤那一层在它之前/之外都要用它垫着 */
-    const flat = p.avatar ? (
-        <img
-            src={failedSrc === p.avatar ? AVATAR_FALLBACK : p.avatar}
-            onError={() => setFailedSrc(p.avatar ?? null)}
-            alt=""
-            aria-hidden
-            draggable={false}
-            className="shrink-0 rounded-[4px] object-cover transition-transform duration-200 group-hover/ack:[transform:translateZ(16px)]"
-            style={{ width: S, height: S }}
-        />
-    ) : (
+    /** 最下面那一层：名字首字块。没有 MC 身份、又没有可用自带图的人都落这里 */
+    const initials = (
         <span
             aria-hidden
             className={cn(
@@ -287,6 +294,29 @@ function AckCard({ p, skin, delay }: { p: AckPerson; skin?: string; delay: numbe
             {initialsOf(p.name)}
         </span>
     );
+
+    /* 头像三层的落法，三条各自是被点过名的决定：
+     *  - 有 `minecraftId`：正版皮肤 → 查完了却没有（离线 / 404 / 名字没查到）→ **3D Steve**。
+     *    这一档整个不看 `avatar`：登记了 MC 身份的人以 MC 身份为准，两张皮并存等于各说一半。
+     *  - 没有 `minecraftId`：`avatar` 平面一张 → 取不到（404、离线、图被删）就**首字块**，
+     *    不落默认头：那人根本不是 MC 玩家，给一张 Steve 是替 TA 宣告了一个 TA 没宣告过的身份。
+     *  - `skinReady` 为假（这批地址还在查）不给 Steve —— 否则每个**有**皮肤的人都会先闪一张 Steve。
+     */
+    const headUrl = skin ?? (p.minecraftId && skinReady ? STEVE : undefined);
+    const flat =
+        !p.minecraftId && p.avatar && failedSrc !== p.avatar ? (
+            <img
+                src={p.avatar}
+                onError={() => setFailedSrc(p.avatar ?? null)}
+                alt=""
+                aria-hidden
+                draggable={false}
+                className="shrink-0 rounded-[4px] object-cover transition-transform duration-200 group-hover/ack:[transform:translateZ(16px)]"
+                style={{ width: S, height: S }}
+            />
+        ) : (
+            initials
+        );
 
     return (
         <motion.div
@@ -318,16 +348,9 @@ function AckCard({ p, skin, delay }: { p: AckPerson; skin?: string; delay: numbe
                 {/* 命中区外扩（透明，只吃指针不占布局）：祖先 :hover 与 pointer 事件都算在这张卡上。
                     相邻两张卡各扩 HIT ⇒ 在行的中线正好相遇，零重叠 */}
                 <span aria-hidden className="absolute" style={{ inset: -HIT }} />
-                {/* 三层回落：正版皮肤（`skin` 有值时）→ 自带 avatar → 名字首字。
-                    下面这两层合起来就是「皮肤那层还没就绪、或者根本没有」时的那一张：
-                    `McHead` 在拿到贴图之前把它原样渲染出来，所以这块地方从不会空一下。
-                    有 avatar 但**取不到**（404、离线、图被删）⇒ 落本地占位图，不留破图框：
-                    主机合法但内容没了是一条正常路径，不是异常，界面不该因此坏掉 */}
-                {skin ? (
-                    <McHead ref={head} url={skin} size={S} fallback={flat} />
-                ) : (
-                    flat
-                )}
+                {/* 三层回落的落法见上面 `headUrl` 旁边那张表。`flat` 同时是 `McHead` 的垫层：
+                    贴图没解出来之前（第一次进页、离线）那块地方由它顶着，从不会空一下 */}
+                {headUrl ? <McHead ref={head} url={headUrl} size={S} fallback={flat} /> : flat}
                 <span className="max-w-[150px] truncate text-[12.5px] leading-[1.25] font-medium text-text-1 transition-transform duration-200 group-hover/ack:[transform:translateZ(16px)]">
                     {p.name}
                 </span>
@@ -345,17 +368,23 @@ function AckCard({ p, skin, delay }: { p: AckPerson; skin?: string; delay: numbe
     );
 }
 
-/** 取数状态：`pending` 还没定档、`empty` 一次数据都没拿到过（这一档屏上给一句话 + 重新获取） */
+/**
+ * 名单卡。取数的三档非 `ready` 状态各有各的实话：`pending` 还没定档、`none` 是远端在线但名单
+ * 确实空着（刚发布就是这个样，给一句说明、不给重试钮），`failed` 是一次数据都没拿到过（重试出口在这）。
+ */
 export function AckWall({
     people,
     skins,
+    skinReady,
     status,
     onRetry,
 }: {
     people: AckPerson[];
     /** 玩家名 → 正版皮肤地址；没有这个人（没查、查不到、没网）就是表里少一行，卡片自己落回下一层 */
     skins: Record<string, string>;
-    status: "pending" | "ready" | "empty";
+    /** 这批皮肤地址查完了没（`useContributors` 的那一趟的落点）。没查完不给默认头，见 `AckCard` 的表 */
+    skinReady: boolean;
+    status: AckStatus;
     onRetry: () => void;
 }) {
     const t = useT();
@@ -503,9 +532,12 @@ export function AckWall({
                     <span className="text-[12px] leading-[18px] text-text-3">
                         {status === "pending"
                             ? t("about.ack-pending", "正在获取鸣谢名单…")
-                            : t("about.ack-empty", "当前无法显示鸣谢名单")}
+                            : status === "none"
+                              ? t("about.ack-none", "名单还没有登记的贡献者")
+                              : t("about.ack-failed", "当前无法显示鸣谢名单")}
                     </span>
-                    {status === "empty" && (
+                    {/* 「名单空着」不放重试：按下去只会拿回同一份空表。这一句就是它的全部出口 */}
+                    {status === "failed" && (
                         <Btn size="xs" onClick={onRetry}>
                             {t("about.ack-retry", "重新获取")}
                         </Btn>
@@ -534,6 +566,7 @@ export function AckWall({
                                 key={keys[i]}
                                 p={p}
                                 skin={p.minecraftId ? skins[p.name] : undefined}
+                                skinReady={skinReady}
                                 delay={i * Math.min(ENTRY.stagger, ENTRY.budget / Math.max(1, people.length))}
                             />
                         ))}

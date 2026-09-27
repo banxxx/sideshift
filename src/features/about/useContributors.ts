@@ -5,16 +5,21 @@
  * 用户量一上来就是白烧的重复流量。现在的口径是「一次启动一次对账」，页内切走再回来只读本地快照
  * （那条零网络，可以每次读）。
  *
- * 三档状态里只有 `empty`（一次数据都没拿到过）会在屏上留字。**对账失败是静默的**：
- * 快照还在屏上，用户看不出、也不需要看出这一轮没成功——这一块不抢全局提示区，
+ * 四档状态里只有 `none` 与 `failed` 会在屏上留字，两者是不同的实话：
+ *  - `none`：请求成功、名单**确实登记了零个人**（刚发布就这样）。不放「重新获取」——
+ *    按下去只会拿回同一份空表，那是一颗骗人的钮。
+ *  - `failed`：一次数据都没拿到过（网络失败、端点未配置），这一档才有重试出口。
+ *
+ * **对账失败是静默的**：快照还在屏上，用户看不出、也不需要看出这一轮没成功——这一块不抢全局提示区，
  * 一次网络抖动更不该在关于页弹错误。失败之后本次启动不再自动重试，
- * 出口是空态里那颗「重新获取」（它走 `retry`，不受下面的闸门管）。
+ * 出口是失败态里那颗「重新获取」（它走 `retry`，不受下面的闸门管）。
  */
 import { useCallback, useEffect, useRef, useState } from "react";
 import * as api from "@/lib/api";
 import type { AckList, AckPerson } from "@/lib/types";
 
-type AckStatus = "pending" | "ready" | "empty";
+/** 取数状态。`AckWall` 的 prop 直接用它，别再抄一份联合类型（四档抄两处必然对不齐） */
+export type AckStatus = "pending" | "ready" | "none" | "failed";
 
 /** 表空的时候给同一个对象：每轮渲染造一个新的 `{}` 会让名单那一片卡片各白比对一次 props */
 const NO_SKINS: Record<string, string> = {};
@@ -37,7 +42,8 @@ export function useContributors() {
         if (version.current === list.version) return;
         version.current = list.version;
         setPeople(list.people);
-        setStatus(list.people.length ? "ready" : "empty");
+        // 拿到手了却一个人都没有——这是远端的原样，不是故障（名字全空的人会被后端剔掉，同样落到这一档）
+        setStatus(list.people.length ? "ready" : "none");
     }, []);
 
     const pull = useCallback(async () => {
@@ -47,8 +53,8 @@ export function useContributors() {
         try {
             take(await api.refreshAckList());
         } catch {
-            // 手上什么都没有才落到空态；有快照就维持原样
-            if (version.current === null) setStatus("empty");
+            // 手上什么都没有才落到失败态；有快照就维持原样
+            if (version.current === null) setStatus("failed");
         }
     }, [take]);
 
@@ -65,14 +71,19 @@ export function useContributors() {
     }, [take, pull]);
 
     /* 皮肤地址只跟着「屏上这批 minecraftId 的名字」走：名单没换人就不问第二遍。
-       后端那一份 7 天的缓存是第二道闸门（那里省的是 Mojang 的额度），这一道省的是 IPC。 */
+       后端那一份 7 天的缓存是第二道闸门（那里省的是 Mojang 的额度），这一道省的是 IPC。
+       `settled` 是给回落链用的第三档信息：「查完了但没有这个人」才知道该给默认头，
+       「还在查」不能给——否则每个有皮肤的人都会先闪一张 Steve。 */
+    const [settled, setSettled] = useState(false);
     useEffect(() => {
         const names = people.filter((p) => p.minecraftId).map((p) => p.name);
         const key = names.join("|");
         if (key === skinKey.current) return;
         skinKey.current = key;
+        setSettled(false);
         if (!names.length) {
             setSkins(NO_SKINS);
+            setSettled(true);
             return;
         }
         let on = true;
@@ -84,11 +95,15 @@ export function useContributors() {
             .catch(() => {
                 // 与名单同一条口径：拿不到就当没有，卡片自己落回下一层，不在这一页报错
                 if (on) setSkins(NO_SKINS);
+            })
+            .finally(() => {
+                // 报错也算查完：那一档同样该给默认头，不该一直卡在首字块
+                if (on) setSettled(true);
             });
         return () => {
             on = false;
         };
     }, [people]);
 
-    return { people, skins, status, retry: pull };
+    return { people, skins, status, skinReady: settled, retry: pull };
 }

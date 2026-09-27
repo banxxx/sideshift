@@ -4,6 +4,7 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
+use crate::core::mc_version;
 use crate::models::{LoaderKind, VersionOption};
 use super::client::Downloader;
 use super::types::{DownloadError, Fetch, ItemSpec};
@@ -174,17 +175,13 @@ impl Downloader {
             }
             LoaderKind::NeoForge => {
                 let v = self.get_json(NEOFORGE_VERSIONS).await?;
-                // NeoForge 主版本映射 MC：20.x → 1.20.x, 21.x → 1.21.x …
-                let mc_minor: Option<u32> = mc_version
-                    .split('.')
-                    .nth(1)
-                    .and_then(|s| s.parse().ok());
                 let mut out = Vec::new();
-                if let (Some(minor), Some(arr)) = (mc_minor, v["versions"].as_array()) {
+                let prefix = neoforge_prefix(mc_version);
+                if let (Some(prefix), Some(arr)) = (prefix, v["versions"].as_array()) {
                     let mut vers: Vec<String> = arr
                         .iter()
                         .filter_map(|x| x.as_str().map(String::from))
-                        .filter(|s| s.split('.').next().and_then(|p| p.parse::<u32>().ok()) == Some(minor + 19))
+                        .filter(|s| s.starts_with(prefix.as_str()))
                         .collect();
                     vers.sort_by(|a, b| version_cmp(b, a));
                     for ver in vers.into_iter().take(15) {
@@ -264,6 +261,18 @@ impl Downloader {
     }
 }
 
+/// MC 版本 → NeoForge 版本号的公共前缀。NeoForge 版本号的前两段就是它对应 MC 的
+/// 「版本线.补丁号」（`21.1.3` ↔ MC 1.21.1、`26.2.0.1-beta` ↔ MC 26.2），偏移恒为 0，
+/// 两套 MC 写法都从 `mc_version::parse` 出（`1.21.1` → `21.1.`、`26.2` → `26.2.`）。
+/// 只比主版本不够：那会把整个 1.21.x 灌进 1.21.1 的下拉。尾点也不能省：`21.1` 会多吞 108 条
+/// `21.10.x`，带上点才是那一档；实测全表 1733 条段数都 ≥3，所以带尾点不会漏掉两段名。
+/// 解析不出来就不给候选——这张表没有「兜底猜一档」的意义，猜错的代次比空列表更贵
+/// （installer 只认自己那份 version JSON，装得成功但做出的是别的 MC 版本的服）。
+fn neoforge_prefix(mc: &str) -> Option<String> {
+    let l = mc_version::parse(mc)?;
+    Some(format!("{}.{}.", l.line, l.patch))
+}
+
 /// 读那张裸表：文件不在/坏一个字符都给空表，不给错误——这条链上「查不到」是常态而非失败
 fn java_index_load(cache_dir: &Path) -> BTreeMap<String, u32> {
     std::fs::read_to_string(cache_dir.join(JAVA_INDEX_FILE))
@@ -335,5 +344,19 @@ mod tests {
         assert_eq!(d.java_major_official(&dir, "1.20.1").await, Some(17));
         assert_eq!(d.java_major_official(&dir, "  ").await, None);
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// NeoForge 的前缀 = 「MC 版本线.补丁号.」，两套编号都吃这一条（号码表 2026-09-27 实测）。
+    /// 尾点不能省：`21.1.` 挡得住 `21.10.x` 混进 1.21.1 的下拉。
+    #[test]
+    fn neoforge_prefix_reads_both_numbering_schemes() {
+        assert_eq!(neoforge_prefix("1.20.4").as_deref(), Some("20.4."));
+        assert_eq!(neoforge_prefix("1.21.1").as_deref(), Some("21.1."));
+        assert_eq!(neoforge_prefix("1.20").as_deref(), Some("20.0."));
+        assert_eq!(neoforge_prefix("26.1").as_deref(), Some("26.1."));
+        assert_eq!(neoforge_prefix("26.3").as_deref(), Some("26.3."));
+        // 认不出的串给 None ⇒ 空列表，而不是把全表端出去
+        assert_eq!(neoforge_prefix("24w14a"), None);
+        assert_eq!(neoforge_prefix(""), None);
     }
 }
