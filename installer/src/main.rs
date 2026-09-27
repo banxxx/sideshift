@@ -31,7 +31,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
-use tauri::{AppHandle, Emitter, Manager, State};
+use tauri::{AppHandle, Emitter, State};
 
 /// 内嵌的官方安装包（build.rs 从主应用的 nsis 产物里读进来）
 static SETUP: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/setup-payload.bin"));
@@ -299,9 +299,13 @@ fn install(app: &AppHandle, cancel: &AtomicBool, req: Request) -> Result<Outcome
     }
     pct(app, Stage::Data, 94.0);
 
-    // 写进**应用自己**的配置目录：identifier 与主应用一致 ⇒ app_config_dir() 同一路径
-    let config = app.path().app_config_dir().map_err(|e| format!("取配置目录失败：{e}"))?;
-    std::fs::create_dir_all(&config).map_err(|e| format!("建配置目录失败：{e}"))?;
+    // 写进**应用将来会用的那个配置目录**：安装版把配置放在 exe 同级的 `appdata`
+    // （判定在 `task_engine::persist::config_dir`，目录名单源是 `data_root::APP_DATA_DIR_NAME`）。
+    // 不能再问 Tauri 要 app_config_dir()——那是老布局的 %APPDATA%，应用升级后已经不读它了。
+    // 建不起来就吵一句：静默写不进去等于「用户在安装界面挑的数据目录白挑」，那笔账没法查
+    let config = install_dir.join(data_root::APP_DATA_DIR_NAME);
+    std::fs::create_dir_all(&config)
+        .map_err(|e| format!("建配置目录 {} 失败：{e}（程序已装好，但数据目录的选择没落下来）", config.display()))?;
     let target = config.join(data_root::INSTALLER_FILE);
     let body = serde_json::json!({ "dataRoot": display(&root) }).to_string();
     std::fs::write(&target, &body).map_err(|e| format!("写 {} 失败：{e}", target.display()))?;

@@ -17,9 +17,28 @@ function pruneRedundant(paths: string[]): string[] {
     return sorted.filter((p) => !sorted.some((q) => q !== p && p.startsWith(`${q}/`)));
 }
 
+/** 两条路径是否互为父子/祖孙（`kubejs` 与 `kubejs/client_scripts`）；树上名字已按后端口径小写 */
+function isRelative(a: string, b: string): boolean {
+    return a !== b && (a.startsWith(`${b}/`) || b.startsWith(`${a}/`));
+}
+
+/**
+ * 新勾选的一条覆盖与它有父子关系的旧条目：清单里可能同时出现父级与子级（先勾了根级目录、
+ * 再进子层勾它下面的某一条，或从旧草稿带进来），此时必须让**刚点的这条**说了算，
+ * 否则「应用」时子项会被 `pruneRedundant` 判成冗余项当场丢掉，用户挑的子目录整个没生效。
+ * 反方向同理（勾父级就把已勾的子目录收进父级）。
+ * 与 `pruneRedundant` 的分工：这里管**用户刚点的那一下**（意图明确，新点的赢）；
+ * 那条只管本次没碰过的遗留父子对（方向取"不缩小保留范围"，保父）。
+ */
+function withPrecedence(v: string[], key: string): string[] {
+    // `x !== key`：全选那条路是逐个 reduce，同层里本来已勾的那条会再进来一次，不去重就出现重复条目
+    return [...v.filter((x) => x !== key && !isRelative(x, key)), key];
+}
+
 /**
  * 层级目录浏览器：双击进入子目录（含子目录的行），单击勾选（延迟判定避让双击）；
- * 头部返回键 + 面包屑回退层级。勾选先进 draft，「应用」父子去重后整体回写。
+ * 头部返回键 + 面包屑回退层级。父子互斥在勾选当场解决（见 `withPrecedence`），
+ * 「应用」再兜一次遗留的父子对（见 `pruneRedundant`）后整体回写。
  */
 export function DirPickerModal({
     open,
@@ -70,7 +89,7 @@ export function DirPickerModal({
     const keyOf = (n: PackDirNode) => [...path, n.name].join("/");
 
     const toggle = (key: string) =>
-        setDraft((v) => (v.includes(key) ? v.filter((x) => x !== key) : [...v, key]));
+        setDraft((v) => (v.includes(key) ? v.filter((x) => x !== key) : withPrecedence(v, key)));
 
     const clearTimer = () => {
         if (clickTimer.current !== null) {
@@ -108,7 +127,7 @@ export function DirPickerModal({
         setDraft((v) =>
             allOn
                 ? v.filter((k) => !levelKeys.includes(k))
-                : [...new Set([...v, ...levelKeys])]
+                : levelKeys.reduce(withPrecedence, v)
         );
 
     return (

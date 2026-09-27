@@ -3,9 +3,6 @@ import { t } from "@/lib/i18n";
 import type { SelectOption } from "@/components/ui";
 import type { PackDirNode, VersionOption } from "@/lib/types";
 
-/** 服务端推荐保留目录：包树顶层探测到即预勾选（小写比对） */
-export const KEEP_DIR_PRESETS = ["config", "defaultconfigs", "kubejs"];
-
 /** VersionOption → 下拉项（group/recommended 透传，供分组与「推荐」标记） */
 export const toOption = (v: VersionOption): SelectOption => ({
     value: v.value,

@@ -5,7 +5,22 @@ mod l10n;
 mod models;
 mod task_engine;
 
-use tauri::Manager;
+use tauri::{Manager, WebviewWindowBuilder};
+
+/// 主窗口由这里建，而不是交给 Tauri 自动建（配置里那枚 `"create": false` 就是这件事的开关）。
+/// 唯一的原因：WebView2 的数据目录只认**建窗时**给的绝对路径，而我们要把它落在配置目录里——
+/// 配置目录跟着安装目录走，卸载才带得动那几百 MB（本机实测 570MB，其中 532MB 是一次性缓存）。
+/// 仍然走 `from_config` ⇒ 尺寸/透明/无边框这些选项的单源还是 tauri.conf.json，这里不抄第二份
+fn build_main_window(app: &mut tauri::App) -> tauri::Result<()> {
+    let Some(cfg) = app.config().app.windows.first().cloned() else {
+        return Ok(());
+    };
+    let mut window = WebviewWindowBuilder::from_config(app.handle(), &cfg)?;
+    if let Some(dir) = task_engine::webview_profile_dir(app.handle()) {
+        window = window.data_directory(dir);
+    }
+    window.build().map(|_| ())
+}
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -17,6 +32,7 @@ pub fn run() {
         .setup(|app| {
             let state = task_engine::AppState::new(app.handle());
             app.manage(std::sync::Arc::new(state));
+            build_main_window(app)?;
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![

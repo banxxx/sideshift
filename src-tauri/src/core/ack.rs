@@ -36,7 +36,7 @@ use crate::task_engine::config_dir;
 pub const ACK_ENDPOINT: &str = "https://poso.us.ci/contributors.json";
 
 /// 本机快照的文件名，放在配置目录里
-const ACK_FILE: &str = "contributors.json";
+pub(crate) const ACK_FILE: &str = "contributors.json";
 
 /// Minecraft 皮肤贴图的域：那条链是客户端直连它，不经过我们的端点
 const MC_TEXTURE_HOST: &str = "textures.minecraft.net";
@@ -229,7 +229,7 @@ pub fn store(app: &AppHandle, list: &AckList) {
  */
 
 /// 皮肤地址缓存的文件名
-const SKIN_FILE: &str = "skins.json";
+pub(crate) const SKIN_FILE: &str = "skins.json";
 /// 一次查询的名字上限：没有它，名单一长就是"进一次关于页把 Mojang 的每 IP 限额点着"
 const SKIN_BATCH_MAX: usize = 64;
 /// Mojang 的批量查档一次最多收 16 个名字（实测 17 个直接 `400 CONSTRAINT_VIOLATION`）
@@ -435,7 +435,7 @@ fn write_skins(app: &AppHandle, table: &SkinTable) {
  */
 
 /// 贴图副本的目录（配置目录下的一级子目录，一人一个 `<内容哈希>.png`）
-const SKIN_DIR: &str = "skins";
+pub(crate) const SKIN_DIR: &str = "skins";
 /// 一张贴图的字节上限。64×64 的 PNG 实测一两 KB，这条只是拦住"把一个远端可控的大响应写成文件"
 const TEXTURE_MAX: usize = 256 * 1024;
 

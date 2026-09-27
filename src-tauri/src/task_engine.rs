@@ -18,6 +18,7 @@ mod util;
 
 pub use events::EVENT_CLASSIFIED;
 pub(crate) use persist::config_dir;
+pub(crate) use persist::webview_profile_dir;
 pub use persist::save_settings;
 pub use schedule::{cancel, create_task, remove_task_staging, retry_task, StartResult};
 pub use state::{AppState, Inner};

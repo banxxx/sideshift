@@ -57,7 +57,6 @@ const REMOVE_SAMPLES: PlanMod[] = [
 
 const ADD_SAMPLES: PlanMod[] = [
     { id: "fabric-api", name: "Fabric API", version: "0.92.2+1.20.1", loader: "Fabric", disposition: "add", clientOnly: false, needsReview: false, autoSupplement: true, envSource: "jarMetadata", clientSide: "optional", serverSide: "required" },
-    { id: "spark", name: "spark", version: "1.10.53", loader: "Fabric", disposition: "add", clientOnly: false, needsReview: false, autoSupplement: false, envSource: "modrinthProject", clientSide: "optional", serverSide: "optional" },
 ];
 
 /** 客户端专属模组名池（渲染/输入/小地图/HUD 类，服务端一律剔除） */
@@ -273,7 +272,8 @@ export function mockSearch(query: ModSearchQuery): ModSearchPage {
             iconUrl: undefined,
             source: query.source,
             compatible: true,
-            alreadyAdded: m.id === "spark",
+            // 「已在方案里」按 id 对到 mock 方案（后端不再自动塞推荐模组，写死某一条就会和方案样本脱钩）
+            alreadyAdded: mockPlanMods.some((p) => p.id === m.id),
         })),
     };
 }

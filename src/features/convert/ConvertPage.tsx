@@ -54,7 +54,7 @@ import { DirPickerModal, OnlineAddModal, PlanListModal, type ListFocus } from "@
 import { LaunchArgsCard, KeepDirsCard, RuntimeEnvCard, ServerSettingsCard } from "./OptionCards";
 import { ModPlanCard } from "./ModPlanCard";
 import { CARD_RISE, PAGE_RISE } from "@/lib/page-motion";
-import { KEEP_DIR_PRESETS, PREVIEW_ROWS, toOption } from "./constants";
+import { PREVIEW_ROWS, toOption } from "./constants";
 
 export function ConvertPage() {
     const t = useT();
@@ -155,13 +155,10 @@ export function ConvertPage() {
         void Promise.all([api.defaultOptions(manifest), api.listPackDirs()]).then(
             ([o, nodes]) => {
                 setPackDirs(nodes);
-                const present = KEEP_DIR_PRESETS.filter((name) =>
-                    nodes.some((n) => n.name.toLowerCase() === name)
-                );
+                // 保留目录不预勾任何条目：勾哪个保哪个是这张卡的语义（原先那批根级预勾已撤）
                 setOptions({
                     ...o,
                     mcVersion: manifest.mcVersion,
-                    keepDirs: o.keepDirs.length ? o.keepDirs : present,
                 });
             }
         );

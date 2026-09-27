@@ -18,6 +18,11 @@ pub const DIR_NAME: &str = "SideShift";
 pub const PORTABLE_FLAG: &str = "portable.flag";
 /// 便携模式下数据跟着 exe 走的那个目录名（配置与 output/cache 都在里面）
 pub const DATA_DIR_NAME: &str = "data";
+/// 安装版里「应用自己的状态」放的目录名（settings/tasks/鸣谢快照/皮肤副本/WebView profile）。
+/// 和便携包的 `data` 刻意分开：那个是「配置 + 产物 + 缓存」整包跟着 exe 走；这个只有配置，
+/// 产物与缓存仍按数据根那套走（`suggested_root`）。安装壳要在同一个位置写 installer.json，
+/// 所以名字放这里而不是两边各写一遍
+pub const APP_DATA_DIR_NAME: &str = "appdata";
 /// 自绘安装壳写入的数据根：`{"dataRoot":"E:\\Games\\SideShift"}`，只在这份文件存在时覆盖预选
 pub const INSTALLER_FILE: &str = "installer.json";
 /// 数据根下的两个子目录。名字放这里而不是散在 `defaults_in` 里：安装壳要在装的时候

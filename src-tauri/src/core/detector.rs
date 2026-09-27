@@ -272,30 +272,6 @@ pub fn build_plan(
             bytecode_hint: None,
         });
     }
-    // 推荐项：服务端性能监控 spark
-    if !has("spark") {
-        plan.push(PlanMod {
-            id: "spark".into(),
-            name: "spark".into(),
-            version: String::new(),
-            loader: Some(loader_label.clone()),
-            disposition: ModDisposition::Add,
-            client_only: false,
-            needs_review: false,
-            auto_supplement: false,
-            size_bytes: 0,
-            needs_download: true,
-            local_path: None,
-            pinned: None,
-            depends: Vec::new(),
-            src_path: None,
-            env_source: EnvSource::Unknown,
-            env_conflict: false,
-            client_side: None,
-            server_side: Some(SideFlag::Optional),
-            bytecode_hint: None,
-        });
-    }
     plan
 }
 
