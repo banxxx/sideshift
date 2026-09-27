@@ -35,6 +35,9 @@ chrono = { version = "0.4", default-features = false, features = ["clock", "std"
 uuid = { version = "1", features = ["v4"] }
 thiserror = "2"
 sha1 = "0.10"
+# Mojang 的贴图属性是 base64 的 JSON（值在 payload 里，不给明文）⇒ 皮肤那条链要解一次。
+# 锁 0.22：与依赖树里已有的那一份同版本，不因此多编一份 crate
+base64 = { version = "0.22", default-features = false, features = ["std"] }
 # 检查更新要比 `1.0.0-beta.2` 与 `1.0.0` 谁新，字符串比较判不出（0.10.0 字面比 0.9.0 小）
 semver = "1"
 

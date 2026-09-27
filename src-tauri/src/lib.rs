@@ -58,6 +58,9 @@ pub fn run() {
             commands::check_update,
             commands::ack_snapshot,
             commands::ack_refresh,
+            commands::ack_skins,
+            commands::ack_skin_texture_get,
+            commands::ack_skin_texture_put,
             commands::open_local_path,
             commands::reveal_local_path,
         ])

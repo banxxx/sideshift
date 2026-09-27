@@ -16,8 +16,11 @@
 //! 只按同源判会把所有自带头像一律抹成非法。细节见 `avatar_allowed`）。
 //! 校验发生在**落盘之前**，缓存里那份因此一定是干净的。
 
+use base64::Engine as _;
+use futures::StreamExt as _;
 use serde::{Deserialize, Serialize};
-use std::path::PathBuf;
+use std::collections::HashMap;
+use std::path::{Path, PathBuf};
 use tauri::AppHandle;
 
 use crate::core::downloader::{net_code, reqwest_code};
@@ -194,6 +197,303 @@ pub fn store(app: &AppHandle, list: &AckList) {
     write_snapshot(app, list);
 }
 
+/* ---------------- 正版皮肤：玩家名 → 贴图地址 ----------------
+ *
+ * **只回地址，字节不过这里**。前端拿地址直连 `textures.minecraft.net`（实测响应带
+ * `Access-Control-Allow-Origin: *` ⇒ `<img crossOrigin>` + 画布回读都不脏），
+ * 所以这台机器上没有任何一版安装包要背皮肤的出口流量。
+ *
+ * **为什么整条查询在 Rust、不在浏览器、也不走我们的 Worker**：
+ *  - 浏览器打不了：`api.minecraftservices.com` 与 `sessionserver.mojang.com` 都不给 CORS 头
+ *    （只有贴图 CDN 给），"名字 → UUID → 贴图地址"那两跳在 WebView 里必被同源策略挡死。
+ *  - Worker 那条 `/skins` 实测三处不通，一次都拿不到地址：Cloudflare 的出口被 Mojang 判 `403`
+ *    （机房 IP 段整片拦）、它只认 `https` 而 Mojang 的 payload 里给的是 `http`、
+ *    它解 payload 找的是 `skins.model.url`/`skins.classic.url` 而 sessionserver 给的是
+ *    `textures.SKIN.url`。⇒ 本机直查是目前唯一跑得通的路，也少一次可信第三方。
+ *
+ * 缓存落配置目录、与快照同一条性质（**不是**可清理缓存）：限流是按 IP 算的，
+ * 没有它每次进关于页都要重打几十次 Mojang，而这里错的只是"皮肤旧了几天"。
+ */
+
+/// 皮肤地址缓存的文件名
+const SKIN_FILE: &str = "skins.json";
+/// 一次查询的名字上限：没有它，名单一长就是"进一次关于页把 Mojang 的每 IP 限额点着"
+const SKIN_BATCH_MAX: usize = 64;
+/// Mojang 的批量查档一次最多收 16 个名字（实测 17 个直接 `400 CONSTRAINT_VIOLATION`）
+const BULK_CHUNK: usize = 16;
+/// 并发度：几十人一轮在秒级出完，又不至于把限额一次烧光
+const SKIN_CONCURRENCY: usize = 4;
+/// 一条地址的保鲜期。玩家会改名会换皮肤，但这里错的方向只是"外观旧几天"，不是"错到永远"
+const SKIN_TTL_S: i64 = 7 * 24 * 3600;
+
+const BULK_URL: &str = "https://api.minecraftservices.com/minecraft/profile/lookup/bulk/byname";
+const SESSION_URL: &str = "https://sessionserver.mojang.com/session/minecraft/profile/";
+
+/// 合法玩家名（与 Worker 那条同一口径）。下限照样不设：拦错的代价是某个人的皮肤永远出不来，
+/// 放过的代价只是一次 404——而 404 不落表
+fn mc_name_ok(s: &str) -> bool {
+    !s.is_empty()
+        && s.len() <= 16
+        && s.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_')
+}
+
+/// 表里的一行。`at` 存 unix 秒而不是 ISO 串：这里只比较大小，不参与任何显示
+#[derive(Debug, Default, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SkinRow {
+    url: String,
+    at: i64,
+}
+
+/// 键＝小写玩家名（Minecraft 名字大小写不敏感，显示用的原名由调用方自己拿着）
+type SkinTable = HashMap<String, SkinRow>;
+
+fn now_s() -> i64 {
+    chrono::Utc::now().timestamp()
+}
+
+/// 一次批量查询的全部网络往返：分片查 UUID → 逐个查贴图地址。
+/// 失败不报错——**回什么就是什么**：查不到的人不在返回的表里，对他们前端走"自带 avatar → 首字"那两层。
+/// 429 与 5xx 都不落表（`fetch_skins` 只在拿到地址时才写行），所以"暂时查不到"不会被冻成"永远查不到"。
+pub async fn resolve_textures(client: &reqwest::Client, names: &[String]) -> HashMap<String, String> {
+    let mut uniq: Vec<String> = Vec::new();
+    let mut seen: HashMap<String, ()> = HashMap::new();
+    for n in names {
+        let key = n.trim().to_ascii_lowercase();
+        if !mc_name_ok(&key) || seen.insert(key.clone(), ()).is_some() {
+            continue;
+        }
+        uniq.push(key);
+        if uniq.len() >= SKIN_BATCH_MAX {
+            break;
+        }
+    }
+
+    let chunks: Vec<Vec<String>> = uniq.chunks(BULK_CHUNK).map(|c| c.to_vec()).collect();
+    let pairs: Vec<(String, String)> = futures::stream::iter(
+        chunks
+            .into_iter()
+            .map(|chunk| async move { bulk_lookup(client, &chunk).await }),
+    )
+    .buffer_unordered(SKIN_CONCURRENCY)
+    .collect::<Vec<_>>()
+    .await
+    .into_iter()
+    .flatten()
+    .collect();
+
+    futures::stream::iter(pairs.into_iter().map(|(name, uuid)| {
+        let client = client.clone();
+        async move {
+            let url = texture_url(&client, &uuid).await?;
+            Some((name, url))
+        }
+    }))
+    .buffer_unordered(SKIN_CONCURRENCY)
+    .filter_map(|x| async move { x })
+    .collect::<HashMap<_, _>>()
+    .await
+}
+
+/// 名字 → UUID。Mojang 对不存在的名是**静默省略**（不报错、不占位），所以这里一次请求换一批人
+async fn bulk_lookup(client: &reqwest::Client, names: &[String]) -> Vec<(String, String)> {
+    let resp = match client.post(BULK_URL).json(names).send().await {
+        Ok(r) if r.status().is_success() => r,
+        _ => return Vec::new(),
+    };
+    let body: Vec<ProfileRef> = match resp.json().await {
+        Ok(b) => b,
+        Err(_) => return Vec::new(),
+    };
+    body.into_iter()
+        .map(|p| (p.name.to_ascii_lowercase(), p.id))
+        .collect()
+}
+
+/// UUID → 贴图地址。三道门槛：payload 里必须有 `textures.SKIN.url`、主机必须正好是贴图 CDN、
+/// 一律收成 https（Mojang 发的就是 `http://`，而 WebView 里 http 资源比 https 页面更难办）
+async fn texture_url(client: &reqwest::Client, uuid: &str) -> Option<String> {
+    let resp = client
+        .get(format!("{SESSION_URL}{}", encode_uuid(uuid)))
+        .send()
+        .await
+        .ok()?;
+    if !resp.status().is_success() {
+        return None;
+    }
+    let profile: SessionProfile = resp.json().await.ok()?;
+    let value = profile
+        .properties
+        .into_iter()
+        .find(|p| p.name == "textures")?
+        .value;
+    let decoded = base64::engine::general_purpose::STANDARD
+        .decode(value)
+        .ok()?;
+    let skin: serde_json::Value = serde_json::from_slice(&decoded).ok()?;
+    skin_url(skin["textures"]["SKIN"]["url"].as_str()?)
+}
+
+/// Mojang 接受不带连字符的 UUID；万一名单里存的是带连字符的形式，这里剥掉再拼 URL
+fn encode_uuid(uuid: &str) -> String {
+    uuid.chars().filter(|c| *c != '-').collect()
+}
+
+/// 收口成 https 并只认 Mojang 那个静态 CDN。放过去就等于把一个远端可控的外链交给前端去加载
+fn skin_url(raw: &str) -> Option<String> {
+    let https = match raw.strip_prefix("http://") {
+        Some(rest) => format!("https://{rest}"),
+        None => raw.to_string(),
+    };
+    (host_of(&https)? == MC_TEXTURE_HOST).then_some(https)
+}
+
+/// 拉一次皮肤地址：读缓存 → 只查过期与缺失的那些 → 合并写回 → 回全量
+/// （回全量而不是只回"这次新查到的"：前端不想知道地址是从哪一档来的，它只要一张对照表）
+pub async fn fetch_skins(
+    app: &AppHandle,
+    client: &reqwest::Client,
+    names: &[String],
+) -> HashMap<String, String> {
+    let wanted: Vec<String> = names
+        .iter()
+        .map(|n| n.trim().to_ascii_lowercase())
+        .collect();
+    let mut table = read_skins(app);
+    let now = now_s();
+    let stale: Vec<String> = names
+        .iter()
+        .zip(wanted.iter())
+        .filter(|(_, key)| {
+            table
+                .get(key.as_str())
+                .is_none_or(|row| now - row.at > SKIN_TTL_S)
+        })
+        .map(|(n, _)| n.clone())
+        .collect();
+    if !stale.is_empty() {
+        let fresh = resolve_textures(client, &stale).await;
+        // 只在新地址真拿到时才改写这一行：一次抖动不该把上次成功的结果抹掉，
+        // 也不该把 `at` 推后（那会让"这次没查到"被当成"刚查过"，白等一整个 TTL）
+        for (key, url) in fresh {
+            table.insert(key, SkinRow { url, at: now });
+        }
+        write_skins(app, &table);
+    }
+    names
+        .iter()
+        .zip(wanted.iter())
+        .filter_map(|(n, key)| {
+            table
+                .get(key.as_str())
+                .map(|row| (n.clone(), row.url.clone()))
+        })
+        .collect()
+}
+
+fn read_skins(app: &AppHandle) -> SkinTable {
+    let Some(dir) = config_dir(app) else {
+        return SkinTable::new();
+    };
+    let Ok(raw) = std::fs::read_to_string(dir.join(SKIN_FILE)) else {
+        return SkinTable::new();
+    };
+    // 坏文件＝没有文件：下次查询会整表重写，不需要在这里替它保留半份
+    serde_json::from_str(&raw).unwrap_or_default()
+}
+
+fn write_skins(app: &AppHandle, table: &SkinTable) {
+    let Some(dir) = config_dir(app) else { return };
+    if std::fs::create_dir_all(&dir).is_err() {
+        return;
+    }
+    if let Ok(text) = serde_json::to_string(table) {
+        let _ = std::fs::write(dir.join(SKIN_FILE), text);
+    }
+}
+
+/* ---------- 贴图字节的一份本机副本 ----------
+ * 地址表只管"这个人名下现在是哪张贴图"（7 天保鲜），这份副本管"那张贴图的字节本身"：
+ * 命中就一个字节都不用出去，换皮肤也不影响（新地址＝新文件名，旧那张躺在那儿等同名地址回来）。
+ *
+ * 网络那条路**没有**改到后端来：字节照旧由 WebView 直连 CDN 取（那台机器的代理只有浏览器吃，
+ * 挪进 reqwest 会把"现在能显示的人"变成"显示不出来"）。后端只做存与取，所以这份缓存
+ * 一次都不会让可达性变差，只会让它少一次。
+ */
+
+/// 贴图副本的目录（配置目录下的一级子目录，一人一个 `<内容哈希>.png`）
+const SKIN_DIR: &str = "skins";
+/// 一张贴图的字节上限。64×64 的 PNG 实测一两 KB，这条只是拦住"把一个远端可控的大响应写成文件"
+const TEXTURE_MAX: usize = 256 * 1024;
+
+/// 缓存文件的完整路径。三道门槛：本来就是 https 且主机正好是贴图 CDN（`skin_url` 那条口径）、
+/// 路径段是 `…/texture/<哈希>`、哈希是 64 位小写十六进制。**文件名是从远端返回的 JSON 里来的**，
+/// 不校验形状就是往配置目录里拼路径的口——Mojang 的地址确实长成这样，末段天生就是缓存键
+fn texture_path(dir: &Path, url: &str) -> Option<PathBuf> {
+    let (prefix, key) = url.split_once("/texture/")?;
+    if !key.bytes().all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase()) {
+        return None;
+    }
+    // `skin_url` 会把 http 升成 https，所以「原样吐回来」等价于「本来就是 https 且主机正好是贴图 CDN」
+    if skin_url(prefix)? != prefix || key.len() != 64 {
+        return None;
+    }
+    Some(dir.join(SKIN_DIR).join(format!("{key}.png")))
+}
+
+/// 读本机那份贴图字节，回 base64（前端把它拼成 `data:` 地址喂给 `<img>`）。
+/// 没有这个文件、读不动、大小不对都算"没缓存"，调用方自己走去网络
+pub fn read_texture(app: &AppHandle, url: &str) -> Option<String> {
+    read_texture_in(&config_dir(app)?, url)
+}
+
+fn read_texture_in(dir: &Path, url: &str) -> Option<String> {
+    let bytes = std::fs::read(texture_path(dir, url)?).ok()?;
+    (!bytes.is_empty() && bytes.len() <= TEXTURE_MAX)
+        .then(|| base64::engine::general_purpose::STANDARD.encode(&bytes))
+}
+
+/// 写一份贴图字节。`false`＝没写成（目录建不了、磁盘满、地址形状不对），但**这不是错误**：
+/// 本次解码已经成功了，缓存没落下来只是下次还得打一趟 CDN
+pub fn write_texture(app: &AppHandle, url: &str, b64: &str) -> bool {
+    config_dir(app).is_some_and(|dir| write_texture_in(&dir, url, b64))
+}
+
+fn write_texture_in(dir: &Path, url: &str, b64: &str) -> bool {
+    let Some(path) = texture_path(dir, url) else {
+        return false;
+    };
+    let Ok(bytes) = base64::engine::general_purpose::STANDARD.decode(b64) else {
+        return false;
+    };
+    if bytes.is_empty() || bytes.len() > TEXTURE_MAX {
+        return false;
+    }
+    let Some(parent) = path.parent() else { return false };
+    if std::fs::create_dir_all(parent).is_err() {
+        return false;
+    }
+    std::fs::write(&path, bytes).is_ok()
+}
+
+#[derive(Deserialize)]
+struct ProfileRef {
+    id: String,
+    name: String,
+}
+
+#[derive(Deserialize)]
+struct SessionProfile {
+    #[serde(default)]
+    properties: Vec<SessionProp>,
+}
+
+#[derive(Deserialize)]
+struct SessionProp {
+    name: String,
+    value: String,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -261,5 +561,106 @@ mod tests {
         assert_eq!(list.people[0].avatar, None);
         // 回写时不合法的 avatar 已被抹掉 ⇒ 不出现 "avatar":null
         assert_eq!(serde_json::to_string(&list.people[0]).unwrap(), r#"{"name":"Banxxx","minecraftId":true}"#);
+    }
+
+    /// 贴图地址的三道门槛：主机必须正好是 Mojang 那个 CDN，协议一律收成 https。
+    /// 放过去一个远端可控的外链，等于让前端去加载我们不认识的东西
+    #[test]
+    fn texture_urls_are_pinned_to_the_cdn() {
+        assert_eq!(
+            skin_url("http://textures.minecraft.net/texture/abc").as_deref(),
+            Some("https://textures.minecraft.net/texture/abc")
+        );
+        assert_eq!(
+            skin_url("https://textures.minecraft.net/texture/abc").as_deref(),
+            Some("https://textures.minecraft.net/texture/abc")
+        );
+        assert_eq!(skin_url("https://evil.example/texture/abc"), None);
+        assert_eq!(skin_url("https://textures.minecraft.net.evil.example/x"), None);
+        // userinfo 伪装：主机段读起来像允许域，实际指向别处
+        assert_eq!(skin_url("https://textures.minecraft.net@evil.example/x"), None);
+        assert_eq!(skin_url(""), None);
+    }
+
+    #[test]
+    fn mc_names_reject_the_obvious_garbage() {
+        assert!(mc_name_ok("POSOO"));
+        assert!(mc_name_ok("banxxx_9"));
+        assert!(mc_name_ok("a")); // 下限故意不设（见 `mc_name_ok`）
+        assert!(!mc_name_ok("Ban xxx")); // 空格
+        assert!(!mc_name_ok("张三"));
+        assert!(!mc_name_ok(""));
+        assert!(!mc_name_ok("0123456789abcdef0")); // 17 个字符
+    }
+
+    /// 缓存表的线格式：小写键 + `{url, at}`。前端只吃 `Record<string,string>`，
+    /// 这张表不出 Rust ⇒ 换形状不用动前端，但**换键名要记得**这是持久件（旧文件会被当坏文件丢掉）
+    #[test]
+    fn skin_table_round_trips() {
+        let mut table = SkinTable::new();
+        table.insert(
+            "posoo".into(),
+            SkinRow {
+                url: "https://textures.minecraft.net/texture/abc".into(),
+                at: 1_700_000_000,
+            },
+        );
+        let text = serde_json::to_string(&table).unwrap();
+        assert_eq!(
+            text,
+            r#"{"posoo":{"url":"https://textures.minecraft.net/texture/abc","at":1700000000}}"#
+        );
+        assert_eq!(serde_json::from_str::<SkinTable>(&text).unwrap(), table);
+        // 坏文件＝没有文件，不报错
+        assert!(serde_json::from_str::<SkinTable>("{").is_err());
+    }
+
+    /// 贴图副本的文件名是从**远端返回的地址**里取的，所以这道门槛是路径注入的闸口：
+    /// 只认「https + 贴图 CDN + 末段 64 位小写十六进制」这一种形状，其余一律不落成文件
+    #[test]
+    fn texture_cache_path_pins_the_host_and_the_hash_shape() {
+        let dir = Path::new("cfg");
+        let hash = "9b49d068923369682cafc31f50f93cb35c437358cddebc7feff5566fb943e8b5";
+        let want = dir.join(SKIN_DIR).join(format!("{hash}.png"));
+        assert_eq!(
+            texture_path(dir, &format!("https://{MC_TEXTURE_HOST}/texture/{hash}")).as_deref(),
+            Some(want.as_path())
+        );
+        let no = |u: String| assert_eq!(texture_path(dir, &u), None, "不该认这份地址：{u}");
+        no(format!("http://{MC_TEXTURE_HOST}/texture/{hash}")); // 没升 https 的原样
+        no(format!("https://evil.example/texture/{hash}")); // 主机不对
+        no(format!("https://{MC_TEXTURE_HOST}/texture/abc")); // 末段太短
+        no(format!("https://{MC_TEXTURE_HOST}/texture/{}", hash.to_uppercase())); // 大写另算一份
+        no(format!("https://{MC_TEXTURE_HOST}/skin/{hash}")); // 不是 texture/ 那一档也不认（末段虽对，路径段一并收紧）
+        no(format!(
+            "https://{MC_TEXTURE_HOST}/texture/{}settings.json",
+            "..\\".repeat(17)
+        )); // 正好 64 个字符的反斜杠穿越
+    }
+
+    /// 副本本身跑得通：写进去的字节 == 读回来的字节，且真的落在 `skins/<哈希>.png` 那一格。
+    /// 这条是整份缓存唯一"能不能省一次网络"的判据，路径门槛上面那条已经管了
+    #[test]
+    fn texture_bytes_round_trip_on_disk() {
+        let dir = std::env::temp_dir().join(format!("sideshift-ack-tex-{}", uuid::Uuid::new_v4()));
+        let url = format!(
+            "https://{MC_TEXTURE_HOST}/texture/9b49d068923369682cafc31f50f93cb35c437358cddebc7feff5566fb943e8b5"
+        );
+        let png = [0x89u8, b'P', b'N', b'G', 13, 10, 26, 10, 7, 3];
+        let b64 = base64::engine::general_purpose::STANDARD.encode(png);
+
+        assert!(write_texture_in(&dir, &url, &b64));
+        assert_eq!(read_texture_in(&dir, &url).as_deref(), Some(b64.as_str()));
+        // 落点就是内容哈希那一格，且没写到 `skins/` 之外去
+        assert!(dir.join(SKIN_DIR).join("9b49d068923369682cafc31f50f93cb35c437358cddebc7feff5566fb943e8b5.png").is_file());
+        assert!(!dir.join("settings.json").exists());
+
+        // 空字节与坏 base64 都不落盘（返回 false，且不把上一次的结果弄坏）
+        assert!(!write_texture_in(&dir, &url, ""));
+        assert!(!write_texture_in(&dir, &url, "!!!not base64!!!"));
+        assert!(!write_texture_in(&dir, &format!("https://evil/texture/{}", "a".repeat(64)), &b64));
+        assert_eq!(read_texture_in(&dir, &url).as_deref(), Some(b64.as_str()));
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

@@ -44,6 +44,7 @@ import { RISE } from "@/lib/springs";
 import { useT } from "@/lib/i18n";
 import type { AckPerson } from "@/lib/types";
 import { cn } from "@/lib/utils";
+import { McHead, type McHeadHandle } from "./McHead";
 
 /**
  * 首字兜底：连头像都没有时块上放的字符。
@@ -102,8 +103,10 @@ function withAlpha(hex: string, a: number): string {
     return `rgba(${(n >> 16) & 255},${(n >> 8) & 255},${n & 255},${a})`;
 }
 
-function AckCard({ p, delay }: { p: AckPerson; delay: number }) {
+function AckCard({ p, skin, delay }: { p: AckPerson; skin?: string; delay: number }) {
     const btn = useRef<HTMLButtonElement>(null);
+    /** 3D 头像的偏转走命令式：指针每动一次不该让整张卡重挂（见 `McHead` 的注释） */
+    const head = useRef<McHeadHandle>(null);
     /** 正在演的那条复位动画：只握它自己的句柄——`getAnimations()` 一把 cancel 会把正扫过来的涟漪掐断 */
     const back = useRef<Animation | null>(null);
     const reduced = useReducedMotion();
@@ -112,6 +115,7 @@ function AckCard({ p, delay }: { p: AckPerson; delay: number }) {
     const [failedSrc, setFailedSrc] = useState<string | null>(null);
 
     const leave = useCallback(() => {
+        head.current?.setTilt(0, 0);
         const el = btn.current;
         if (!el) return;
         const from = el.style.transform;
@@ -148,6 +152,31 @@ function AckCard({ p, delay }: { p: AckPerson; delay: number }) {
     // 卸载（切页、换语言重挂）时收掉没演完的那条
     useEffect(() => () => back.current?.cancel(), []);
 
+    /** 回落链的下面两层（自带 avatar → 名字首字）：皮肤那一层在它之前/之外都要用它垫着 */
+    const flat = p.avatar ? (
+        <img
+            src={failedSrc === p.avatar ? AVATAR_FALLBACK : p.avatar}
+            onError={() => setFailedSrc(p.avatar ?? null)}
+            alt=""
+            aria-hidden
+            draggable={false}
+            className="shrink-0 rounded-[4px] object-cover transition-transform duration-200 group-hover/ack:[transform:translateZ(16px)]"
+            style={{ width: S, height: S }}
+        />
+    ) : (
+        <span
+            aria-hidden
+            className={cn(
+                "flex shrink-0 items-center justify-center rounded-[4px] bg-surface-2",
+                "font-mono text-[12px] font-semibold uppercase text-text-2",
+                "transition-transform duration-200 group-hover/ack:[transform:translateZ(16px)]"
+            )}
+            style={{ width: S, height: S }}
+        >
+            {initialsOf(p.name)}
+        </span>
+    );
+
     return (
         <motion.div
             className="inline-flex min-w-0"
@@ -171,6 +200,8 @@ function AckCard({ p, delay }: { p: AckPerson; delay: number }) {
                     el.style.transform = `perspective(${TILT.pd}px) rotateX(${(-dy * TILT.deg * 2).toFixed(2)}deg) rotateY(${(dx * TILT.deg * 2).toFixed(2)}deg) translateZ(${TILT.lift}px)`;
                     el.style.setProperty("--ack-gx", `${((dx + 0.5) * 100).toFixed(1)}%`);
                     el.style.setProperty("--ack-gy", `${((dy + 0.5) * 100).toFixed(1)}%`);
+                    // 头像自己那一摆与卡片的倾角是两条线（同一元素两条 transform 会互相顶掉）
+                    head.current?.setTilt(dx, dy);
                 }}
                 onPointerLeave={leave}
                 className={cn(
@@ -189,32 +220,15 @@ function AckCard({ p, delay }: { p: AckPerson; delay: number }) {
                 {/* 命中区外扩（透明，只吃指针不占布局）：祖先 :hover 与 pointer 事件都算在这张卡上。
                     相邻两张卡各扩 HIT ⇒ 在行的中线正好相遇，零重叠 */}
                 <span aria-hidden className="absolute" style={{ inset: -HIT }} />
-                {/* 三层回落：皮肤（`minecraftId` 为真时将来替换这一层）→ 自带 avatar → 名字首字。
-                    皮肤那条线还没接，所以现在 minecraftId 只跟着数据走、不参与渲染判断。
+                {/* 三层回落：正版皮肤（`skin` 有值时）→ 自带 avatar → 名字首字。
+                    下面这两层合起来就是「皮肤那层还没就绪、或者根本没有」时的那一张：
+                    `McHead` 在拿到贴图之前把它原样渲染出来，所以这块地方从不会空一下。
                     有 avatar 但**取不到**（404、离线、图被删）⇒ 落本地占位图，不留破图框：
                     主机合法但内容没了是一条正常路径，不是异常，界面不该因此坏掉 */}
-                {p.avatar ? (
-                    <img
-                        src={failedSrc === p.avatar ? AVATAR_FALLBACK : p.avatar}
-                        onError={() => setFailedSrc(p.avatar ?? null)}
-                        alt=""
-                        aria-hidden
-                        draggable={false}
-                        className="shrink-0 rounded-[4px] object-cover transition-transform duration-200 group-hover/ack:[transform:translateZ(16px)]"
-                        style={{ width: S, height: S }}
-                    />
+                {skin ? (
+                    <McHead ref={head} url={skin} size={S} fallback={flat} />
                 ) : (
-                    <span
-                        aria-hidden
-                        className={cn(
-                            "flex shrink-0 items-center justify-center rounded-[4px] bg-surface-2",
-                            "font-mono text-[12px] font-semibold uppercase text-text-2",
-                            "transition-transform duration-200 group-hover/ack:[transform:translateZ(16px)]"
-                        )}
-                        style={{ width: S, height: S }}
-                    >
-                        {initialsOf(p.name)}
-                    </span>
+                    flat
                 )}
                 <span className="max-w-[150px] truncate text-[12.5px] leading-[1.25] font-medium text-text-1 transition-transform duration-200 group-hover/ack:[transform:translateZ(16px)]">
                     {p.name}
@@ -236,10 +250,13 @@ function AckCard({ p, delay }: { p: AckPerson; delay: number }) {
 /** 取数状态：`pending` 还没定档、`empty` 一次数据都没拿到过（这一档屏上给一句话 + 重新获取） */
 export function AckWall({
     people,
+    skins,
     status,
     onRetry,
 }: {
     people: AckPerson[];
+    /** 玩家名 → 正版皮肤地址；没有这个人（没查、查不到、没网）就是表里少一行，卡片自己落回下一层 */
+    skins: Record<string, string>;
     status: "pending" | "ready" | "empty";
     onRetry: () => void;
 }) {
@@ -417,6 +434,7 @@ export function AckWall({
                             <AckCard
                                 key={`${p.name}-${i}`}
                                 p={p}
+                                skin={p.minecraftId ? skins[p.name] : undefined}
                                 delay={i * Math.min(ENTRY.stagger, ENTRY.budget / Math.max(1, people.length))}
                             />
                         ))}

@@ -79,7 +79,7 @@ function FoldBody({ children }: { children: ReactNode }) {
 
 export function AboutPage() {
     const t = useT();
-    const { people, status, retry } = useContributors();
+    const { people, skins, status, retry } = useContributors();
     const [privacyOpen, setPrivacyOpen] = useState(false);
     const [thirdPartyOpen, setThirdPartyOpen] = useState(false);
 
@@ -117,7 +117,7 @@ export function AboutPage() {
 
             {/* ---- 鸣谢名单 ---- */}
             <motion.div variants={CARD_RISE}>
-                <AckWall people={people} status={status} onRetry={retry} />
+                <AckWall people={people} skins={skins} status={status} onRetry={retry} />
             </motion.div>
 
             {/* ---- 数据与隐私 ---- */}

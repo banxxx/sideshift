@@ -3585,6 +3585,7 @@ checksum = "f8fadd59c855ef2080decdef8ff161eb6661b86933c9d82e5ba29dc602a55aba"
 name = "sideshift"
 version = "1.0.0-beta.1"
 dependencies = [
+ "base64 0.22.1",
  "chrono",
  "futures",
  "reqwest 0.12.28",

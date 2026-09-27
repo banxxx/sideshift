@@ -335,10 +335,19 @@ export const mockPackDirs: PackDirNode[] = [
 ];
 
 /**
- * 鸣谢名单的浏览器 dev 夹具。真数据在远端（Rust: `core::ack`），这份只保证纯浏览器
- * 开发时那一整页有东西可看——它的 `avatar` 全部留空，因为真链接要等端点定下来。
+ * 鸣谢名单的浏览器 dev 夹具。真名单在远端（Rust: `core::ack`），这份只保证纯浏览器
+ * 开发时那一整页有东西可看——包括 3D 皮肤头像那一层：`mockAckSkins` 给的是 Mojang 公开的
+ * 贴图地址（真地址、真走一次 CDN，只是「名字→地址」那一段在纯浏览器里打不了，故照抄一份）。
  */
 export const mockAckList: AckList = {
     version: "mock",
-    people: [{ name: "Banxxx", minecraftId: false }],
+    people: [
+        { name: "Banxxx", minecraftId: false },
+        { name: "POSOO", minecraftId: true },
+    ],
+};
+
+/** 与 `mockAckList` 同一形状的一份对照表：只有 `minecraftId` 为真的名字会出现在这里 */
+export const mockAckSkins: Record<string, string> = {
+    POSOO: "https://textures.minecraft.net/texture/9b49d068923369682cafc31f50f93cb35c437358cddebc7feff5566fb943e8b5",
 };

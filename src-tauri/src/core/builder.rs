@@ -307,6 +307,43 @@ fn one_line(s: &str) -> String {
     s.replace('\\', "\\\\").replace(['\r', '\n'], " ")
 }
 
+/// 同上，再把非 ASCII 一律换成 properties 原生的 `\uXXXX`。
+/// 星平面字符（emoji）按 UTF-16 拆成一对代理：`.properties` 只认得 `char` 那一层，
+/// 直接写 `\u1F9F1` 会被解成一个非法码点
+fn one_line_escaped(s: &str) -> String {
+    let mut out = String::new();
+    for c in one_line(s).chars() {
+        if c.is_ascii() {
+            out.push(c);
+        } else if (c as u32) > 0xFFFF {
+            for u in c.encode_utf16(&mut [0u16; 2]) {
+                out.push_str(&format!("\\u{u:04X}"));
+            }
+        } else {
+            out.push_str(&format!("\\u{:04X}", c as u32));
+        }
+    }
+    out
+}
+
+/// 这个 MC 版本的服务端读属性文件时会不会按 ISO-8859-1 解我们的 UTF-8 字节（会 ⇒ 要转义）。
+///
+/// 判据只有一条硬事实：**1.20 pre1 起**才是「UTF-8 优先、Latin-1 兜底」，更早一律 Latin-1，
+/// 于是一个中文在服务端那边变成三个怪字符。`\uXXXX` 两边都解得对，所以判不出来时选**转**
+/// （代价只是文件里那行不可读，反过来判错是真乱码）——快照串 `24w14a`、alpha/beta 都落在这一档。
+/// 两套写法都认：`1.x` 看第二段，`1` 之外的首段是年份号（`26.3`），恒在新侧。
+fn props_must_escape(mc: &str) -> bool {
+    let head = mc.trim().trim_start_matches(|c: char| c.is_ascii_alphabetic());
+    let mut parts = head.split('.');
+    let major = parts.next().and_then(|s| s.parse::<u32>().ok());
+    let minor = parts.next().and_then(|s| s.parse::<u32>().ok());
+    match major {
+        Some(0 | 1) => minor.is_none_or(|m| m < 20),
+        Some(_) => false,
+        None => true,
+    }
+}
+
 /// 安装目录里不进交付包的东西（实测 Forge 1.20.1 / NeoForge 26.2 的新式布局与 1.16.5 的老式布局）：
 /// run 脚本与 JVM 参数模板由 builder 自己生成，`inst.sha1` 是安装器自留的记账
 const INSTALLER_KEEP_OUT: &[&str] = &[
@@ -496,7 +533,9 @@ fn write_root_files(input: &BuildInput, shape: &RunShape) -> Result<Vec<String>,
                         ),
                         format!("#!/usr/bin/env bash\ncd \"$(dirname \"$0\")\"\njava {jvm} -jar {jar}{nogui}\n"),
                     ),
-                    // 未本机安装：首次运行自动执行 installServer，之后用 installer 生成的 run 脚本启动
+                    // 未本机安装：首次运行自动执行 installServer，之后用 installer 生成的 run 脚本启动。
+                    // 开关必须转给那两份脚本（实测它们以 `%*` / `"$@"` 收尾）——不带过去
+                    // 等于这一档的「无界面」静默失效，另三态都是自己在命令行上带参数的
                     RunShape::FirstBootInstall => {
                         let installer = input
                             .installer_jar_name
@@ -504,10 +543,10 @@ fn write_root_files(input: &BuildInput, shape: &RunShape) -> Result<Vec<String>,
                             .unwrap_or("installer.jar");
                         (
                             format!(
-                                "@echo off\r\ncd /d \"%~dp0\"\r\nif not exist run.bat java -Xmx1G -jar {installer} --installServer\r\nif exist run.bat (call run.bat) else (echo 安装失败，请手动运行: java -jar {installer} --installServer & pause)\r\n"
+                                "@echo off\r\ncd /d \"%~dp0\"\r\nif not exist run.bat java -Xmx1G -jar {installer} --installServer\r\nif exist run.bat (call run.bat{nogui}) else (echo 安装失败，请手动运行: java -jar {installer} --installServer & pause)\r\n"
                             ),
                             format!(
-                                "#!/usr/bin/env bash\ncd \"$(dirname \"$0\")\"\n[ -f run.sh ] || java -Xmx1G -jar {installer} --installServer\nbash run.sh\n"
+                                "#!/usr/bin/env bash\ncd \"$(dirname \"$0\")\"\n[ -f run.sh ] || java -Xmx1G -jar {installer} --installServer\nbash run.sh{nogui}\n"
                             ),
                         )
                     }
@@ -540,17 +579,28 @@ fn write_root_files(input: &BuildInput, shape: &RunShape) -> Result<Vec<String>,
             _ => "easy",
         };
         let mut props = String::from("# 由 SideShift 按转换配置生成，可按需修改\n");
+        // 只有**用户打的字**过这道闸门：目标服是 1.20 以前时非 ASCII 必须转义（判据见 props_must_escape）
+        let text = |s: &str| {
+            if props_must_escape(&o.mc_version) {
+                one_line_escaped(s)
+            } else {
+                one_line(s)
+            }
+        };
         // UI 开关/下拉驱动的高频字段
         props.push_str(&format!("online-mode={}\n", o.online_mode));
         props.push_str(&format!("server-port={}\n", o.server_port));
-        props.push_str(&format!("motd={}\n", one_line(&o.motd)));
+        props.push_str(&format!("motd={}\n", text(&o.motd)));
         props.push_str(&format!("max-players={}\n", o.max_players));
         props.push_str(&format!("gamemode={gamemode}\n"));
         props.push_str(&format!("difficulty={difficulty}\n"));
         if !o.level_seed.trim().is_empty() {
-            props.push_str(&format!("level-seed={}\n", one_line(o.level_seed.trim())));
+            props.push_str(&format!("level-seed={}\n", text(o.level_seed.trim())));
         }
-        // 其余按 vanilla 常用默认值给全（缺失键服务端首启也会自动补齐，这里给的是可读的完整模板）
+        // 其余按 vanilla 常用默认值给全（缺失键服务端首启也会自动补齐，这里给的是可读的完整模板）。
+        // 模板是 1.20–1.21.1 那一份键表：不认识的键服务端首启重写文件时会自行丢掉、缺的键补该版本默认，
+        // 所以键的增减都无害 —— 有害的只有**值**：`level-type` 因此不写。它在 1.19(22w11a) 起改收
+        // world preset ID（vanilla 自己写 `minecraft\:normal`），恒写老值 `default` 等于赌它被兼容映射
         props.push_str(&format!(
             "\
 level-name=world
@@ -562,7 +612,6 @@ white-list=false
 enforce-whitelist=false
 hardcore=false
 force-gamemode=false
-level-type=default
 generate-structures=true
 spawn-npcs=true
 spawn-animals=true
@@ -824,6 +873,102 @@ mod tests {
             installed: Some(installed),
             ..input(staging, out, o)
         }
+    }
+
+    /// 未本机安装那一档：start 脚本只负责首启自装，之后转 call installer 生成的 run 脚本，
+    /// 所以「无界面」必须往下带（那两份脚本实测以 `%*` / `"$@"` 收尾，见下一个用例里的 run 脚本样本）
+    #[test]
+    fn first_boot_install_forwards_the_switches_to_run_scripts() {
+        let root = tmp();
+        let staging = root.join("staging");
+        let out = root.join("out");
+        put(&staging.join("mods/example-mod.jar"), b"PK\x03\x04");
+
+        let o = opts();
+        let mut i = input(&staging, &out, &o);
+        i.loader = LoaderKind::Forge;
+        i.server_jar_name = None;
+        i.installer_jar_name = Some("forge-installer.jar".into());
+        let report = build(&i, &mut |_| {}).unwrap();
+        let bat = zip_text(&report.path, "start.bat");
+        let sh = zip_text(&report.path, "start.sh");
+        assert!(bat.contains("call run.bat nogui"), "{bat}");
+        assert!(sh.contains("bash run.sh nogui"), "{sh}");
+        // 属性文件里那个可能无效的值不写（1.19 起 level-type 收 world preset ID，缺键由服务端补自家默认）
+        let props = zip_text(&report.path, "server.properties");
+        assert!(!props.contains("level-type"), "{props}");
+        assert!(props.contains("level-name=world"), "{props}");
+
+        // 关掉「无界面」就该原样不带参数，而不是恒塞 nogui
+        let mut off = opts();
+        off.nogui = false;
+        let mut i2 = input(&staging, &out, &off);
+        i2.loader = LoaderKind::Forge;
+        i2.server_jar_name = None;
+        i2.installer_jar_name = Some("forge-installer.jar".into());
+        let second = build(&i2, &mut |_| {}).unwrap();
+        let bat = zip_text(&second.path, "start.bat");
+        assert!(bat.contains("call run.bat)") || bat.contains("call run.bat ("), "{bat}");
+        assert!(!bat.contains("nogui"), "{bat}");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// 属性文件的编码闸门：1.20 以下的服务端按 ISO-8859-1 读 ⇒ 中文要转 `\uXXXX`；
+    /// 1.20 起是 UTF-8 ⇒ 原样落盘，保住文件可读（两档都是转义与否，值本身不变）
+    #[test]
+    fn prop_values_escape_only_for_latin1_servers() {
+        let root = tmp();
+        let out = root.join("out");
+
+        // 每次构建各用一个 staging：`server.properties` 只在它不存在时才生成，共用一份 staging 会让
+        // 第二次构建直接拿掉上辈子那一份（测出来就是"新旧档一个样"）
+        let props_for = |mc: &str| {
+            let staging = root.join(format!("staging-{mc}"));
+            put(&staging.join("mods/example-mod.jar"), b"PK\x03\x04");
+            let o = ConversionOptions {
+                mc_version: mc.into(),
+                motd: "中文服".into(),
+                level_seed: "种子1".into(),
+                ..opts()
+            };
+            let report = build(&input(&staging, &out, &o), &mut |_| {}).unwrap();
+            zip_text(&report.path, "server.properties")
+        };
+        let old = props_for("1.16.5");
+        assert!(old.contains("motd=\\u4E2D\\u6587\\u670D"), "{old}");
+        assert!(old.contains("level-seed=\\u79CD\\u5B501"), "{old}");
+        let new = props_for("1.20.1");
+        assert!(new.contains("motd=中文服"), "{new}");
+        assert!(new.contains("level-seed=种子1"), "{new}");
+        // 转义档也一样不写那个可能无效的值
+        assert!(!old.contains("level-type"), "{old}");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn latin1_verdict_covers_both_numbering_schemes() {
+        // 边界就在 1.20：pre1 才换的读法，1.19.4 还在旧侧
+        assert!(props_must_escape("1.19.4"));
+        assert!(props_must_escape("1.12.2"));
+        assert!(props_must_escape("1.8.9"));
+        assert!(!props_must_escape("1.20"));
+        assert!(!props_must_escape("1.20.1"));
+        assert!(!props_must_escape("1.21.1"));
+        // 年份写法（26.3 这类）与 1.x 不同源，首段 >1 一律算新侧
+        assert!(!props_must_escape("26.3"));
+        // 判不出来的串走"转"那一边：`\uXXXX` 在新服务端照样解得对，反过来会真乱码
+        assert!(props_must_escape("24w14a"));
+        assert!(props_must_escape("b1.7.3"));
+        assert!(props_must_escape(""));
+    }
+
+    #[test]
+    fn escaping_leaves_ascii_and_doubles_backslash_before_counting() {
+        assert_eq!(one_line_escaped("A server 42"), "A server 42");
+        // 先按 one_line 把 `\` 翻倍，再只对非 ASCII 出手：`\` 本身是 ASCII，不该被转义掉
+        assert_eq!(one_line_escaped("中\\A"), "\\u4E2D\\\\A");
+        // 星平面字符没有单个 `\uXXXX` 装得下，必须成对代理
+        assert_eq!(one_line_escaped("🧱"), "\\uD83E\\uDDF1");
     }
 
     /// 新式布局（实测 Forge 1.20.1、NeoForge 26.2）：依赖树进包、installer 的 run 脚本与记账件不进包，
