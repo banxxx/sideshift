@@ -18,9 +18,14 @@ tauri-plugin-dialog = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 
-# 候选盘探测复用主应用的 data_root.rs（见 src/main.rs 的 #[path] 引入），依赖口径保持一致
+# 候选盘探测复用主应用的 data_root.rs（见 src/main.rs 的 #[path] 引入），依赖口径保持一致；
+# 后面那两项是壳独有的：改注册表的卸载入口（UninstallString）
 [target.'cfg(windows)'.dependencies]
-windows-sys = { version = "0.61", features = ["Win32_Storage_FileSystem"] }
+windows-sys = { version = "0.61", features = [
+    "Win32_Storage_FileSystem",
+    "Win32_Foundation",
+    "Win32_System_Registry",
+] }
 
 [dev-dependencies]
 uuid = { version = "1", features = ["v4"] }

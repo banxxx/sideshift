@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>SideShift 卸载</title>
+    <script>
+      // 与主应用/安装壳同一份首帧脚本：深色系统下先落 .dark 再渲染，否则闪一屏白。
+      // 注意这份 localStorage 属于壳自己的 WebView profile（在 %TEMP%，见 src/main.rs），
+      // 与应用里设过的主题不是同一格 —— 壳只跟随系统偏好。
+      (function () {
+        var t = localStorage.getItem("theme") || "system";
+        var dark =
+          t === "dark" ||
+          (t === "system" &&
+            window.matchMedia("(prefers-color-scheme: dark)").matches);
+        if (dark) document.documentElement.classList.add("dark");
+      })();
+    </script>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

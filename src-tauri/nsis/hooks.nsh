@@ -14,6 +14,13 @@
   ${If} $UpdateMode <> 1
     SetShellVarContext current
 
+    ; 卸载壳自己。它是安装那一刻由安装壳投进来的、注册表 UninstallString 指的就是它，
+    ; 而 NSIS 的删除清单里没有它（它不是 ${FILE} 装进去的）——不删就是卸载完留在安装目录里
+    ; 一个打不开的 exe，且 `RMDir "$INSTDIR"` 永远失败。
+    ; 正常路径下它此刻已经不在原地：壳跑卸载前会把自己复制到 %TEMP%，所以这句删得动。
+    ; 名字和 `data_root::UNINSTALL_SHELL_NAME` 是同一个，改那里要改这里（钩子编不进 Rust 常量）
+    Delete "$INSTDIR\SideShift-Uninstall.exe"
+
     ; 这一版的应用数据：设置 / 任务存档 / 鸣谢快照与皮肤副本 / WebView2 的 profile
     ; （那几百 MB 里 99% 是一次性缓存，跟着安装目录走才有人清得动）
     RMDir /r /REBOOTOK "$INSTDIR\appdata"

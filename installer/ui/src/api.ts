@@ -37,6 +37,8 @@ export interface Progress {
 export interface Outcome {
     installedExe: string;
     dataRoot: string;
+    /** 卸载入口没换成自带那套界面时的那句话（null = 已经指向它）。装是装成了，所以它不是错误 */
+    uninstallNote: string | null;
 }
 
 export const getPlan = () => invoke<Plan>("get_plan");

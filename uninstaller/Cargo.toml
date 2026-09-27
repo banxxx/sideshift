@@ -1,0 +1,44 @@
+[package]
+name = "sideshift-uninstaller"
+# 版本号唯一真源在根 package.json（本 crate 的 tauri.conf.json 也指过去），这里同步只为不互相打脸
+version = "1.0.0-beta.1"
+description = "SideShift 卸载壳：界面与节奏归壳，真正的删除交给官方卸载器与 NSIS 卸载钩子"
+edition = "2021"
+
+# 装进安装目录的那一个文件名。注册表 UninstallString 与卸载钩子删的都是它，改名字要同时改三处
+# （单源常量在 data_root::UNINSTALL_SHELL_NAME，两个壳编的是同一份源码）
+[[bin]]
+name = "SideShift-Uninstall"
+path = "src/main.rs"
+
+# 与主应用、与安装壳都是分开的 crate：① 三者各有一条生命周期，合在一起会长出第三种形态
+# ② 本 crate 要在卸载时还活着，而主应用那棵树此刻正被删
+[dependencies]
+tauri = { version = "2", features = [] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# 候选盘/数据根那套规则复用主应用源码（见 src/main.rs 的 #[path]），依赖口径保持一致；
+# 另外三样是本壳独有的：进程快照（SideShift 在不在跑）、原始命令行（转发给 uninstall.exe 时
+# 不能改一个字节）、盘容量（data_root 探测用）
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = [
+    "Win32_Storage_FileSystem",
+    "Win32_Foundation",
+    "Win32_System_Diagnostics_ToolHelp",
+    "Win32_System_Environment",
+] }
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+# data_root.rs 是 #[path] 编进来的，它自带的测试也用 uuid（安装壳同一条链，口径保持一致）
+[dev-dependencies]
+uuid = { version = "1", features = ["v4"] }
+
+[profile.release]
+codegen-units = 1
+lto = true
+opt-level = "s"
+strip = true
+panic = "abort"

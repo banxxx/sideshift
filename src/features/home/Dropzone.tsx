@@ -266,11 +266,15 @@ export function Dropzone({
                     )}
                 </AnimatePresence>
 
-                {/* 上传图标盒：52×52 r12；激活时 accent 实心 + 缓慢浮动 */}
+                {/* 上传图标盒：52×52 r12；激活时 accent 实心 + 缓慢浮动。
+                    静置用 accent-dim/accent 同族淡底：这张卡的颜色语言全程是品牌蓝
+                    （蚂蚁线、柔光、光斑、淡底、"或点击选择文件"都是 $accent），绿色在
+                    这里既抢戏又错语义——$emerald 全站只表「已完成 / 已保留 / 服务端」，
+                    还没选包的那一步不属于任何一项。 */}
                 <motion.span
                     className={cn(
                         "relative flex size-[52px] items-center justify-center rounded-[12px] transition-colors duration-200",
-                        active ? "bg-accent text-accent-ink" : "bg-emerald-dim text-emerald"
+                        active ? "bg-accent text-accent-ink" : "bg-accent-dim text-accent"
                     )}
                     initial={false}
                     animate={active ? { y: [0, -4, 0] } : { y: 0 }}

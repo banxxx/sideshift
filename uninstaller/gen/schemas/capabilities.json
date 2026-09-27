@@ -1,0 +1,1 @@
+{"default":{"identifier":"default","description":"卸载壳只需要窗口控制：不碰 fs、不碰 http、不要目录选择框","local":true,"windows":["main"],"permissions":["core:default","core:window:allow-close","core:window:allow-start-dragging"]}}

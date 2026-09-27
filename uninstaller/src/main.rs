@@ -1,0 +1,559 @@
+//! SideShift 卸载壳：把 NSIS 那个原生卸载对话框换成和安装壳同一套界面。
+//!
+//! 真正的删除仍然交给 `$INSTDIR\uninstall.exe`——快捷方式、注册表项、文件清单都是它登记的，
+//! 壳自己挨个删等于把"谁装的谁删"这条链剪断，做坏了就是用户机器上删不掉的残留。
+//! 壳只负责三件事：① 确认与取消；② 进度（分母是实测还剩多少字节）；③ 完成后把产物留在哪说清楚。
+//!
+//! 命令行决定身份，三条分支按优先级：
+//! - `--uninstall-child <目录>` → 这是被复制到 %TEMP% 后重启的那一份，只有它跑界面
+//! - 带 `/S` `/P` `/UPDATE` `_?=` 任一 → 调我们的是**另一个安装程序或脚本**（卸载入口
+//!   `UninstallString` 已登记成壳的文件名），原样转发给 `uninstall.exe`，退出码照抄
+//! - 其余（设置/控制面板/双击）→ 先把自己复制到 %TEMP% 再启动一次：Windows 删不掉正在运行的
+//!   exe，而这次卸载要删的正是我们所在的那个目录
+//!
+//! `_?=` 那条还要补一个 `/UPDATE`：模板只在「新安装包调起老卸载器」时才拼出 `_?=$INSTDIR`
+//! （生成脚本 :350-355）。不补这一句，卸载钩子会按「真卸载」把 `$INSTDIR\appdata` 连同用户的
+//! 设置一起端掉——那是一次升级途中的清理，不是一次卸载。
+
+#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+
+// 发布产物必须走 Tauri CLI（`pnpm uninstaller`），不能裸 `cargo build --release`：
+// 后者会让 tauri-build 给本 crate 打上 `cfg(dev)`，前端不内嵌，窗口开起来是「无法访问页面」
+#[cfg(all(dev, not(debug_assertions)))]
+compile_error!("卸载壳请用 `pnpm uninstaller` 出包（裸 cargo build --release 会带上 cfg(dev)，产物打不开页面）");
+
+// 目录布局与数据根判定跟主应用/安装壳共用同一份源码（字节相同，不是抄一份）：
+// 「卸载时显示的产物目录」和「应用这些年真正在写的目录」必须来自同一条规则
+#[allow(dead_code)]
+#[path = "../../src-tauri/src/core/data_root.rs"]
+mod data_root;
+
+use serde::Serialize;
+use std::path::{Path, PathBuf};
+use std::time::{Duration, Instant};
+use tauri::{AppHandle, Emitter, WebviewWindowBuilder};
+
+/// 被卸载的主程序文件名（去掉平台后缀）。卸载是否做到，第一条判据就是它没了下来
+const MAIN_EXE: &str = "SideShift";
+/// NSIS 自己写的那个卸载器。名字在模板里写死（`WriteUninstaller "$INSTDIR\uninstall.exe"`），
+/// 不是我们起的，所以这里也只能照抄
+const NSIS_ENTRY: &str = "uninstall.exe";
+/// 界面上"程序在不在跑"盯的那个进程名。`CheckIfAppIsRunning` 按 exe 名匹配主程序 ⇒ 壳自己的
+/// 名字（`SideShift-Uninstall.exe`）不在其列，静默卸载杀进程那一步不会把正在等结果的壳带走
+const APP_EXE: &str = "sideshift.exe";
+/// 子进程标记。真实参数判定走 `driven_by_installer`，这个标记不能出现在那里
+const CHILD: &str = "--uninstall-child";
+
+/// 壳自己的文件名：安装壳投放、注册表登记、卸载钩子删除、这里复制 %TEMP% 副本，四方认同一个常量
+const SHELL_EXE: &str = data_root::UNINSTALL_SHELL_NAME;
+
+fn main_exe() -> String {
+    format!("{MAIN_EXE}{}", std::env::consts::EXE_SUFFIX)
+}
+
+/// 老布局那两个 identifier 目录（卸载钩子负责删它们）。进度条必须把它们算进分母，
+/// 否则会出现"数字一直不涨"；失败文案也要点名它们，不然人不知道还有东西留着
+fn legacy_dirs(identifier: &str) -> Vec<PathBuf> {
+    ["APPDATA", "LOCALAPPDATA"]
+        .into_iter()
+        .filter_map(|var| std::env::var_os(var))
+        .map(PathBuf::from)
+        .map(|dir| dir.join(identifier))
+        .collect()
+}
+
+/// 开屏快照。`valid` 为假时界面上只有关闭可用（壳被人单独拷出来跑就是这一态）
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct Snapshot {
+    version: String,
+    arch: String,
+    valid: bool,
+    running: bool,
+    output_dir: Option<String>,
+    cache_dir: Option<String>,
+}
+
+/// 卸载完之后界面要复述的两条路径：Rust 侧**卸载之后**实测还在的那两个目录，
+/// 不是开屏那份快照（卸载途中盘被拔掉、目录被人手删，这里得跟着变）
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct Outcome {
+    output_dir: Option<String>,
+    cache_dir: Option<String>,
+}
+
+#[derive(Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct Progress {
+    pct: f64,
+    done: bool,
+}
+
+/// 卸载对象所在目录（= NSIS 的 `$INSTDIR`）。启动那一刻定死，命令只读它
+struct Install(PathBuf);
+
+#[tauri::command]
+fn get_snapshot(app: AppHandle, install: tauri::State<'_, Install>) -> Snapshot {
+    // 两个目录各查一次"在不在"，所以先拆成值再用（`Option<(PathBuf, PathBuf)>` 串两次 map
+    // 会得到 Option<Option<String>>，那是编译器的事，不是这里想要的形状）
+    let (output_dir, cache_dir) = match data_roots(&install.0) {
+        Some((o, c)) => (existing(&o), existing(&c)),
+        None => (None, None),
+    };
+    Snapshot {
+        version: app.package_info().version.to_string(),
+        arch: arch_label(),
+        valid: install.0.join(NSIS_ENTRY).is_file(),
+        running: process_running(APP_EXE),
+        output_dir,
+        cache_dir,
+    }
+}
+
+/// 轮询用：用户自己退出应用那一刻「正在运行」那张卡就该消失，不该再多点一下
+#[tauri::command]
+fn check_running() -> bool {
+    process_running(APP_EXE)
+}
+
+/// 卸载是纯阻塞 IO（等子进程、反复遍历目录），丢到 blocking 线程池里跑：
+/// 卡在 UI 线程上就是整个窗口不响应，这个项目为这件事翻过一次车
+#[tauri::command]
+async fn run_uninstall(
+    app: AppHandle,
+    install: tauri::State<'_, Install>,
+) -> Result<Outcome, String> {
+    let dir = install.0.clone();
+    let sink = app.clone();
+    tauri::async_runtime::spawn_blocking(move || uninstall(&sink, &dir))
+        .await
+        .map_err(|e| format!("卸载线程异常退出：{e}"))?
+}
+
+/// 打开留在机器上的目录。explorer 的退出码没有意义（成功也返回非 0），所以只 spawn 不收尸
+#[tauri::command]
+fn open_path(path: String) -> Result<(), String> {
+    std::process::Command::new(EXTERNAL_OPENER)
+        .arg(&path)
+        .spawn()
+        .map(|_| ())
+        .map_err(|e| format!("打开 {path} 失败：{e}"))
+}
+
+#[cfg(windows)]
+const EXTERNAL_OPENER: &str = "explorer";
+
+#[cfg(not(windows))]
+const EXTERNAL_OPENER: &str = "xdg-open";
+
+/// 产物与缓存目录：完全走主应用那条判定链（便携 → installer.json → 非系统盘预选 → home），
+/// 所以卸载界面显示的就是这些年真正在写的那两个目录，而不是"看起来像"的那一对
+fn data_roots(install: &Path) -> Option<(PathBuf, PathBuf)> {
+    let home = std::env::var_os("USERPROFILE")
+        .or_else(|| std::env::var_os("HOME"))
+        .map(PathBuf::from)?;
+    let config = install.join(data_root::APP_DATA_DIR_NAME);
+    Some(data_root::layout_in(&data_root::suggested_root(&home, &config)))
+}
+
+/// 目录在才报路径，不存在给 None：界面上不放一条指向空气的路径
+fn existing(p: &Path) -> Option<String> {
+    p.is_dir().then(|| display(p))
+}
+
+fn arch_label() -> String {
+    match std::env::consts::ARCH {
+        "x86_64" => "x64",
+        "aarch64" => "arm64",
+        other => other,
+    }
+    .to_string()
+}
+
+/// 路径 → 给用户看的字符串（分隔符按平台归一，前端不再 join）
+fn display(p: &Path) -> String {
+    p.display().to_string().replace('/', std::path::MAIN_SEPARATOR_STR)
+}
+
+fn emit(app: &AppHandle, pct: f64, done: bool) {
+    let _ = app.emit(
+        "uninstaller://progress",
+        Progress { pct: pct.clamp(0.0, 100.0), done },
+    );
+}
+
+/// 真正的卸载：静默跑官方 `uninstall.exe /S`，进度按"还剩多少字节"算，成败按残骸判。
+///
+/// 为什么不看退出码：NSIS 的 `Delete` 失败既不报错也不改退出码（那句 `RMDir "$INSTDIR"` 跑到
+/// 的时候 `appdata\` 还在里面，本来就会失败）。照退出码报成功等于把人骗到「已卸载」那一页。
+fn uninstall(app: &AppHandle, install: &Path) -> Result<Outcome, String> {
+    let entry = install.join(NSIS_ENTRY);
+    if !entry.is_file() {
+        return Err(format!(
+            "{} 旁边没有 {NSIS_ENTRY}——没有可执行的卸载入口，请从原安装目录运行",
+            install.display()
+        ));
+    }
+    let targets = {
+        let mut t = vec![install.to_path_buf()];
+        t.extend(legacy_dirs(&app.config().identifier));
+        t
+    };
+    let total: u64 = targets.iter().map(|p| dir_bytes(p)).sum();
+    let started = Instant::now();
+    let mut child = std::process::Command::new(&entry)
+        .arg("/S")
+        .spawn()
+        .map_err(|e| format!("启动 {NSIS_ENTRY} 失败：{e}"))?;
+
+    loop {
+        let rest: u64 = targets.iter().map(|p| dir_bytes(p)).sum();
+        let pct = if total > 0 {
+            (1.0 - rest as f64 / total as f64) * 100.0
+        } else {
+            // 一个字节都没量到（目录本来就是空的）：只能退化成时间爬升，封顶 95%，宁可不满也不报假完成
+            95.0 * (1.0 - (-(started.elapsed().as_secs_f64()) / 3.0).exp())
+        };
+        emit(app, pct, false);
+
+        // 主程序没了 + NSIS 卸载器自己也没了 = 做到了。给 20 秒收尸窗口：不带 `_?=` 时 NSIS 会把
+        // 自己复制到 %TEMP% 再跑，外层那份先退，此时内层还在删
+        if !install.join(main_exe()).is_file() && !entry.is_file() {
+            let _ = child.wait();
+            emit(app, 100.0, true);
+            let (output_dir, cache_dir) = match data_roots(install) {
+                Some((o, c)) => (existing(&o), existing(&c)),
+                None => (None, None),
+            };
+            return Ok(Outcome { output_dir, cache_dir });
+        }
+        if child.try_wait().map_err(|e| format!("等待卸载程序失败：{e}"))?.is_some()
+            && started.elapsed() > Duration::from_secs(20)
+        {
+            return Err(residue(&targets));
+        }
+        std::thread::sleep(Duration::from_millis(150));
+    }
+}
+
+/// 失败文案：先说"为什么"，再点名还剩什么。没东西可点时也要留一句话，别给一张空卡
+fn residue(targets: &[PathBuf]) -> String {
+    let left: Vec<String> = targets
+        .iter()
+        .filter(|p| dir_bytes(p) > 0)
+        .map(|p| display(p))
+        .collect();
+    let base = "有部分文件正被其他程序占用（通常是还开着的 SideShift 窗口或杀毒软件），关掉它再重试";
+    if left.is_empty() {
+        format!("{base}。")
+    } else {
+        format!("{base}。还留着：{}", left.join("、"))
+    }
+}
+
+/// 目录内文件字节总和。卸载过程中它单调下降，所以同时是进度分子和成败判据
+fn dir_bytes(dir: &Path) -> u64 {
+    let mut stack = vec![dir.to_path_buf()];
+    let mut total = 0u64;
+    while let Some(d) = stack.pop() {
+        let Ok(entries) = std::fs::read_dir(&d) else { continue };
+        for e in entries.flatten() {
+            let p = e.path();
+            if p.is_dir() {
+                stack.push(p);
+            } else if let Ok(m) = e.metadata() {
+                total += m.len();
+            }
+        }
+    }
+    total
+}
+
+// ---- 启动期那三条身份 ----
+
+/// 我们自己的 exe 所在目录：装好之后它就是 `$INSTDIR`
+fn own_dir() -> PathBuf {
+    std::env::current_exe()
+        .ok()
+        .and_then(|p| p.parent().map(PathBuf::from))
+        .unwrap_or_else(|| PathBuf::from("."))
+}
+
+/// 这些参数只可能来自"另一个安装程序或脚本"：模板里 `reinst_uninstall` 那段拼的就是它们。
+/// 按整个 token 比而不是在整条命令行里找子串——`_?=C:\SP\...` 那种路径里全是巧合
+fn driven_by_installer(args: &[String]) -> bool {
+    args.iter().any(|a| {
+        let up = a.to_ascii_uppercase();
+        up == "/S" || up == "/P" || up == "/UPDATE" || up.starts_with("_?=")
+    })
+}
+
+/// `_?=$INSTDIR` 由父安装包拼出来，卸载器据此"就地卸、不复制到 %TEMP%"。补 `/UPDATE` 是为了
+/// 让卸载钩子认出这是升级途中的一次清理。人自己跑的 `/S` 绝不能补——那会让钩子以为还在升级，
+/// 设置就永远清不掉了
+fn needs_update_flag(args: &[String]) -> bool {
+    args.iter().any(|a| a.starts_with("_?="))
+        && !args.iter().any(|a| a.eq_ignore_ascii_case("/UPDATE"))
+}
+
+/// 从原始命令行里剥掉第一个 token（我们自己的 exe 路径），剩下的**原样**交给 `uninstall.exe`。
+///
+/// 必须用原始命令行而不是 `env::args()` 重拼：模板那句 `StrCpy $R1 "$R1 _?=$4"` 没给路径加引号，
+/// 装进 `C:\Program Files\...` 时它在我们的 argv 里已经断成两截，重拼只会拼出一个错目录
+fn strip_first_token(line: &str) -> &str {
+    let t = line.trim_start();
+    match t.strip_prefix('"') {
+        Some(after) => match after.find('"') {
+            Some(i) => after[i + 1..].trim_start(),
+            None => "",
+        },
+        None => match t.find(char::is_whitespace) {
+            Some(i) => t[i..].trim_start(),
+            None => "",
+        },
+    }
+}
+
+#[cfg(windows)]
+fn raw_command_line() -> String {
+    // 这条函数在 windows-sys 里挂在 `System::Environment`，不在直觉上的那个 Console 栏下
+    use windows_sys::Win32::System::Environment::GetCommandLineW;
+    unsafe {
+        let p = GetCommandLineW();
+        let mut len = 0usize;
+        while *p.add(len) != 0 {
+            len += 1;
+        }
+        String::from_utf16_lossy(std::slice::from_raw_parts(p as *const u16, len))
+    }
+}
+
+#[cfg(not(windows))]
+fn raw_command_line() -> String {
+    std::env::args().skip(1).collect::<Vec<_>>().join(" ")
+}
+
+/// 转发：参数按原样贴上去（连原来的引号和空格都不改），所以 Windows 走 `raw_arg`
+#[cfg(windows)]
+fn forward(entry: &Path, rest: &str, extra: &str) -> std::io::Result<std::process::ExitStatus> {
+    use std::os::windows::process::CommandExt;
+    let mut cmd = std::process::Command::new(entry);
+    if !rest.is_empty() {
+        cmd.raw_arg(rest);
+    }
+    if !extra.is_empty() {
+        cmd.raw_arg(extra);
+    }
+    cmd.status()
+}
+
+#[cfg(not(windows))]
+fn forward(entry: &Path, rest: &str, extra: &str) -> std::io::Result<std::process::ExitStatus> {
+    let mut cmd = std::process::Command::new(entry);
+    for a in rest.split_whitespace().chain(extra.split_whitespace()) {
+        cmd.arg(a);
+    }
+    cmd.status()
+}
+
+/// dev 预览口：`SIDESHIFT_UNINSTALL_DIR` 指一个真装着 SideShift 的目录。不带这条，dev 那份 exe
+/// 旁边只有 `target/debug`，界面永远停在「找不到安装位置」，改一处样式要看两遍错误卡。
+/// 发布构建不读它（返回 None），所以它没有能力影响真实卸载
+#[cfg(debug_assertions)]
+fn dev_dir() -> Option<PathBuf> {
+    std::env::var_os("SIDESHIFT_UNINSTALL_DIR").map(PathBuf::from)
+}
+
+#[cfg(not(debug_assertions))]
+fn dev_dir() -> Option<PathBuf> {
+    None
+}
+
+/// 把自己复制到 %TEMP% 再启动一份，父进程立刻退出。
+/// 复制而不是"原地跑完再自删"：正在运行的 exe 删不掉，而这次卸载的目标目录就是它所在的那个
+fn relaunch_from_temp(install: &Path) -> Result<(), String> {
+    let exe = std::env::current_exe().map_err(|e| format!("读自身路径失败：{e}"))?;
+    let dir = std::env::temp_dir().join(format!("sideshift-uninstall-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).map_err(|e| format!("建临时目录 {} 失败：{e}", dir.display()))?;
+    let copy = dir.join(SHELL_EXE);
+    std::fs::copy(&exe, &copy).map_err(|e| format!("复制到 {} 失败：{e}", copy.display()))?;
+    std::process::Command::new(&copy)
+        .arg(CHILD)
+        .arg(display(install))
+        .spawn()
+        .map_err(|e| format!("启动卸载界面失败：{e}"))?;
+    Ok(())
+}
+
+fn run_ui(install: PathBuf) {
+    // WebView2 的 profile 必须放 %TEMP%，不能要默认值：Tauri 在 data_directory 为 None 时会强塞
+    // `%LOCALAPPDATA%\{identifier}`，而那正是本次卸载要清掉的老布局目录之一——一个正在跑自己的
+    // 卸载器，不该把要删的那个目录锁住
+    let webview = std::env::temp_dir().join(format!("sideshift-uninstall-view-{}", std::process::id()));
+    let _ = std::fs::create_dir_all(&webview);
+
+    tauri::Builder::default()
+        .manage(Install(install))
+        .invoke_handler(tauri::generate_handler![
+            get_snapshot,
+            check_running,
+            run_uninstall,
+            open_path
+        ])
+        .setup(move |app| {
+            // 窗口选项的单源仍是 tauri.conf.json（那里 `"create": false`）：绝对路径只能在建窗时
+            // 给，所以这里从配置建窗、只补 data_directory 这一项，不抄第二份尺寸表
+            let Some(cfg) = app.config().app.windows.first().cloned() else {
+                return Ok(());
+            };
+            let mut window = WebviewWindowBuilder::from_config(app.handle(), &cfg)?;
+            window = window.data_directory(webview.clone());
+            window.build()?;
+            Ok(())
+        })
+        .run(tauri::generate_context!())
+        .expect("SideShift 卸载壳启动失败");
+}
+
+/// 本机有没有在跑 `SideShift.exe`。只报事实，不动它：静默卸载那一步 NSIS 自己会按 exe 名结束进程，
+/// 壳再补一次 TerminateProcess 只是把同一个动作提前，还把"转换写了一半"这个责任揽到了壳身上
+#[cfg(windows)]
+fn process_running(name: &str) -> bool {
+    use windows_sys::Win32::Foundation::{CloseHandle, INVALID_HANDLE_VALUE};
+    use windows_sys::Win32::System::Diagnostics::ToolHelp::{
+        CreateToolhelp32Snapshot, Process32FirstW, Process32NextW, PROCESSENTRY32W,
+        TH32CS_SNAPPROCESS,
+    };
+
+    let snap = unsafe { CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0) };
+    if snap == INVALID_HANDLE_VALUE {
+        return false;
+    }
+    // windows-sys 不给这些结构体 impl Default，只能 zeroed；dwSize 不填 First 必失败
+    let mut entry: PROCESSENTRY32W = unsafe { std::mem::zeroed() };
+    entry.dwSize = std::mem::size_of::<PROCESSENTRY32W>() as u32;
+    let mut found = false;
+    let mut ok = unsafe { Process32FirstW(snap, &mut entry) };
+    while ok != 0 {
+        if utf16_until_nul(&entry.szExeFile).eq_ignore_ascii_case(name) {
+            found = true;
+            break;
+        }
+        ok = unsafe { Process32NextW(snap, &mut entry) };
+    }
+    unsafe { CloseHandle(snap) };
+    found
+}
+
+#[cfg(windows)]
+fn utf16_until_nul(buf: &[u16]) -> String {
+    let end = buf.iter().position(|c| *c == 0).unwrap_or(buf.len());
+    String::from_utf16_lossy(&buf[..end])
+}
+
+/// 非 Windows 只用于跑测试/看界面：没有安装目录可查，一律当作没在跑
+#[cfg(not(windows))]
+fn process_running(_name: &str) -> bool {
+    false
+}
+
+fn main() {
+    let args: Vec<String> = std::env::args().skip(1).collect();
+
+    // ① 被复制到 %TEMP% 的那一份：只有它跑界面
+    if let Some(i) = args.iter().position(|a| a == CHILD) {
+        let dir = args
+            .get(i + 1)
+            .map(|p| PathBuf::from(p.trim_matches('"')))
+            .unwrap_or_else(own_dir);
+        run_ui(dir);
+        return;
+    }
+
+    // ② 另一个安装程序/脚本在调我们：不弹界面，原样转发
+    if driven_by_installer(&args) {
+        let entry = own_dir().join(NSIS_ENTRY);
+        if entry.is_file() {
+            let extra = if needs_update_flag(&args) { " /UPDATE" } else { "" };
+            let line = raw_command_line();
+            let rest = strip_first_token(&line);
+            if let Ok(status) = forward(&entry, rest, extra) {
+                std::process::exit(status.code().unwrap_or(-1));
+            }
+            // 转发失败（占用/权限）落回下面的界面：那句"找不到安装位置"至少要说给人听
+        }
+    }
+
+    // ③ 人自己打开的
+    let dir = dev_dir().unwrap_or_else(own_dir);
+    let installed = dir.join(NSIS_ENTRY).is_file();
+    if installed && !cfg!(debug_assertions) {
+        if let Err(e) = relaunch_from_temp(&dir) {
+            // 复制失败也要就地给个界面：卸载会删不掉自己那一份，但"进度条卡住 + 一张写明原因的卡"
+            // 仍然比双击了没反应强
+            eprintln!("{e}");
+        } else {
+            return;
+        }
+    }
+    run_ui(dir);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn only_installer_args_count_as_driven() {
+        assert!(driven_by_installer(&["/S".into()]));
+        assert!(driven_by_installer(&["_?=C:\\Program Files\\SideShift".into()]));
+        assert!(driven_by_installer(&["/UPDATE".into(), "/P".into()]));
+        // 子进程标记必须落在 ① 而不是 ②：它一旦被判成"安装程序调起"，界面就永远出不来
+        assert!(!driven_by_installer(&[CHILD.into(), "E:\\SideShift".into()]));
+        assert!(!driven_by_installer(&[]));
+        // 路径里凑巧含 P/S 的裸参数不算（② 只在整 token 相等时命中）
+        assert!(!driven_by_installer(&["E:\\SP\\SideShift".into()]));
+    }
+
+    #[test]
+    fn update_flag_added_once_and_only_for_installer_driven() {
+        assert!(needs_update_flag(&["_?=E:\\SideShift".into()]));
+        assert!(!needs_update_flag(&["_?=E:\\SideShift".into(), "/UPDATE".into()]));
+        assert!(!needs_update_flag(&["/S".into()]), "人自己跑的静默卸载不能被判成升级");
+    }
+
+    #[test]
+    fn first_token_stripped_without_touching_the_rest() {
+        assert_eq!(
+            strip_first_token("\"C:\\Program Files\\SideShift\\SideShift-Uninstall.exe\" _?=C:\\Program Files\\SideShift"),
+            "_?=C:\\Program Files\\SideShift"
+        );
+        assert_eq!(strip_first_token("uninstall.exe /S"), "/S");
+        assert_eq!(strip_first_token("uninstall.exe"), "");
+        // 引号没闭合时宁可丢掉参数，也不能把整条命令行（含我们自己的路径）转出去
+        assert_eq!(strip_first_token("\"abc"), "");
+    }
+
+    /// 老布局那两个目录由 identifier 拼出来：钩子删的是同一个名字，两边不一致就是"只清一半"
+    #[test]
+    fn legacy_dirs_use_the_identifier() {
+        for d in legacy_dirs("com.poso.sideshift") {
+            assert_eq!(d.file_name().and_then(|s| s.to_str()), Some("com.poso.sideshift"));
+        }
+        // 本机必然有 APPDATA/LOCALAPPDATA 两个变量。空 = 变量名写错，而不是"这台机器特殊"
+        assert_eq!(legacy_dirs("x").len(), 2);
+    }
+
+    /// 失败文案必须点名还剩什么：只有一句"被占用"的话，人不知道去哪找那个占用者
+    #[test]
+    fn residue_names_what_is_left() {
+        let dir = std::env::temp_dir().join(format!("sideshift-residue-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("a.txt"), b"x").unwrap();
+        let msg = residue(&[dir.clone(), dir.join("没有这个目录")]);
+        assert!(msg.contains("还开着"), "少了原因那一句：{msg}");
+        assert!(msg.contains(&display(&dir)), "没点名还剩哪个目录：{msg}");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+}

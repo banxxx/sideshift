@@ -415,7 +415,7 @@ function ChangeList({
     const shown = loading ? [] : rows.slice(0, LIST_CAP);
     return (
         <Collapse when={open && (loading || rows.length > 0)} gap={12}>
-            <div className="log-scroll -mx-1 max-h-[220px] min-w-0 overflow-auto rounded-md bg-surface-2/40 px-1 py-1">
+            <div className="log-scroll -mx-1 max-h-[220px] min-w-0 overflow-auto rounded-sm bg-surface-2/40 px-1 py-1">
                 {loading &&
                     [0, 1, 2].map((i) => (
                         <div key={i} className="flex h-[46px] items-center gap-3 px-1">

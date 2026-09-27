@@ -22,7 +22,7 @@
  * 曲线会越过目标线 16px 再落回线上，末端还摆到线下 2.45px（那是「弹」的收势，不是有人在往下走）。
  * 被筛掉的当场消失（下落退场层试过，那张克隆会盖住页面，已整体删除）。
  */
-import { Check, Download, Inbox, RefreshCw, SearchX, X } from "lucide-react";
+import { ArrowRight, Check, Download, Inbox, RefreshCw, SearchX, X } from "lucide-react";
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { motion } from "motion/react";
 import * as api from "@/lib/api";
@@ -560,8 +560,11 @@ function TaskCard({ task, onDelete }: { task: ConversionTask; onDelete: () => vo
                     <span className="truncate font-mono text-[13px] leading-[20px] font-semibold text-text-1">
                         {truncateMiddle(task.pack.fileName, 32)}
                     </span>
-                    <span className="truncate font-mono text-[11px] leading-[16px] font-normal text-text-3">
-                        {subLine(task, outName)}
+                    {/* 副标那枚「指向产物」的箭头原来是字符 `→`：等宽字里它跟着字距走、
+                        粗细和旁边图标盒那批 lucide 线条也对不上。换成图标后两处同源。 */}
+                    <span className="flex min-w-0 items-center gap-1.5 font-mono text-[11px] leading-[16px] font-normal text-text-3">
+                        <ArrowRight className="size-3 shrink-0" strokeWidth={2.5} />
+                        <span className="truncate">{subLine(task, outName)}</span>
                     </span>
                 </div>
                 <ToneChip tone={chip.tone} dot={task.status === "running"}>
@@ -647,17 +650,17 @@ function TaskCard({ task, onDelete }: { task: ConversionTask; onDelete: () => vo
     );
 }
 
-/** row1 副标：输出名（运行/成功）或加载器 + 中断阶段（失败） */
+/** row1 副标（箭头由渲染处给出）：输出名（运行/成功）或加载器 + 中断阶段（失败） */
 function subLine(task: ConversionTask, outName: string): string {
     if (task.status === "failed") {
-        return `→ ${loaderLabel(task.pack.loader)} ${task.options.mcVersion} · ` + t("tasks.stopped-stage", "中断于{{stage}}阶段", {
+        return `${loaderLabel(task.pack.loader)} ${task.options.mcVersion} · ` + t("tasks.stopped-stage", "中断于{{stage}}阶段", {
             stage: stageLabel(task.stage ?? "builder", needsNetwork(task)),
         });
     }
     if (task.status === "success" && task.outputSizeBytes != null) {
-        return `→ ${outName} · ${formatSize(task.outputSizeBytes)}`;
+        return `${outName} · ${formatSize(task.outputSizeBytes)}`;
     }
-    return `→ ${outName}`;
+    return outName;
 }
 
 /** 状态芯片文案：取件阶段追加 "7/12" 计数（联网任务按「已下载/需联网」，纯本地按「已取件/全部」） */

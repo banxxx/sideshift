@@ -29,6 +29,11 @@ pub const INSTALLER_FILE: &str = "installer.json";
 /// 就把「以后会落在哪」显示给用户看，两边各写一遍字符串迟早分叉
 pub const OUTPUT_DIR_NAME: &str = "output";
 pub const CACHE_DIR_NAME: &str = "cache";
+/// 卸载壳装进安装目录时用的文件名。写它的是安装壳、登记它的是 NSIS 的 `UninstallString`、
+/// 删它的是卸载钩子——三方认的是同一个名字，所以单源在这里（钩子那侧只能写字面量，改这里要同步改 `nsis/hooks.nsh`）。
+/// 主应用这边 dead_code：唯一的消费者是安装壳，它用 `#[path]` 编走本文件
+#[allow(dead_code)]
+pub const UNINSTALL_SHELL_NAME: &str = "SideShift-Uninstall.exe";
 
 /// 低于此剩余空间的盘不参与预选：宁可用默认的用户目录，也不替用户把整盘塞满
 const MIN_FREE_BYTES: u64 = 10 * 1024 * 1024 * 1024;
@@ -138,8 +143,9 @@ pub fn portable_root() -> Option<PathBuf> {
 
 /// 自绘安装壳交给我们的数据根（`{配置目录}\installer.json`）。
 /// 读不到 / 字段为空 / JSON 坏 / 盘不在了 ⇒ 当作没有，回落预选：
-/// 一个可选的偏好文件不能有能力把默认值变成空串，也不能把人留在拔掉的盘上
-fn installer_root(config_dir: &Path) -> Option<PathBuf> {
+/// 一个可选的偏好文件不能有能力把默认值变成空串，也不能把人留在拔掉的盘上。
+/// 卸载壳也调它回显「产物留在哪」——两边读的是同一个偏好，不会一个显示 E:\ 一个用 F:\
+pub fn installer_root(config_dir: &Path) -> Option<PathBuf> {
     #[derive(serde::Deserialize)]
     #[serde(rename_all = "camelCase")]
     struct Installer {

@@ -1,13 +1,21 @@
 //! 把官方 NSIS 安装包内嵌进壳：发安装器时只给一个 exe，而不是"壳 + Setup.exe"两个文件。
 //!
-//! 顺序是先有鸡后有蛋，所以这条链必须由构建脚本走：**主应用出包 → 壳内嵌那个包**。
+//! 顺序是先有鸡后有蛋，所以这条链必须由构建脚本走：**主应用出包 → 卸载壳出包 → 壳内嵌这两个包**。
 //! 找不到就硬失败并写明下一步该跑什么——静默用一个空壳去装出个 0 字节的"成功"，
 //! 比编译不过难查得多。
+//!
+//! 第二个载荷是卸载壳：NSIS 只把它的 `uninstall.exe` 登记成卸载入口，而我们要在控制面板/设置里
+//! 点出来的是同一套界面。安装那一刻由壳把这份字节落到安装目录、并把 `UninstallString` 改指过去
+//! （见 `src/main.rs` 的 retarget_uninstall_entry）。
 
 use std::path::{Path, PathBuf};
 
 /// 内嵌进二进制的安装包文件名（运行时原样落到 %TEMP% 再执行）
 const PAYLOAD: &str = "setup-payload.bin";
+/// 内嵌的卸载壳 exe（运行时原样落到安装目录，NSIS 那一套删不到它，所以由壳自己投放）
+const SHELL: &str = "uninstall-shell.bin";
+/// 卸载壳产物的文件名，和它 `[[bin]] name` 一致
+const SHELL_EXE: &str = "SideShift-Uninstall";
 
 fn main() {
     println!("cargo:rerun-if-env-changed=SIDESHIFT_RELEASE_DIR");
@@ -36,6 +44,18 @@ fn main() {
     let out = PathBuf::from(std::env::var("OUT_DIR").expect("OUT_DIR"));
     std::fs::write(out.join(PAYLOAD), &bytes).expect("写内嵌载荷失败");
     println!("cargo:rerun-if-changed={}", setup.display());
+
+    // 卸载壳和主应用共用一个 target（依赖几乎重合，各留一棵树就是多占几 GB 磁盘）
+    let shell = dir.join(format!("{SHELL_EXE}{}", std::env::consts::EXE_SUFFIX));
+    let shell_bytes = std::fs::read(&shell).unwrap_or_else(|e| {
+        panic!(
+            "找不到卸载壳 {}（{e}）。先出它：pnpm uninstaller（或直接 pnpm installer，它会自己按顺序跑）"
+            , shell.display()
+        )
+    });
+    println!("cargo:warning=内嵌卸载壳 {}（{} 字节）", shell.display(), shell_bytes.len());
+    std::fs::write(out.join(SHELL), &shell_bytes).expect("写卸载壳载荷失败");
+    println!("cargo:rerun-if-changed={}", shell.display());
 
     // 进度条的分母：装完之后安装目录里那个主程序该有多大（拿不到时给 0，前端退化成限速爬升）
     let installed = dir.join(format!("SideShift{}", std::env::consts::EXE_SUFFIX));

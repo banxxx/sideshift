@@ -35,6 +35,14 @@ export function DonePage({
                 <Row label="数据目录" value={outcome.dataRoot} />
             </dl>
 
+            {/* 卸载入口没换上不等于没装上：控制面板里照样卸得掉，只是那套界面是 NSIS 的。
+                所以这行是灰的，不抢红——但也不能不报，人以后找的是"为什么它长得不一样" */}
+            {outcome.uninstallNote && (
+                <p className="mt-2 text-[11px] leading-[16px] text-text-3">
+                    {outcome.uninstallNote}
+                </p>
+            )}
+
             <div className="mt-[18px] flex items-center gap-2">
                 <CheckBox checked={launch} onChange={onToggleLaunch} />
                 <span

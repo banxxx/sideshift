@@ -130,7 +130,7 @@ export function TaskDetailPage() {
     /** 换页签的方向（±1）：交给 TAB_SWEEP 决定内容进出的那一侧。ref 而不是 state——
      *  它只是给动画读的旁证，改它不该单独触发一次渲染。 */
     const tabDir = useRef(0);
-    useLogFollow(logRef, task?.logs.length ?? 0);
+    useLogFollow(logRef);
 
     const succeeded = task?.status === "success";
 
@@ -533,7 +533,7 @@ export function TaskDetailPage() {
                                         />
                                         <div
                                             ref={logRef}
-                                            className="log-scroll flex h-[260px] w-full flex-col gap-1 overflow-y-auto rounded-md bg-surface-2 p-3"
+                                            className="log-scroll flex h-[260px] w-full flex-col gap-1 overflow-y-auto rounded-sm bg-surface-2 p-3"
                                         >
                                             {task.logs.length === 0 && (
                                                 <span className="font-mono text-[10px] leading-[14px] text-text-3">
