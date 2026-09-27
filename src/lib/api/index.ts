@@ -20,3 +20,4 @@ export * from "./mods";
 export * from "./task";
 export * from "./settings";
 export * from "./system";
+export * from "./about";

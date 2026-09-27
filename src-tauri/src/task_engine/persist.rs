@@ -32,7 +32,7 @@ struct TasksFile {
 /// 应用自己的状态落在哪：便携包写在 exe 同级的 `data`（整包搬走=连设置一起搬走），
 /// 安装版/开发模式走 Tauri 的 app_config_dir。收口成一个函数，是为了让
 /// 「便携模式下一切跟着 exe 走」这条语义只有一个实现点，不会漏掉某个文件
-fn config_dir(app: &AppHandle) -> Option<PathBuf> {
+pub(crate) fn config_dir(app: &AppHandle) -> Option<PathBuf> {
     match data_root::portable_root() {
         Some(dir) => Some(dir),
         None => app.path().app_config_dir().ok(),

@@ -23,6 +23,11 @@ dist-ssr
 .probe-*.json
 src-tauri/.probe-*.json
 
+# wrangler 本地跑的产物：.wrangler 是 KV 的本地模拟与缓存，.dev.vars 是本地密钥
+# （真机部署走控制台/`wrangler secret put`，这两样都不该进仓库）
+.wrangler/
+.dev.vars
+
 # Editor directories and files
 .vscode/*
 .idea

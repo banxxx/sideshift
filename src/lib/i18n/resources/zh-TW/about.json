@@ -1,4 +1,9 @@
 {
+  "about.ack-empty": "當前無法顯示鳴謝名單",
+  "about.ack-pending": "正在獲取鳴謝名單…",
+  "about.ack-retry": "重新獲取",
+  "about.ack-source": "鳴謝名單",
+  "about.ack-source-value": "名單與頭像取自專案自管的靜態地址，本機留存一份快照供離線顯示；該請求不攜帶帳號、憑據或本地檔案信息",
   "about.acknowledgements": "致謝名單",
   "about.collapse-ack": "收起致謝名單",
   "about.collapse-privacy": "收起資料與隱私",
@@ -12,7 +17,7 @@
   "about.expand-privacy": "展開資料與隱私",
   "about.expand-third-party": "展開第三方組件",
   "about.network-scope": "聯網範圍",
-  "about.network-scope-value": "僅兩種情形主動發起請求：模組與版本元資料補全、應用更新檢查",
+  "about.network-scope-value": "僅三種情形主動發起請求：模組與版本元資料補全、應用更新檢查、鳴謝名單獲取",
   "about.positioning": "獨立第三方工具 · MIT 協議 · 無遙測",
   "about.privacy": "資料與隱私",
   "about.process": "處理方式",

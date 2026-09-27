@@ -1,0 +1,12 @@
+{
+  "version": "1.0.0-beta.1-r1",
+  "people": [
+    { "name": "POSOO", "minecraftId": true },
+    { "name": "贡献者甲", "minecraftId": false },
+    {
+      "name": "贡献者乙",
+      "avatar": "https://{ENDPOINT_HOST}/avatars/contributor-b.png",
+      "minecraftId": false
+    }
+  ]
+}

@@ -1,4 +1,9 @@
 {
+  "about.ack-empty": "The acknowledgements list isn't available right now",
+  "about.ack-pending": "Loading acknowledgements…",
+  "about.ack-retry": "Reload",
+  "about.ack-source": "Acknowledgements list",
+  "about.ack-source-value": "The list and its avatars come from a static address this project manages; a snapshot is kept on this machine so it still renders offline. The request carries no account, credential or local file information",
   "about.acknowledgements": "Acknowledgements",
   "about.collapse-ack": "Collapse acknowledgements",
   "about.collapse-privacy": "Collapse data & privacy",
@@ -12,7 +17,7 @@
   "about.expand-privacy": "Expand data & privacy",
   "about.expand-third-party": "Expand third-party components",
   "about.network-scope": "Network use",
-  "about.network-scope-value": "Outgoing requests happen in two cases only: mod and version metadata lookup, and update checks",
+  "about.network-scope-value": "Outgoing requests happen in three cases only: mod and version metadata lookup, update checks, and fetching the acknowledgements list",
   "about.positioning": "Independent third-party tool · MIT licensed · No telemetry",
   "about.privacy": "Data & Privacy",
   "about.process": "Processing",

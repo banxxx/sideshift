@@ -56,6 +56,8 @@ pub fn run() {
             commands::clean_cache,
             commands::list_download_sources,
             commands::check_update,
+            commands::ack_snapshot,
+            commands::ack_refresh,
             commands::open_local_path,
             commands::reveal_local_path,
         ])

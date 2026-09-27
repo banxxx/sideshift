@@ -4,9 +4,12 @@
  * 五块：品牌卡 / 鸣谢名单（密排卡 + 高度档）/ 数据与隐私（可展开）/ 第三方组件（可展开）/ 声明。
  *
  * **内容单一**这条是硬约束：版本号、预发布徽章、检查更新、更新渠道、主题、语言**只在设置出现**，
- * 这里一处都不放（样片里那行「按首次贡献时间排序」也删了——名单是手工数组，排序就是数组顺序，
+ * 这里一处都不放（样片里那行「按首次贡献时间排序」也删了——顺序就是远端那份名单的数组顺序，
  * 写一句和实现无关的说明等于给自己埋一条会过期的文案）。页头不留标题：品牌卡已经把
  * 「这是关于页」说清楚了，侧栏那行高亮也在说同一件事。
+ *
+ * 名单不写死在包里：`useContributors` 先读本机快照上屏、后台向远端对账一次，
+ * 拿不到就在这一块内嵌一句「不可见 + 重新获取」（不抢全局提示区）。
  *
  * 两块可展开走公共 `Collapse`（三条硬规矩：壳必须空、`gap` 传父级格距、overflow 演完才撤），
  * 符号统一用 `FoldBtn`（下拉选择框那枚 chevron，开合由 `aria-expanded` 外显）。
@@ -23,14 +26,15 @@ import { useT, type TranslateFn } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
 import { Btn, Collapse, Divider, FoldBtn, Logo, Panel, PanelHead } from "@/components/ui";
 import { AckWall } from "./AckWall";
-import { CONTRIBUTORS } from "./contributors";
+import { useContributors } from "./useContributors";
 
 /** 数据与隐私。左边是字段名、右边是一句完整的话——都走 `t`，表建在函数里（顶层建表会把词冻在首次加载的语言上） */
 function privacyRows(t: TranslateFn): Array<[string, string]> {
     return [
         [t("about.process", "处理方式"), t("about.process-value", "整合包的解包、判定与重建全部在本机执行，包体内容不作上传")],
-        [t("about.network-scope", "联网范围"), t("about.network-scope-value", "仅两种情形主动发起请求：模组与版本元数据补全、应用更新检查")],
+        [t("about.network-scope", "联网范围"), t("about.network-scope-value", "仅三种情形主动发起请求：模组与版本元数据补全、应用更新检查、鸣谢名单获取")],
         [t("about.data-source", "数据来源"), t("about.data-source-value", "Modrinth API、CurseForge API，以及在设置中指定的镜像服务")],
+        [t("about.ack-source", "鸣谢名单"), t("about.ack-source-value", "名单与头像取自项目自管的静态地址，本机留存一份快照供离线显示；该请求不携带账号、凭据或本地文件信息")],
         [t("about.telemetry", "遥测统计"), t("about.telemetry-value", "未集成遥测或统计上报组件，亦不写入本地统计数据文件")],
         [t("about.credentials", "凭据存储"), t("about.credentials-value", "CurseForge API Key 仅保存于本机配置，不进入日志、任务存档与导出产物")],
     ];
@@ -75,6 +79,7 @@ function FoldBody({ children }: { children: ReactNode }) {
 
 export function AboutPage() {
     const t = useT();
+    const { people, status, retry } = useContributors();
     const [privacyOpen, setPrivacyOpen] = useState(false);
     const [thirdPartyOpen, setThirdPartyOpen] = useState(false);
 
@@ -112,7 +117,7 @@ export function AboutPage() {
 
             {/* ---- 鸣谢名单 ---- */}
             <motion.div variants={CARD_RISE}>
-                <AckWall people={CONTRIBUTORS} />
+                <AckWall people={people} status={status} onRetry={retry} />
             </motion.div>
 
             {/* ---- 数据与隐私 ---- */}

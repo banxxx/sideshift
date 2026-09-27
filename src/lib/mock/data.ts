@@ -3,6 +3,7 @@
  * 只放无状态数据与纯函数；流水线定时器在 tasks.ts，分类兜底在 classify.ts。
  */
 import type {
+    AckList,
     ConversionOptions,
     JavaInstall,
     JavaProbe,
@@ -332,3 +333,12 @@ export const mockPackDirs: PackDirNode[] = [
         ],
     },
 ];
+
+/**
+ * 鸣谢名单的浏览器 dev 夹具。真数据在远端（Rust: `core::ack`），这份只保证纯浏览器
+ * 开发时那一整页有东西可看——它的 `avatar` 全部留空，因为真链接要等端点定下来。
+ */
+export const mockAckList: AckList = {
+    version: "mock",
+    people: [{ name: "Banxxx", minecraftId: false }],
+};

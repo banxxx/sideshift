@@ -1,0 +1,16 @@
+# CLI 部署用（与 Cloudflare 控制台手工建 Worker 二选一；两边配置项含义见 README.md）
+# 部署：npx wrangler deploy    本地：npx wrangler dev
+# 口令别写在这里：npx wrangler secret put SECRET_TOKEN
+name = "sideshift-ack"
+main = "worker.js"
+compatibility_date = "2026-09-27"
+
+[[kv_namespaces]]
+binding = "ACK"
+# 控制台建好 namespace 后把两个 id 填进来（id 线上、preview_id 本地 wrangler dev）
+id = "<KV namespace id>"
+preview_id = "<KV preview id>"
+
+[vars]
+# 只在你要自带头像（JSON 里出现 `{ENDPOINT_HOST}`）且没有自定义域时填；见 README「自定义域」
+# ACK_CDN = "ack.example.com"

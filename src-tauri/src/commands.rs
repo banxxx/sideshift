@@ -7,6 +7,7 @@ use std::sync::Arc;
 use tauri::{AppHandle, Emitter, State};
 use tauri_plugin_opener::OpenerExt;
 
+use crate::core::ack::{self, AckList};
 use crate::core::cleanup;
 use crate::core::detector;
 use crate::core::downloader::{Downloader, net_code, reqwest_code};
@@ -1036,4 +1037,23 @@ pub async fn reveal_local_path(app: AppHandle, path: String) -> Result<(), Strin
     app.opener()
         .reveal_item_in_dir(native_path(&path))
         .map_err(|e| e.to_string())
+}
+
+/* ---------------- 关于页：鸣谢名单 ---------------- */
+
+/// 进关于页第一下读的那份：本机快照，零网络。没有快照就回 null，界面出「不可见 + 重新获取」。
+#[tauri::command]
+pub fn ack_snapshot(app: AppHandle) -> Option<AckList> {
+    ack::read_snapshot(&app)
+}
+
+/// 拉一次远端名单（进页后台对账，以及空态上那枚「重新获取」）。
+/// 失败只递 `net:` 码或 `ack:not-configured`，界面上两者同一个处理——这一块不抢全局提示区，
+/// 也不把后端的英文句子摊在鸣谢名单里。
+#[tauri::command]
+pub async fn ack_refresh(app: AppHandle, state: S<'_>) -> Result<AckList, String> {
+    let dl = downloader_of(&state);
+    let list = ack::fetch_list(&dl.client).await?;
+    ack::store(&app, &list);
+    Ok(list)
 }

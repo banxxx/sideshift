@@ -274,6 +274,10 @@
 :root {
   --ack-glow: color-mix(in srgb, var(--accent) 34%, transparent);
   --ack-border: color-mix(in srgb, var(--accent) 55%, var(--stroke));
+  /* 悬浮投影的下沿 = y + blur/2 − spread = 5+8−9 = **4px**，与 AckWall 的 `PAD.bottom` 严格对齐：
+   * 名单是密排卡，下一行的卡顶就在 8px 处，尾巴再长一分就得去撞「不漏下一行」那条。
+   * 样片那版 `0 10px 22px -8px`（下沿 13px）在这里放不下，抬起的读感改由描边染色 + 3D 翘起承担。 */
+  --ack-shadow: 0 5px 16px -9px var(--ack-glow), 0 1px 6px -3px rgba(0, 0, 0, 0.1);
 }
 
 /* 蚂蚁线边框（SVG rect 描边，跑动由 motion 位移 stroke-dashoffset 驱动）：
