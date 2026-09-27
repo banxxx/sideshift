@@ -76,13 +76,26 @@ pub fn read_snapshot(app: &AppHandle) -> Option<AckList> {
     serde_json::from_str::<AckList>(&raw).ok()
 }
 
-/// 版本没变就不写盘（省掉每次进页一次几 KB 的无意义重写）。写失败不影响本次结果：
-/// 拿到的名单照样上屏，只是下次进页还得重新拉。
+/// 要不要把这一份存成本机快照。**版本没变不写**（省掉每次进页一次几 KB 的无意义重写）；
+/// **本机那份有人、新这份空着 ⇒ 也不写**。
+///
+/// 后者拦的是一种发布事故而不是恶意：坏形状在 `fetch_list` 就报错了，能走到这里的只有
+/// 「合法 JSON + `people` 是空数组」这一种，而那通常是把只填了 `version` 的壳推上线
+/// （或 KV 手抖清空）。快照是这份界面的**出厂件**，被空表覆盖之后，离线用户就永久只剩
+/// 空态，本机没有任何出口能把它找回来。「他真的清空了名单」这一种意图不在这条路的覆盖范围里：
+/// 那需要一个显式标记，而不是靠空数组猜——空数组压住的那一格永远可以由有人的那一版覆盖回来。
+fn should_store(prev: Option<&AckList>, next: &AckList) -> bool {
+    match prev {
+        // 本机什么都没有 ⇒ 空名单也存，它比没有强（下次离线至少拿到同一份空表，行为一致）
+        None => true,
+        Some(prev) => prev.version != next.version && !(next.people.is_empty() && !prev.people.is_empty()),
+    }
+}
+
+/// 落盘。写失败不影响本次结果：拿到的名单照样上屏，只是下次进页还得重新拉。
 fn write_snapshot(app: &AppHandle, list: &AckList) {
-    if let Some(prev) = read_snapshot(app) {
-        if prev.version == list.version {
-            return;
-        }
+    if !should_store(read_snapshot(app).as_ref(), list) {
+        return;
     }
     let Some(path) = snapshot_path(app) else { return };
     if let Some(dir) = path.parent() {
@@ -591,6 +604,43 @@ mod tests {
         assert!(!mc_name_ok("张三"));
         assert!(!mc_name_ok(""));
         assert!(!mc_name_ok("0123456789abcdef0")); // 17 个字符
+    }
+
+    /// 快照的覆盖闸门：本机那份**有人**时，一份合法的空名单不许把它抹掉
+    /// （坏形状进不到这里，所以这一格只挡"发布事故"那一种）。
+    /// 本机本来就空着 ⇒ 不拦，那时没有任何东西可失去，存一份空表反而让离线行为一致
+    #[test]
+    fn empty_release_never_wipes_a_populated_snapshot() {
+        let list = |version: &str, people: &[&str]| AckList {
+            version: version.into(),
+            people: people
+                .iter()
+                .map(|name| AckPerson {
+                    name: (*name).into(),
+                    avatar: None,
+                    minecraft_id: false,
+                })
+                .collect(),
+        };
+        let stored = list("7", &["Banxxx"]);
+        let same = list("7", &["Banxxx"]);
+        let grew = list("8", &["Banxxx", "POSOO"]);
+        let emptied = list("9", &[]);
+
+        // 没有快照：什么都存，包括第一份空名单
+        assert!(should_store(None, &stored));
+        assert!(should_store(None, &emptied));
+        // 版本没变：不写（省掉每次进页一次无意义重写）
+        assert!(!should_store(Some(&stored), &same));
+        // 正常发版：写
+        assert!(should_store(Some(&stored), &grew));
+        // 这一条是本次加固的对象：新版本、空名单 ⇒ 出厂件保住
+        assert!(!should_store(Some(&stored), &emptied));
+        // 本机那份已经是空的 ⇒ 不再拦（否则一个"清空名单"的意图永远同步不进来）
+        let empty_stored = list("7", &[]);
+        assert!(should_store(Some(&empty_stored), &emptied));
+        // 同理：清空之后再来一版有人的，照常写
+        assert!(should_store(Some(&empty_stored), &grew));
     }
 
     /// 缓存表的线格式：小写键 + `{url, at}`。前端只吃 `Record<string,string>`，

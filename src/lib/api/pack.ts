@@ -86,8 +86,11 @@ export async function probeJava(
 }
 
 /**
- * 某 MC 版本的 Java 需求线（Rust: `java_requirement`，表在 `core::java::required_for_mc`）。
- * 转换页换 MC 版本时要拿它改写方案里的 `javaVersion`：那张表只有后端一份，前端复刻一份
+ * 某 MC 版本的 Java 需求线（Rust: `java_requirement`）。两腿：先问官方 `javaVersion` 字段
+ * （命中后端那张 `java-index.json` 就零请求），取不到才回落到 `core::java::required_for_mc` 那张表。
+ * 也就是说这一条**可能在换 MC 版本时打一次网络**：慢到的是「把 26.x 从 21 改成 25」这类抬档，
+ * 表那头的兜底答案首帧就有，所以界面不会空着等。
+ * 转换页换版本时拿它改写方案里的 `javaVersion`：口径只有后端一份，前端复刻一份
  * 就会跟实跑的那把筛子走偏。`javaVersion` 是快照字段（回看/重试读当时那一档），
  * 所以必须在方案落地时改写，而不是到了报告或实跑里再现算。
  */

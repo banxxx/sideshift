@@ -20,6 +20,7 @@
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
+use crate::core::mc_version;
 use crate::models::{CheckStatus, JavaInstall, JavaProbe};
 
 #[cfg(windows)]
@@ -227,32 +228,31 @@ fn required_major(raw: &Option<String>) -> Option<u32> {
         .and_then(|p| p.parse().ok())
 }
 
-/// Mojang 对某个 MC 版本要求的 **Java 需求线**（只要主版本号）。
-/// 边界就是官方公告那几档：1.20.5 起 21、1.18 起 17、1.17 起 16、更早 8。
+/// Mojang 对某个 MC 版本要求的 **Java 需求线**（只要主版本号）的兜底表。
 /// 它是「这次至少要哪档」的那把尺，不是「必须正好这档」——见模块头第二条。
+///
+/// 边界按 piston-meta 的官方 `javaVersion.majorVersion` 逐条核对（2026-09-27 扫完 103 条正式版）：
+/// 8 = …1.16.5 · 16 = 1.17–1.17.1 · 17 = 1.18–1.20.4 · 21 = 1.20.5–1.21.11 · **25 = 26.x**。
+/// 官方字段读得到时以字段为准（`commands::java_requirement` 那条腿），这张表只兜三件事：完全离线、
+/// BMCLAPI 对 per-version JSON 没有镜像（实测 302 后 TLS 握手失败）、清单里没这个号（自造版本号）。
+/// 换句话说它是「Mojang 下次抬档时唯一会过期的那一份」——过期了也只是短一档，不再有离线拿不到答案的死角。
 ///
 /// 认不出 `x.y[.z]` 形状的（快照 `24w14a` 那一类）按 1.20 兜底 ⇒ 取 17。
 /// 这条兜底是既有行为、原样搬过来的，没有在这里改判（快照那档要不要直接要 21 另说）。
 pub fn required_for_mc(mc: &str) -> &'static str {
-    let minor: i32 = mc
-        .split('.')
-        .nth(1)
-        .and_then(|s| s.parse().ok())
-        .unwrap_or(20);
-    let patch: i32 = mc
-        .split('.')
-        .nth(2)
-        .and_then(|s| s.trim_start_matches(|c: char| !c.is_ascii_digit()).parse().ok())
-        .unwrap_or(0);
-    if (minor, patch) >= (20, 5) {
-        "21"
-    } else if minor >= 18 {
-        "17"
-    } else if minor >= 17 {
-        "16"
-    } else {
-        "8"
-    }
+    // (版本线, 补丁号) 元组比较，自上而下取第一条够得着的。1.x 与年份号都在 `mc_version` 里
+    // 归成一维，所以 `1.20.5` 是 (20,5)、`26.3` 是 (26,3)——旧写法只读第二段，26.3 会读成 3 线
+    const BOUNDARIES: &[(u32, u32, &str)] = &[
+        (26, 0, "25"),
+        (20, 5, "21"),
+        (18, 0, "17"),
+        (17, 0, "16"),
+    ];
+    let l = mc_version::parse(mc).unwrap_or(mc_version::Line { line: 20, patch: 0 });
+    BOUNDARIES
+        .iter()
+        .find(|(line, patch, _)| (l.line, l.patch) >= (*line, *patch))
+        .map_or("8", |(_, _, want)| *want)
 }
 
 pub fn probe(required_version: &Option<String>, selected_path: &Option<String>) -> JavaProbe {
@@ -371,13 +371,15 @@ OpenJDK 64-Bit Server VM ..."#, 25),
         assert_eq!(parse_major(""), None);
     }
 
-    /// 需求线那张表逐档钉住边界（`commands::java_requirement` 与 `default_options` 共用它）
+    /// 需求线那张表逐档钉住边界（`commands::java_requirement` 与 `default_options` 共用它）。
+    /// 断言里的档位一律以 piston-meta 官方 `javaVersion.majorVersion` 的实测值为准，不是照着表反推的
     #[test]
     fn required_for_mc_reads_every_official_boundary() {
         let want = |mc: &str| required_for_mc(mc);
         assert_eq!(want("1.20.5"), "21");
         assert_eq!(want("1.20.4"), "17"); // 差一个 patch 就换档，边界在 1.20.5 不是 1.20
         assert_eq!(want("1.21.1"), "21");
+        assert_eq!(want("1.21.11"), "21"); // 老编号最后一档，官方实测也是 21
         assert_eq!(want("1.19.4"), "17");
         assert_eq!(want("1.18.2"), "17");
         assert_eq!(want("1.17.1"), "16");
@@ -388,18 +390,33 @@ OpenJDK 64-Bit Server VM ..."#, 25),
         assert_eq!(want("1.20"), "17");
         assert_eq!(want("1"), "17");
         assert_eq!(want("1.20.10"), "21");
-        assert_eq!(want("1.120.1"), "21");
         assert_eq!(want("1.021"), "21");
         assert_eq!(want("1.20.6"), "21");
-        // patch 段认不出「剥掉开头杂字后的纯数字」⇒ 按缺 patch 处理，(20,0) 掉回 17 那一档。
+        // patch 段整段读不出纯数字 ⇒ 按缺 patch 处理，(20,0) 掉回 17 那一档。
         // 下面这批刁钻输入与 TS 侧 mockJavaForMc 逐条同结论（前端那份只是浏览器 dev 的镜像）
         assert_eq!(want("1.20.6-fabric"), "17");
         assert_eq!(want("1.20.x"), "17");
-        assert_eq!(want("1.a0.5"), "21");
         assert_eq!(want("1.a21"), "17");
         // 认不出 x.y[.z] 的（快照命名）按 1.20 兜底 = 既有行为，别以为它算出了 21
         assert_eq!(want("24w14a"), "17");
         assert_eq!(want(""), "17");
+    }
+
+    /// 年份编号那一档：旧写法只读第二段，`26.3` 读成 3 线 ⇒ 报 8（这台机器上真躺着一枚 jdk-1.8，
+    /// 于是「自动选择」挑它、installer 当场 `UnsupportedClassVersionError`）。现在跟着官方走 = 25
+    #[test]
+    fn year_numbered_versions_get_their_own_line() {
+        assert_eq!(required_for_mc("26.1"), "25");
+        assert_eq!(required_for_mc("26.1.2"), "25"); // 年份号也带第三段（官方在册）
+        assert_eq!(required_for_mc("26.3"), "25");
+        // 表里没有的未来线落在最高那道边界之上 ⇒ 沿用 25，不会掉回 8
+        assert_eq!(required_for_mc("1.120.1"), "25");
+    }
+
+    /// 半吊子解析删掉了：整段严格转整数之后，`1.a0.5` 不再是「minor 认不出、patch 却读得出」
+    #[test]
+    fn an_unreadable_line_segment_unreads_the_whole_string() {
+        assert_eq!(required_for_mc("1.a0.5"), "17");
     }
 
     #[test]

@@ -209,23 +209,34 @@ export function mockJavaProbe(requiredVersion: string | null, javaPath: string |
 }
 
 /**
- * MC 版本 → Java 需求线（浏览器 dev）。表抄 `core::java::required_for_mc`（1.20.5+ = 21、
- * 1.18+ = 17、1.17 = 16、更早 8，认不出 `x.y` 的按 1.20 兜底），两边改了要记得同步。
- * 段末带杂字的（"1.20.6-fabric"）按缺 patch 处理 = 需求线 17：Rust 那边是整段严格转整数，
- * 这里也照整段判定，别用 `parseInt` 的前缀读法，否则两边会挑出不同的线。
+ * MC 版本号 → 「版本线 + 补丁号」，与 Rust 的 `core::mc_version::parse` 逐条同口径：
+ * 老编号 `1.x.y` 的线在第二段，26 起的年份线就是首段（`26.3` → 26），老 Beta/Alpha 的字母前缀先剥。
+ * 整段严格转整数（`6-fabric` 不读成 6、`a0` 读不出就整串认不出），别用 `parseInt` 的前缀读法。
+ */
+function mockMcLine(mc: string): [number, number] | null {
+    const seg = mc.trim().replace(/^[A-Za-z]+/, "").split(".");
+    const num = (s: string | undefined) => (/^\d+$/.test(s ?? "") ? Number(s) : null);
+    const first = num(seg[0]);
+    if (first === null) return null;
+    if (first === 1) {
+        const line = num(seg[1]);
+        return line === null ? null : [line, num(seg[2]) ?? 0];
+    }
+    return [first, num(seg[1]) ?? 0];
+}
+
+/**
+ * MC 版本 → Java 需求线（浏览器 dev）。表抄 `core::java::required_for_mc`，档位按 piston-meta
+ * 官方 `javaVersion.majorVersion` 实测：8 = …1.16.5、16 = 1.17、17 = 1.18–1.20.4、
+ * 21 = 1.20.5–1.21.11、**25 = 26.x**；认不出形状的按 1.20 兜底 = 17。两边改了要记得同步。
+ * 真机上这条命令还有第一腿（直接问官方字段，命中本地表零请求），mock 没有网络 ⇒ 只演那张兜底表。
  */
 export function mockJavaForMc(mc: string): string {
-    const parts = mc.split(".");
-    /** `re` 与 Rust 的解析口径一一对上：minor 只认纯数字，patch 允许剥掉开头的非数字 */
-    const num = (s: string | undefined, re: RegExp, fallback: number) => {
-        const m = s?.match(re);
-        return m ? Number(m[1] ?? m[0]) : fallback;
-    };
-    const minor = num(parts[1], /^(\d+)$/, 20);
-    const patch = num(parts[2], /^\D*(\d+)$/, 0);
-    if (minor > 20 || (minor === 20 && patch >= 5)) return "21";
-    if (minor >= 18) return "17";
-    if (minor === 17) return "16";
+    const [line, patch] = mockMcLine(mc) ?? [20, 0];
+    if (line >= 26) return "25";
+    if (line > 20 || (line === 20 && patch >= 5)) return "21";
+    if (line >= 18) return "17";
+    if (line === 17) return "16";
     return "8";
 }
 

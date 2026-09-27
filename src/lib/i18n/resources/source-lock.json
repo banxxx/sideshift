@@ -3,7 +3,7 @@
   "about.ack-pending": "正在获取鸣谢名单…",
   "about.ack-retry": "重新获取",
   "about.ack-source": "鸣谢名单",
-  "about.ack-source-value": "名单与头像取自项目自管的静态地址，本机留存一份快照供离线显示；该请求不携带账号、凭据或本地文件信息",
+  "about.ack-source-value": "名单与自带头像取自项目自管的静态地址；登记了 Minecraft 玩家名的贡献者，其皮肤由本机向 Mojang 公开档案接口查询、贴图直连其 CDN 取回。这些请求不携带账号、凭据或本地文件信息；名单快照与皮肤副本留存于本机配置目录，供离线显示",
   "about.acknowledgements": "鸣谢名单",
   "about.collapse-ack": "收起鸣谢名单",
   "about.collapse-privacy": "收起数据与隐私",

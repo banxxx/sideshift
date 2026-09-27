@@ -130,12 +130,34 @@ pub async fn probe_java(
 }
 
 /// 某 MC 版本的 Java 需求线（Rust: `java_requirement`）。给转换页换版本时改写方案用：
-/// 这张表只在 `core::java` 里有一份，前端复刻一份就会跟实跑的那把筛子走偏。
+/// 这张表只在 Rust 一份，前端复刻一份就会跟实跑的那把筛子走偏。
 /// 为什么由前端改写而不是消费方现算：`options.java_version` 是**快照字段**，回看与重试读的都是
 /// 当时那一档；在报告或实跑里现算会让旧任务被新表改写。
+///
+/// 两腿取数，顺序不能反：
+/// 1. 官方 `javaVersion.majorVersion`（`Downloader::java_major_official`，命中本地表零请求）；
+/// 2. 取不到才回落到 `core::java::required_for_mc` 那张表 —— 离线转换、BMCLAPI 没这一条腿的镜像、
+///    清单里没这个号（自造版本号）三类情形都得有答案。
+/// 表本身按官方实测补齐了 26.x（=Java 25），所以第二腿今天与第一腿同结论；第一腿的价值是
+/// Mojang 下次抬档时不用再发一版。
+///
+/// `default_options` 那一头仍走表（同步、首帧就要有值）：这条命令是它之后到的那一次覆盖，
+/// 值相同前端就不 patch，也就不会白重探一趟 Java。
+///
+/// 返回类型是 `Result` 而不是 `String`：Tauri 的 async 命令有这条约束。这里**永远 Ok**——
+/// 官方字段取不到就是回落，没有值得报错的分支（报出去反而会在界面上多一句没必要的红字）。
 #[tauri::command]
-pub fn java_requirement(mc_version: String) -> String {
-    java::required_for_mc(&mc_version).to_string()
+pub async fn java_requirement(state: S<'_>, mc_version: String) -> Result<String, String> {
+    let cache_dir = PathBuf::from(lock(&state).settings.cache_dir.clone());
+    Ok(
+        match downloader_of(&state)
+            .java_major_official(&cache_dir, &mc_version)
+            .await
+        {
+            Some(major) => major.to_string(),
+            None => java::required_for_mc(&mc_version).to_string(),
+        },
+    )
 }
 
 #[tauri::command]

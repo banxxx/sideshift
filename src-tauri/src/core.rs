@@ -3,6 +3,7 @@ pub mod data_root;
 pub mod env;
 pub mod detector;
 pub mod downloader;
+pub mod mc_version;
 pub mod java;
 pub mod installer;
 pub mod builder;

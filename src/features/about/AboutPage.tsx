@@ -34,7 +34,7 @@ function privacyRows(t: TranslateFn): Array<[string, string]> {
         [t("about.process", "处理方式"), t("about.process-value", "整合包的解包、判定与重建全部在本机执行，包体内容不作上传")],
         [t("about.network-scope", "联网范围"), t("about.network-scope-value", "仅三种情形主动发起请求：模组与版本元数据补全、应用更新检查、鸣谢名单获取")],
         [t("about.data-source", "数据来源"), t("about.data-source-value", "Modrinth API、CurseForge API，以及在设置中指定的镜像服务")],
-        [t("about.ack-source", "鸣谢名单"), t("about.ack-source-value", "名单与头像取自项目自管的静态地址，本机留存一份快照供离线显示；该请求不携带账号、凭据或本地文件信息")],
+        [t("about.ack-source", "鸣谢名单"), t("about.ack-source-value", "名单与自带头像取自项目自管的静态地址；登记了 Minecraft 玩家名的贡献者，其皮肤由本机向 Mojang 公开档案接口查询、贴图直连其 CDN 取回。这些请求不携带账号、凭据或本地文件信息；名单快照与皮肤副本留存于本机配置目录，供离线显示")],
         [t("about.telemetry", "遥测统计"), t("about.telemetry-value", "未集成遥测或统计上报组件，亦不写入本地统计数据文件")],
         [t("about.credentials", "凭据存储"), t("about.credentials-value", "CurseForge API Key 仅保存于本机配置，不进入日志、任务存档与导出产物")],
     ];
@@ -122,7 +122,8 @@ export function AboutPage() {
 
             {/* ---- 数据与隐私 ---- */}
             <motion.div variants={CARD_RISE}>
-                <Panel gap={10}>
+                {/* 收起态只有一行表头 ⇒ 上下内边距收一档（20 → 12），见 `Panel` 的 `padY` */}
+                <Panel gap={10} padY={12}>
                     <PanelHead
                         title={t("about.privacy", "数据与隐私")}
                         right={
@@ -151,7 +152,8 @@ export function AboutPage() {
 
             {/* ---- 第三方组件 ---- */}
             <motion.div variants={CARD_RISE}>
-                <Panel gap={10}>
+                {/* 收起态只有一行表头 ⇒ 上下内边距收一档（20 → 12），见 `Panel` 的 `padY` */}
+                <Panel gap={10} padY={12}>
                     <PanelHead
                         title={t("about.third-party", "第三方组件")}
                         right={

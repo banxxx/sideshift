@@ -80,7 +80,8 @@ Invoke-RestMethod -Method Post -Uri $u -Body $b -ContentType "application/json; 
 - `{ENDPOINT_HOST}` 会由 Worker 换成 `ACK_CDN` 的主机；Worker 没换成功时，客户端还会
   按自己那侧的端点常量再换一次。**两种情况都不会把字面量漏进界面**：换不出来就是主机
   不合法，那一条头像按"没有头像"处理，落名字首字块。
-- 顺序即屏上顺序，不要加 `id` 字段（React key 用名字 + 序号）。
+- 顺序即屏上顺序，不要加 `id` 字段（React key 用名字，只有重名时才再挂一个「第几次出现」的次序，
+  所以中间插一个人不会让后面整批卡重挂）。
 
 ## 域名（已定案：`poso.us.ci`，别再往 workers.dev 上退）
 

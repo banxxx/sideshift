@@ -3,7 +3,7 @@
   "about.ack-pending": "正在獲取鳴謝名單…",
   "about.ack-retry": "重新獲取",
   "about.ack-source": "鳴謝名單",
-  "about.ack-source-value": "名單與頭像取自專案自管的靜態地址，本機留存一份快照供離線顯示；該請求不攜帶帳號、憑據或本地檔案信息",
+  "about.ack-source-value": "名單與自帶頭像取自專案自管的靜態地址；登記了 Minecraft 玩家名的貢獻者，其皮膚由本機向 Mojang 公開檔案介面查詢、貼圖直連其 CDN 取回。這些請求不攜帶帳號、憑據或本地檔案信息；名單快照與皮膚副本留存於本機配置目錄，供離線顯示",
   "about.acknowledgements": "致謝名單",
   "about.collapse-ack": "收起致謝名單",
   "about.collapse-privacy": "收起資料與隱私",

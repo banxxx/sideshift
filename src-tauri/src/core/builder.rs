@@ -9,6 +9,7 @@ use zip::write::SimpleFileOptions;
 use zip::CompressionMethod;
 
 use crate::core::installer::Installed;
+use crate::core::mc_version;
 use crate::models::{ConversionOptions, LoaderKind};
 
 #[derive(Error, Debug)]
@@ -330,16 +331,12 @@ fn one_line_escaped(s: &str) -> String {
 ///
 /// 判据只有一条硬事实：**1.20 pre1 起**才是「UTF-8 优先、Latin-1 兜底」，更早一律 Latin-1，
 /// 于是一个中文在服务端那边变成三个怪字符。`\uXXXX` 两边都解得对，所以判不出来时选**转**
-/// （代价只是文件里那行不可读，反过来判错是真乱码）——快照串 `24w14a`、alpha/beta 都落在这一档。
-/// 两套写法都认：`1.x` 看第二段，`1` 之外的首段是年份号（`26.3`），恒在新侧。
+/// （代价只是文件里那行不可读，反过来判错是真乱码）——快照串 `24w14a` 那一类就走这一格。
+/// 老 Beta/Alpha 不是「判不出」而是真读得出线（`b1.7.3` → 7 线），只是同样落在 1.20 之前。
+/// 版本线怎么从两套编号（`1.20.1` / `26.3`）里读出来在 `core::mc_version`，与 Java 需求线共用一把尺。
 fn props_must_escape(mc: &str) -> bool {
-    let head = mc.trim().trim_start_matches(|c: char| c.is_ascii_alphabetic());
-    let mut parts = head.split('.');
-    let major = parts.next().and_then(|s| s.parse::<u32>().ok());
-    let minor = parts.next().and_then(|s| s.parse::<u32>().ok());
-    match major {
-        Some(0 | 1) => minor.is_none_or(|m| m < 20),
-        Some(_) => false,
+    match mc_version::parse(mc) {
+        Some(l) => l.line < 20,
         None => true,
     }
 }

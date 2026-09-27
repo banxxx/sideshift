@@ -60,17 +60,26 @@ export function PageHeader({
 
 export function Panel({
     gap = 12,
+    padY,
     className,
     children,
 }: {
     /** 卡内纵向间距（px）：设计稿按帧取 10 / 12 / 14 */
     gap?: number;
+    /**
+     * 上下内边距（px），不给就是 `p-5` 的 20。
+     *
+     * 只给「收起后只剩一行表头」的那种卡用：`PanelHead` 的高度是右侧那颗按钮顶出来的（`FoldBtn` 28px），
+     * 上下各 20 就是一行字顶着 70px 的框。走 inline `paddingBlock` 而不是传 `className="py-3"`，
+     * 是为了不跟 `p-5` 抢 Tailwind 的输出顺序——内联样式一定压过类。左右一律不动，横向标尺全站统一。
+     */
+    padY?: number;
     className?: string;
     children: ReactNode;
 }) {
     return (
         <section
-            style={{ gap }}
+            style={{ gap, ...(padY != null ? { paddingBlock: padY } : null) }}
             className={cn(
                 "flex flex-col rounded-[12px] border border-stroke bg-surface p-5",
                 className

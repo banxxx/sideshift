@@ -1,6 +1,8 @@
-//! 版本表与加载器 jar 坐标：piston-meta 的 MC 版本、Fabric/Forge/NeoForge 三张表。
+//! 版本表与加载器 jar 坐标：piston-meta 的 MC 版本、Fabric/Forge/NeoForge 三张表，
+//! 外加「某 MC 版本要哪档 Java」那条官方字段的取数与本地表（`java-index.json`）。
 
-use std::path::PathBuf;
+use std::collections::BTreeMap;
+use std::path::{Path, PathBuf};
 
 use crate::models::{LoaderKind, VersionOption};
 use super::client::Downloader;
@@ -14,6 +16,11 @@ const FORGE_PROMOTIONS: &str = "https://files.minecraftforge.net/net/minecraftfo
 const FORGE_MAVEN_META: &str = "https://files.minecraftforge.net/net/minecraftforge/forge/maven-metadata.json";
 const NEOFORGE_VERSIONS: &str =
     "https://maven.neoforged.net/api/maven/versions/releases/net/neoforged/neoforge";
+/// `cache_dir/java-index.json`：MC 版本号 → 官方 `javaVersion.majorVersion`。
+/// 与 `env-index.json` 同级，也就是躺在 `files\` 与 `tasks\` 这两个可清理目录**之外** ⇒ 设置页
+/// 那张缓存卡看不见它（它不是「越攒越大的那类东西」：一条一个整数，全官方版本封顶一千来条）。
+/// 存的是不可变事实——某个 MC 版本要哪档 Java 永远不会改 ⇒ 命中即用，不设 TTL。
+const JAVA_INDEX_FILE: &str = "java-index.json";
 
 impl Downloader {
     /// 全量版本清单（接口本就一次返回，不截断，前端搜索即全量过滤）。
@@ -42,6 +49,42 @@ impl Downloader {
             first.recommended = Some(true);
         }
         Ok(out)
+    }
+
+    /// 某个 MC 版本要求的 Java 主版本 —— 拿**官方权威字段** `javaVersion.majorVersion`
+    /// （piston-meta 每条版本记录的 `url` 指向那份 JSON 里；官方启动器就是按它挑 JRE 的）。
+    ///
+    /// 命中本地表即离线可答；没命中才要两趟请求——piston-meta 没有「按 id 直取版本 JSON」的端点，
+    /// 那个 packages URL 只能从清单里查（清单那一趟有 BMCLAPI 镜像，第二趟**没有**：
+    /// `source::PREFIXES` 只重写 `piston-meta.mojang.com/mc/`，而 `/v1/packages/…json` 实测
+    /// HEAD 200 / GET 302 / 跟随后 TLS 握手失败，所以不往里加映射）。
+    ///
+    /// 任何一步取不到都返回 `None`，由命令层回落到 `java::required_for_mc` 那张表：转换要能在
+    /// 完全断网时做，需求线不能是「查不到就没有」。失败也不写表（只缓存查到过的答案）。
+    pub async fn java_major_official(&self, cache_dir: &Path, mc: &str) -> Option<u32> {
+        let id = mc.trim();
+        if id.is_empty() {
+            return None;
+        }
+        if let Some(major) = java_index_load(cache_dir).get(id).copied() {
+            return Some(major);
+        }
+        let list = self.get_json(PISTON_MANIFEST).await.ok()?;
+        let url = list["versions"]
+            .as_array()?
+            .iter()
+            .find(|e| e["id"].as_str() == Some(id))?["url"]
+            .as_str()?
+            .to_string();
+        let v = self.get_json(&url).await.ok()?;
+        let major = v["javaVersion"]["majorVersion"].as_u64()?;
+        // 荒谬值不当答案用：官方字段读歪一格就把闸门钉死，不如不读（实测全量正式版落在 8…25）
+        if !matches!(major, 8..=99) {
+            return None;
+        }
+        let major = major as u32;
+        java_index_put(cache_dir, id, major);
+        Some(major)
     }
 
     pub async fn list_loader_versions(
@@ -218,5 +261,79 @@ impl Downloader {
             dest: PathBuf::new(),
             size_bytes: 0,
         }
+    }
+}
+
+/// 读那张裸表：文件不在/坏一个字符都给空表，不给错误——这条链上「查不到」是常态而非失败
+fn java_index_load(cache_dir: &Path) -> BTreeMap<String, u32> {
+    std::fs::read_to_string(cache_dir.join(JAVA_INDEX_FILE))
+        .ok()
+        .and_then(|s| serde_json::from_str(&s).ok())
+        .unwrap_or_default()
+}
+
+/// 写一条并落盘。写前重新读一遍再并：两条命令同时在飞时不该互相抹掉对方那条
+/// （掉一条不毁正确性，只是下次多要一次清单，所以这里不引锁）
+fn java_index_put(cache_dir: &Path, id: &str, major: u32) {
+    let mut index = java_index_load(cache_dir);
+    index.insert(id.to_string(), major);
+    // 盘上就是这张表本身。env-index 那条教训：套一层 `{"map": …}` 而读侧按裸表解，
+    // 写进去的答案就永远读不出来，每一轮都从零发请求
+    if let Ok(json) = serde_json::to_string(&index) {
+        let _ = std::fs::create_dir_all(cache_dir);
+        let _ = std::fs::write(cache_dir.join(JAVA_INDEX_FILE), json);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn tmp() -> PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "ss-java-index-{}-{:?}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.subsec_nanos())
+                .unwrap_or_default()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    /// 落盘形状必须是裸表：外层套壳 ⇒ 读侧解不出来 ⇒ 缓存形同虚设（env-index 踩过的那一格）
+    #[test]
+    fn the_index_lands_on_disk_as_a_bare_map() {
+        let dir = tmp();
+        java_index_put(&dir, "26.3", 25);
+        java_index_put(&dir, "1.20.1", 17);
+        let text = std::fs::read_to_string(dir.join(JAVA_INDEX_FILE)).unwrap();
+        assert!(text.starts_with("{\"1.20.1\":17,\"26.3\":25}"), "{text}");
+        assert_eq!(java_index_load(&dir).get("26.3"), Some(&25));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 坏文件、缺文件都当空表用：这条链的兜底是那张表，不是报错
+    #[test]
+    fn an_unreadable_index_reads_as_empty() {
+        let dir = tmp();
+        std::fs::write(dir.join(JAVA_INDEX_FILE), b"{ not json").unwrap();
+        assert!(java_index_load(&dir).is_empty());
+        java_index_put(&dir, "1.21.1", 21);
+        assert_eq!(java_index_load(&dir).get("1.21.1"), Some(&21));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 命中本地表 ⇒ 一趟请求都不发（这条是「离线转换也拿得到答案」的判据）
+    #[tokio::test]
+    async fn a_cached_answer_needs_no_request() {
+        let dir = tmp();
+        java_index_put(&dir, "1.20.1", 17);
+        // 缓存目录指过去就够：这里没有网络，命中即返回；漏了命中会去打 piston-meta 而挂掉
+        let d = Downloader::new(dir.clone(), 1);
+        assert_eq!(d.java_major_official(&dir, "1.20.1").await, Some(17));
+        assert_eq!(d.java_major_official(&dir, "  ").await, None);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

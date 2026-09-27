@@ -3,7 +3,7 @@
   "about.ack-pending": "Loading acknowledgements…",
   "about.ack-retry": "Reload",
   "about.ack-source": "Acknowledgements list",
-  "about.ack-source-value": "The list and its avatars come from a static address this project manages; a snapshot is kept on this machine so it still renders offline. The request carries no account, credential or local file information",
+  "about.ack-source-value": "The list and its built-in avatars come from a static address this project manages; for contributors registered with a Minecraft player name, the skin is looked up through Mojang's public profile API and the texture is fetched from its CDN. These requests carry no account, credential or local file information; the list snapshot and the skin copies are kept in this machine's config directory so the page still renders offline",
   "about.acknowledgements": "Acknowledgements",
   "about.collapse-ack": "Collapse acknowledgements",
   "about.collapse-privacy": "Collapse data & privacy",

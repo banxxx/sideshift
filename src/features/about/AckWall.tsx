@@ -8,6 +8,8 @@
  *     压住后来的 inline transform，两条挤一个节点上就是互相顶掉（样片里入场动画把视差压死过）。
  *     涟漪因此走 `scale` / `borderColor` 这两个**独立属性**——也正因为如此它**不能用 `filter`
  *     做"亮一下"**：`filter` 创建层叠上下文，会把 `preserve-3d` 当场压平。
+ *     同一件事在退场那一拍也成立：跟随器与那条 WAAPI 复位都写 `transform` ⇒ 退场期由 `releasing`
+ *     挡住跟随器，它只负责把头带回正对。
  *  2. **`will-change` 与子层的 `translateZ` 只在悬停那一张上挂**。常驻的话 N 张卡 = N 个合成层
  *     与 N 个 3D 上下文，撞「日志量级=前端性能预算」那条。
  *  3. **涟漪的半径参照是「看得见的这一档」（壳），不是整条名单**：默认只露 4 行时按全高算半径，
@@ -36,7 +38,8 @@
  *    还会**抢指针**（点上去没反应、被裁掉的卡反而被点亮）。所以这里只给 4px，配套地把
  *    悬浮投影的尾巴也收进 4px（见 `SHADOW`）——**「不漏下一行」与「投影不裁」两头，只能要一头。**
  */
-import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import type { PointerEvent as ReactPointerEvent } from "react";
 import { motion, useReducedMotion } from "motion/react";
 import { Btn, FoldBtn, Panel, PanelHead } from "@/components/ui";
 import { COLLAPSE, waveFrontDurMs, waveFrontTime, WAVE_FRONT_EASE } from "@/lib/page-motion";
@@ -89,6 +92,13 @@ const PAD = { x: 20, top: 10, bottom: GAP - HIT };
  */
 /** 悬浮：倾角上限（度）、凸起（px）、透视距离（px）、头像与昵称各自再浮的行程（px）、离开复位时长（ms） */
 const TILT = { deg: 12, lift: 14, pd: 800, zAvatar: 16, zName: 16, backMs: 620 };
+/** 跟随缓冲（ms）：姿态与目标之间每帧按真实时长指数逼近，`tau`＝贴上 63% 所需的毫秒数。
+ *  70 ⇒ 一次扫过一整行约 200ms 内追上，读起来是"跟着手、但有重量"；填 0 附近就是回到过去的硬跳。
+ *  `backTau` 是**头像**复位的同一量：指数衰减与卡那条刹车曲线同起点、同形状（头慢尾爬），
+ *  580ms 内贴到 0.004 以内 ⇒ 与 `backMs: 620` 收尾对得上。 */
+const FOLLOW = { tau: 70, backTau: 120 };
+/** 贴上目标的判据（归一化偏移的一格）：到了就撤 rAF，静止悬停不留常驻循环 */
+const SETTLED = 0.004;
 /** 涟漪：强度（%）、波速（px/s，口径＝等速主体段的速度）、单张脉冲时长（ms）、点击锁（ms） */
 const RIP = { strength: 18, speed: 250, durMs: 520, lockMs: 420 };
 /** 入场：行程（px）与错峰（秒），错峰总时长压进 budget（否则 240 人要排到 2 秒开外） */
@@ -103,6 +113,23 @@ function withAlpha(hex: string, a: number): string {
     return `rgba(${(n >> 16) & 255},${(n >> 8) & 255},${n & 255},${a})`;
 }
 
+/**
+ * 卡的 React key：名字，同名时再挂「这是第几次出现」。
+ *
+ * 不用「名字＋在整份名单里的位置」：那样中间插一个人，后面每张卡的 key 全变 ⇒ 整批重挂，
+ * 已建好的头与 `failedSrc` 一起丢一遍、入场动画重演。同名那一档只看它自己那几个，插不进来的
+ * 位置改动不动它。也不能只用名字——名单是他手编的 JSON，两个人重名是正常输入，撞 key 会让
+ * React 只留一张。
+ */
+function cardKeys(people: AckPerson[]): string[] {
+    const seen = new Map<string, number>();
+    return people.map((p) => {
+        const n = (seen.get(p.name) ?? 0) + 1;
+        seen.set(p.name, n);
+        return n === 1 ? p.name : `${p.name}#${n}`;
+    });
+}
+
 function AckCard({ p, skin, delay }: { p: AckPerson; skin?: string; delay: number }) {
     const btn = useRef<HTMLButtonElement>(null);
     /** 3D 头像的偏转走命令式：指针每动一次不该让整张卡重挂（见 `McHead` 的注释） */
@@ -114,8 +141,79 @@ function AckCard({ p, skin, delay }: { p: AckPerson; skin?: string; delay: numbe
      *  不需要 effect 去复位（bool 会把这个人的新地址也一起压成占位图） */
     const [failedSrc, setFailedSrc] = useState<string | null>(null);
 
+    /* ---- 指针 → 姿态的那条跟随器 -------------------------------------
+     * 「指针在哪」与「现在画出去多少」分成两份：事件只改 `goal`，rAF 每帧把 `cur` 往
+     * `goal` 按**真实时长**逼近（不是每帧固定比例——那样 120Hz 的缓冲毫秒数会只有 60Hz 的一半）。
+     *
+     * 三条输出（卡的 transform、跟指针的高光、3D 头像）都读同一份 `cur`，所以它们结构上不可能
+     * 不同拍。以前是「同一个事件值写三次」，看着同步，其实是三处各自硬跳。
+     */
+    const cur = useRef({ x: 0, y: 0 });
+    const goal = useRef({ x: 0, y: 0 });
+    const raf = useRef(0);
+    const stamp = useRef(0);
+    /** 退场：卡片交给 `leave` 里那条 WAAPI 刹车曲线，跟随器这段时间只管把头像带回正对，不抢同一行 transform */
+    const releasing = useRef(false);
+
+    const paint = useCallback(() => {
+        const { x, y } = cur.current;
+        const el = btn.current;
+        if (el && !releasing.current) {
+            // 右移⇒右边往后（rotateY 取正）；下移同理取负（CSS 的 y 轴朝下）
+            el.style.transform = `perspective(${TILT.pd}px) rotateX(${(-y * TILT.deg * 2).toFixed(2)}deg) rotateY(${(x * TILT.deg * 2).toFixed(2)}deg) translateZ(${TILT.lift}px)`;
+            el.style.setProperty("--ack-gx", `${((x + 0.5) * 100).toFixed(1)}%`);
+            el.style.setProperty("--ack-gy", `${((y + 0.5) * 100).toFixed(1)}%`);
+        }
+        head.current?.setTilt(x, y);
+    }, []);
+
+    const step = useCallback(() => {
+        raf.current = 0;
+        const c = cur.current;
+        const g = goal.current;
+        const now = performance.now();
+        const dt = Math.min(64, now - stamp.current); // 标签页挂起回来那一下不该一帧冲完
+        stamp.current = now;
+        const a = 1 - Math.exp(-dt / (releasing.current ? FOLLOW.backTau : FOLLOW.tau));
+        c.x += (g.x - c.x) * a;
+        c.y += (g.y - c.y) * a;
+        if (Math.abs(g.x - c.x) < SETTLED && Math.abs(g.y - c.y) < SETTLED) {
+            c.x = g.x;
+            c.y = g.y;
+            paint();
+            return;
+        }
+        paint();
+        raf.current = requestAnimationFrame(step);
+    }, [paint]);
+
+    const chase = useCallback(() => {
+        if (raf.current) return;
+        stamp.current = performance.now();
+        raf.current = requestAnimationFrame(step);
+    }, [step]);
+
+    /** 事件只负责换算目标：夹到 [-0.5, 0.5]（命中区外扩了 `HIT` 那一圈，指针会落在盒子外，不夹就倾过头） */
+    const track = useCallback(
+        (e: ReactPointerEvent<HTMLButtonElement>) => {
+            const el = btn.current;
+            if (!el || reduced) return;
+            const r = el.getBoundingClientRect();
+            goal.current = {
+                x: Math.min(0.5, Math.max(-0.5, (e.clientX - r.left) / r.width - 0.5)),
+                y: Math.min(0.5, Math.max(-0.5, (e.clientY - r.top) / r.height - 0.5)),
+            };
+            releasing.current = false;
+            chase();
+        },
+        [chase, reduced]
+    );
+
     const leave = useCallback(() => {
-        head.current?.setTilt(0, 0);
+        // 头像跟着一起回正（卡片下面那条曲线不动它）
+        releasing.current = true;
+        goal.current = { x: 0, y: 0 };
+        chase();
         const el = btn.current;
         if (!el) return;
         const from = el.style.transform;
@@ -137,20 +235,33 @@ function AckCard({ p, skin, delay }: { p: AckPerson; skin?: string; delay: numbe
             a.cancel();
             el.style.transform = "";
         };
-    }, [reduced]);
+    }, [chase, reduced]);
 
     /**
      * 再指上来时先撤掉还在演的那条复位动画。它带 `fill:"both"`，优先级高于 inline transform ⇒
      * 不撤就是「离开一下，620ms 内这张卡对指针毫无反应」；扫过几行时几乎每张卡都撞上这条。
      * （样片正是在 `pointerenter` 里做的这一步，我第一版落生产时把它漏在了 `leave` 里。）
+     *
+     * `track(e)` 用**进入那一刻**的坐标起头：不这么做，第一帧的缓冲会从上一次停住的角度开始爬，
+     * 而指针早就在别处了。
      */
-    const enter = useCallback(() => {
-        back.current?.cancel();
-        back.current = null;
-    }, []);
+    const enter = useCallback(
+        (e: ReactPointerEvent<HTMLButtonElement>) => {
+            back.current?.cancel();
+            back.current = null;
+            track(e);
+        },
+        [track]
+    );
 
-    // 卸载（切页、换语言重挂）时收掉没演完的那条
-    useEffect(() => () => back.current?.cancel(), []);
+    // 卸载（切页、换语言重挂）时收掉没演完的那条动画与那条还没贴上目标的 rAF
+    useEffect(
+        () => () => {
+            back.current?.cancel();
+            if (raf.current) cancelAnimationFrame(raf.current);
+        },
+        []
+    );
 
     /** 回落链的下面两层（自带 avatar → 名字首字）：皮肤那一层在它之前/之外都要用它垫着 */
     const flat = p.avatar ? (
@@ -189,20 +300,7 @@ function AckCard({ p, skin, delay }: { p: AckPerson; skin?: string; delay: numbe
                 data-ack-card
                 aria-label={p.name}
                 onPointerEnter={enter}
-                onPointerMove={(e) => {
-                    const el = btn.current;
-                    if (!el || reduced) return;
-                    const r = el.getBoundingClientRect();
-                    // 夹到 [-0.5, 0.5]：命中区外扩了 HIT 那一圈，指针会落在盒子外，不夹就倾过头
-                    const dx = Math.min(0.5, Math.max(-0.5, (e.clientX - r.left) / r.width - 0.5));
-                    const dy = Math.min(0.5, Math.max(-0.5, (e.clientY - r.top) / r.height - 0.5));
-                    // 右移⇒右边往后（rotateY 取正）；下移同理取负
-                    el.style.transform = `perspective(${TILT.pd}px) rotateX(${(-dy * TILT.deg * 2).toFixed(2)}deg) rotateY(${(dx * TILT.deg * 2).toFixed(2)}deg) translateZ(${TILT.lift}px)`;
-                    el.style.setProperty("--ack-gx", `${((dx + 0.5) * 100).toFixed(1)}%`);
-                    el.style.setProperty("--ack-gy", `${((dy + 0.5) * 100).toFixed(1)}%`);
-                    // 头像自己那一摆与卡片的倾角是两条线（同一元素两条 transform 会互相顶掉）
-                    head.current?.setTilt(dx, dy);
-                }}
+                onPointerMove={track}
                 onPointerLeave={leave}
                 className={cn(
                     "group/ack relative flex min-w-0 items-center rounded-md border border-stroke bg-surface",
@@ -378,6 +476,7 @@ export function AckWall({
 
     /** 档高 = 内容高 + 上下留白（`height` 是 border-box，padding 含在里面） */
     const height = (band.expandable && open ? band.full : band.closed) + PAD.top + PAD.bottom;
+    const keys = useMemo(() => cardKeys(people), [people]);
 
     return (
         <Panel gap={10}>
@@ -432,7 +531,7 @@ export function AckWall({
                     <div ref={wall} className="relative flex flex-wrap items-start" style={{ gap: GAP }}>
                         {people.map((p, i) => (
                             <AckCard
-                                key={`${p.name}-${i}`}
+                                key={keys[i]}
                                 p={p}
                                 skin={p.minecraftId ? skins[p.name] : undefined}
                                 delay={i * Math.min(ENTRY.stagger, ENTRY.budget / Math.max(1, people.length))}
