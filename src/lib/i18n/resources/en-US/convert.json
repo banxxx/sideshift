@@ -47,7 +47,7 @@
   "convert.fetching-loader": "Fetching loader versions; pick one to start",
   "convert.fix-java": "Fix Java in \"Runtime\" first; the loader can't install",
   "convert.folder-selected": "Nothing selected · click \"Add content\" above to pick from the pack",
-  "convert.folders-copied": "These folders and files were copied over at their original paths (subfolders too)",
+  "convert.folders-copied": "These folders and files came from the source pack, each landed at the output root under its own name",
   "convert.game-mode": "Game mode",
   "convert.generate-start": "Generate start scripts (start.sh / start.bat)",
   "convert.go-home": "Go to Home to pick a modpack",
@@ -89,9 +89,10 @@
   "convert.restore-global": "Restore global",
   "convert.runtime": "Runtime",
   "convert.search-versions": "Search versions…",
-  "convert.selected-folders": "Checked folders copy whole; root files copy one by one (folder files are shown read-only in the picker)",
+  "convert.selected-folders": "Whatever level you check is what lands there: folders copy whole (inner layout kept), single files copy as themselves — all at the output root",
   "convert.size-unknown": "Size unknown",
   "convert.server-description": "Server description (MOTD)",
+  "convert.server-fields-kept": "You kept the pack's server.properties · these fields don't go into the pack, that file wins",
   "convert.server-mods": "Server mods kept",
   "convert.server-mods-added": "Server mods added",
   "convert.server-port": "Server port",
@@ -115,5 +116,6 @@
   "convert.verified-accounts": "Verified accounts (online-mode)",
   "convert.world-seed": "World seed (blank = random)",
   "convert.write-eula": "Write eula=true (accepts Mojang EULA)",
-  "convert.writes-server": "Writes these to server.properties; keeps the pack's own file"
+  "convert.write-eula-kept": "eula.txt comes from the pack · this switch doesn't reach the pack",
+  "convert.writes-server": "Writes these into the pack's server.properties · checking that file there keeps its own copy"
 }

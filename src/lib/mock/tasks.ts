@@ -13,6 +13,7 @@ import type {
     TaskLogLine,
     TrashEntry,
 } from "@/lib/types";
+import { yieldedIn } from "@/lib/types";
 import { outputNameOf, loaderLabel } from "@/lib/format";
 import { hasInstallerStage } from "@/lib/rail-view";
 import {
@@ -473,7 +474,12 @@ export function mockReport(taskId: string): ConversionReport | undefined {
     const task = tasks.get(taskId);
     if (!task) return undefined;
     const o = task.options;
-    const generated = ["eula.txt", "server.properties", "README-SideShift.txt"];
+    // 让位口径与 builder 同步（core::builder::emit_root）：勾了包内同名根文件的那一枚不算「生成」，
+    // 报告里它进 reusedRootFiles，界面上对应的设置项也随之灰化
+    const yielded = yieldedIn(o.keepFiles);
+    const generated = ["eula.txt", "server.properties", "README-SideShift.txt"].filter(
+        (n) => !yielded.includes(n)
+    );
     if (o.generateScripts) generated.unshift("start.bat", "start.sh");
     const mods = (task.counts?.keep ?? mockPlanCounts.keep) + (task.counts?.add ?? mockPlanCounts.add);
     // 自检明细只在开关打开时给（与 Rust 侧一致：关着不该凭空冒出一张卡）
@@ -540,6 +546,7 @@ export function mockReport(taskId: string): ConversionReport | undefined {
         // 演示口径：包根文件 + mods/config 两个目录的条目数
         fileCount: (task.counts?.keep ?? mockPlanCounts.keep) + (task.counts?.add ?? mockPlanCounts.add) + generated.length + 12,
         generatedFiles: generated,
+        reusedRootFiles: yielded,
         startJar: "fabric-server-launch.jar",
         // 演示包是 Fabric：它没有安装器 jar 可在本机跑
         installed: false,

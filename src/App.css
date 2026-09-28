@@ -374,10 +374,42 @@
   box-shadow: 0 0 8px 1px var(--dz-glow);
 }
 
+/* ============ 进度条进行中（转换进度卡那两条） ============ */
+/* 与上面 rail-flow 同一套语言：一条「暗→亮→暗」的高光带扫过已完成段。
+ * 带宽给死 120px 而不是等比：填充段只有 8% 时等比的那道光只有 2px，读不出「还在跑」，
+ * 而这条恰好是「卡住了还是继续」的唯一信号。行程用 calc(100% + 120px)：长度档里的
+ * 100% 按「容器宽 - 图宽」算，加上一个带宽正好让高光带彻底走出右边缘，不需要 JS 量宽度。
+ * 位移而不是 transform：宽度过渡占着几何，两者会互相抢（同 rail-flow）。 */
+.bar-flow {
+  background-image: linear-gradient(
+    90deg,
+    rgba(255, 236, 190, 0) 0%,
+    rgba(255, 236, 190, 0.55) 50%,
+    rgba(255, 236, 190, 0) 100%
+  );
+  background-size: 120px 100%;
+  background-repeat: no-repeat;
+  animation: bar-sheen 1.8s cubic-bezier(0.45, 0, 0.55, 1) infinite;
+}
+
+@keyframes bar-sheen {
+  from {
+    background-position-x: -120px;
+  }
+  to {
+    background-position-x: calc(100% + 120px);
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
   .rail-flow {
     animation: none;
     background-size: 100% 100%;
+  }
+  /* 高光层也一起撤：留着它就等于把整条点亮，静止的条反而读成「满了」 */
+  .bar-flow {
+    animation: none;
+    background-image: none;
   }
 }
 

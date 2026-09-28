@@ -40,7 +40,12 @@ export function ActivitySubBar({ activity }: { activity?: ActivityInfo }) {
             <div
                 className={cn(
                     "h-1 rounded-full transition-[width]",
-                    activity ? (indeterminate ? "animate-pulse bg-gold/30" : "bg-gold/50") : "opacity-0"
+                    // 不定档没有「到哪了」可言，整条呼吸；有分母才配扫光——扫过的距离就是走过的比例
+                    activity
+                        ? indeterminate
+                            ? "animate-pulse bg-gold/30"
+                            : "bg-gold/50 bar-flow"
+                        : "opacity-0"
                 )}
                 style={{ width: `${percent}%` }}
             />

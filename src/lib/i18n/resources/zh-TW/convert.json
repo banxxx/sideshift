@@ -37,7 +37,7 @@
   "convert.fetching-loader": "正在獲取 Loader 版本列表，選定後方可開始轉換",
   "convert.fix-java": "請先在「運行環境」裡處理好 Java，本次裝不了 Loader",
   "convert.folder-selected": "尚未選擇 · 點擊上方「添加內容」從包內勾選",
-  "convert.folders-copied": "這些目錄與檔案當時按原層級從源包複製進了伺服器端包（支援子目錄）",
+  "convert.folders-copied": "這些目錄與檔案當時從源包帶入，各自按自己的名字落在產品根目錄",
   "convert.game-mode": "遊戲模式",
   "convert.generate-start": "生成啟動腳本（start.sh / start.bat）",
   "convert.go-home": "返回首頁選擇整合包",
@@ -71,8 +71,9 @@
   "convert.restore-global": "恢復全局",
   "convert.runtime": "運行環境",
   "convert.search-versions": "搜尋版本…",
-  "convert.selected-folders": "勾選的目錄整體複製，根級散檔案按單個檔案複製（檔案清單在彈窗裡唯讀展示）",
+  "convert.selected-folders": "勾哪一層就落哪一層：目錄整體（內部層級保留）、單個檔案按自己落位，都掛在產品根目錄下",
   "convert.server-description": "伺服器描述（MOTD）",
+  "convert.server-fields-kept": "已勾包內 server.properties · 以上字段不進產物，屬性以那份為準",
   "convert.server-mods": "保留伺服器端模組",
   "convert.server-mods-added": "新增伺服器端模組",
   "convert.server-port": "伺服器連接埠",
@@ -92,5 +93,6 @@
   "convert.verified-accounts": "正版驗證（online-mode）",
   "convert.world-seed": "世界種子（留空 = 隨機生成）",
   "convert.write-eula": "自動寫入 eula=true（同意 Mojang EULA）",
-  "convert.writes-server": "以上字段寫入包內 server.properties；整合包自帶該檔案時保留原檔案"
+  "convert.write-eula-kept": "eula.txt 取自包內 · 本項不進產物",
+  "convert.writes-server": "以上字段寫入包內 server.properties · 勾了包內同名檔案時以那份為準"
 }

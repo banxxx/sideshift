@@ -58,6 +58,7 @@
   "report.passed-count_one": "All passed · {{count}} item",
   "report.passed-count_other": "All passed · {{count}} items",
   "report.public-lan": "For public or LAN play: open TCP {{port}} on your router or cloud security group",
+  "report.reused-root": "Carried from the pack · not generated from settings",
   "report.run-start": "Run start.bat / start.sh from the pack after extracting: the loader and deps are already installed locally and packed in, so the target machine needs no download",
   "report.run-start-bat": "Run start.bat / start.sh the first time: the Fabric server jar downloads the loader and libraries (needs Java and network), then keep using this script",
   "report.run-start-bat-start": "Run start.bat / start.sh the first time: it runs installer --installServer automatically, then keep using this script",

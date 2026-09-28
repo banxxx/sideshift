@@ -168,11 +168,18 @@ export const mockMcVersions: VersionOption[] = [
     { value: "1.18.2", label: "1.18.2", group: "更多版本" },
 ];
 
-/** Fabric loader 版本下拉 */
-export const mockLoaderVersions: VersionOption[] = [
-    { value: "0.15.3", label: "0.15.3", recommended: true },
+/**
+ * Fabric loader 版本下拉。2026-09-28 实测：`meta.fabricmc.net/v2/versions/loader/{mc}` 对
+ * 1.16.5 / 1.17.1 / 1.20.1 / 1.20.6 / 1.21.1 返回的是**同一份全量表**（各 253 条、集合逐条相同），
+ * 且整表只有最新那一枚带 `stable: true`。所以 mock 也按「一份全表」给，别演成「每档 MC 各有各的号」——
+ * 那是 Forge/NeoForge 的形状，不是 Fabric 的。
+ */
+export const mockLoaderVersions = (_mcVersion: string): VersionOption[] => [
+    { value: "0.19.5", label: "0.19.5", recommended: true },
+    { value: "0.19.4", label: "0.19.4" },
+    { value: "0.16.9", label: "0.16.9" },
+    { value: "0.15.3", label: "0.15.3" },
     { value: "0.14.24", label: "0.14.24" },
-    { value: "0.14.22", label: "0.14.22" },
 ];
 
 /**
@@ -385,6 +392,9 @@ export const mockPackTree: PackDirTree = {
         packFile("options.txt", 4_190),
         packFile("optionsof.txt", 1_204),
         packFile("servers.dat", 512),
+        // 这两枚的名字 builder 写死了：勾上就走「以包内那份为准」那一档，界面上对应的设置项要当场灰
+        packFile("eula.txt", 20),
+        packFile("server.properties", 1_024),
     ],
 };
 

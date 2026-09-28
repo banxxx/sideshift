@@ -113,6 +113,21 @@ async fn run_pipeline(app: AppHandle, state: Arc<AppState>, id: String) {
             pack.file_name, parsed.manifest.mc_version
         ),
     );
+    // 裸 zip 把内容整体套在一层自定义文件夹里很常见（`MyPack/mods/…`）。这一层不剥就会跟着
+    // 勾选值与落位一起进产物，而服务端按实例根读 `config/`，等于整份保留内容放错了地方
+    if !parsed.root_prefix.is_empty() {
+        push_log(
+            &app,
+            &state,
+            &id,
+            PipelineStage::Parser,
+            LogLevel::Info,
+            &format!(
+                "包根外层目录 {} 已按实例根处理（保留内容的勾选与落位都不带这一层）",
+                parsed.root_prefix
+            ),
+        );
+    }
     // index 声明了 URL 但包内没字节的残缺条目才需要联网补取
     let off_pack = parsed
         .mod_files
@@ -346,17 +361,18 @@ async fn run_pipeline(app: AppHandle, state: Arc<AppState>, id: String) {
         }
     }
 
-    // 3.2 用户在「客户端保留目录」卡勾选的目录与根级文件（逻辑相对路径，任意层级），命中条目原样带入；
-    // overrides/ 壳前缀剥离后匹配与落位（CF 格式内容映射到服务端根）
+    // 3.2 用户在「客户端保留内容」卡勾选的目录与文件（逻辑相对路径，任意层级），命中条目带入；
+    // overrides/ 壳前缀剥离后匹配（CF 格式内容映射到服务端根）
     // 目录走 `{path}/` 前缀、文件走精确全等：两类勾选分成 keep_dirs / keep_files 两个字段，
     // 这里就不必拿字符串猜"这条到底是不是文件"（根级文件没有父目录，天然不与目录档冲突）
+    // 落位是「勾哪一层就剪到哪一层」（parser::kept_rel）：勾选键有几段，交付路径就从第几段起算
     let mut kept_entries: HashMap<String, usize> = HashMap::new();
     for f in &parsed.extra_files {
         let rel = f.path.replace('\\', "/");
-        let logical = parser::logical_rel(&rel);
+        let logical = parsed.logical_rel(&rel);
         let lower = logical.to_lowercase();
-        // 保留范围硬闸：`mods` / `resourcepacks` 整棵不带（与保留树同一判据，见 parser::KEEP_SKIP_TOP）。
-        // 前端勾不出这两条，但它们可能来自旧草稿或手改的存档——只靠显示层挡等于给这里留后门
+        // 保留范围硬闸：路径里出现 `mods` / `resourcepacks` 就不带（与保留树同一判据，见 parser::KEEP_SKIP_TOP）。
+        // 前端勾不出这类条目，但它们可能来自旧草稿或手改的存档——只靠显示层挡等于给这里留后门
         if parser::keep_denied(&lower) {
             continue;
         }
@@ -367,8 +383,12 @@ async fn run_pipeline(app: AppHandle, state: Arc<AppState>, id: String) {
             .or_else(|| options.keep_files.iter().find(|p| **p == lower))
             .cloned();
         let Some(entry) = hit else { continue };
+        let landed = parser::kept_rel(&entry, logical);
+        if landed.is_empty() {
+            continue;
+        }
         *kept_entries.entry(entry).or_default() += 1;
-        let dest = staging.join(logical);
+        let dest = staging.join(landed);
         let fetch = if f.in_pack || f.url.is_empty() {
             Fetch::ZipEntry {
                 archive: source_path.clone(),
@@ -387,6 +407,13 @@ async fn run_pipeline(app: AppHandle, state: Arc<AppState>, id: String) {
     }
     for dir in &options.keep_dirs {
         let n = kept_entries.get(dir).copied().unwrap_or(0);
+        // 落位名与勾选名不同只在「勾了深层那档」时出现，日志把它写出来才读得懂产物里为什么没有上层
+        let landed = parser::base_name(dir);
+        let moved = if landed == dir {
+            String::new()
+        } else {
+            format!(" → {landed}/")
+        };
         push_log(
             &app,
             &state,
@@ -394,13 +421,19 @@ async fn run_pipeline(app: AppHandle, state: Arc<AppState>, id: String) {
             PipelineStage::Downloader,
             if n == 0 { LogLevel::Warn } else { LogLevel::Info },
             &format!(
-                "保留目录 {dir} · {n} 个文件{}",
+                "保留目录 {dir}{moved} · {n} 个文件{}",
                 if n == 0 { "（包内无此目录，已跳过）" } else { "" }
             ),
         );
     }
     for file in &options.keep_files {
         let n = kept_entries.get(file).copied().unwrap_or(0);
+        let landed = parser::base_name(file);
+        let moved = if landed == file {
+            String::new()
+        } else {
+            format!(" → {landed}")
+        };
         push_log(
             &app,
             &state,
@@ -408,7 +441,7 @@ async fn run_pipeline(app: AppHandle, state: Arc<AppState>, id: String) {
             PipelineStage::Downloader,
             if n == 0 { LogLevel::Warn } else { LogLevel::Info },
             &format!(
-                "保留文件 {file}{}",
+                "保留文件 {file}{moved}{}",
                 if n == 0 { "（包内已无此文件，已跳过）" } else { "" }
             ),
         );
@@ -928,6 +961,21 @@ async fn run_pipeline(app: AppHandle, state: Arc<AppState>, id: String) {
         LogLevel::Info,
         &format!("生成包根文件：{}", brief_list(&built.generated)),
     );
+    // 保留内容里勾了同名包根文件 ⇒ 以包内那份为准（用户主动要自己那份）。这几个配置项这次没进产物，
+    // 必须在日志里点名，否则报告页播报的还是界面上填的那套数
+    if !built.reused_root.is_empty() {
+        push_log(
+            &app,
+            &state,
+            &id,
+            PipelineStage::Builder,
+            LogLevel::Warn,
+            &format!(
+                "沿用包内自带的 {}：这些包根文件本次未按配置生成",
+                brief_list(&built.reused_root)
+            ),
+        );
+    }
     if built.overwritten {
         push_log(
             &app,
@@ -1042,6 +1090,7 @@ async fn run_pipeline(app: AppHandle, state: Arc<AppState>, id: String) {
             options: t.options.clone(),
             file_count: built.entries as u32,
             generated_files: built.generated.clone(),
+            reused_root_files: built.reused_root.clone(),
             start_jar: built.start_jar.clone(),
             installed: built.installed,
             checks,
@@ -1445,7 +1494,14 @@ fn build_readme(
         format!("剔除 {} · 保留 {} · 新增 {}", counts.remove, counts.keep, counts.add),
         loader_line,
     ];
-    if !agree_eula {
+    // 勾了包内同名文件时 builder 会让位（见 core::builder::emit_root），那句「已生成」就不成立。
+    // 比的是落位名而不是整条勾选键：勾深层那档（`Config/eula.txt`）落出来也是包根这枚
+    if keep_files
+        .iter()
+        .any(|f| parser::base_name(f).eq_ignore_ascii_case("eula.txt"))
+    {
+        lines.push("eula.txt 沿用包内那份（保留内容里勾了它）：本次未按 EULA 开关改写".to_string());
+    } else if !agree_eula {
         lines.push("eula.txt 已生成但为 eula=false：首次启动前请改为 eula=true，否则服务端会拒绝启动".to_string());
     }
     let kept: Vec<&str> = keep_dirs.iter().chain(keep_files.iter()).map(|s| s.as_str()).collect();
@@ -1534,5 +1590,27 @@ mod tests {
         assert!(t.detail.contains("半成品已回收"), "{}", t.detail);
         // 安装器退出码不是 i32 口径（Windows/Unix 不同），不硬塞进 exit_code 槽
         assert_eq!(e.exit_code, None);
+    }
+
+    /// README 那句 eula 说明跟着让位规则走：勾了包内那份就没有「已生成」这回事，
+    /// 按开关写的提醒会变成一句关于不存在文件的指导
+    #[test]
+    fn readme_eula_line_follows_the_keep_gate() {
+        let counts = PlanCounts { remove: 0, keep: 0, add: 0 };
+        let lines = |keeps: &[&str], agree: bool| {
+            let files: Vec<String> = keeps.iter().map(|s| s.to_string()).collect();
+            build_readme(&[], &counts, &[], LoaderKind::Fabric, &[], &files, agree, false)
+        };
+
+        let kept = lines(&["eula.txt"], false);
+        assert!(kept.iter().any(|l| l.contains("沿用包内那份")), "{kept:?}");
+        assert!(
+            !kept.iter().any(|l| l.contains("eula=false")),
+            "让位了还催用户改 false，那一句指的不是包里这份文件：{kept:?}"
+        );
+        // 没勾 + 开关关：还是原来那句提醒
+        assert!(lines(&[], false).iter().any(|l| l.contains("eula=false")));
+        // 没勾 + 开关开：两句都不该出现
+        assert!(!lines(&[], true).iter().any(|l| l.contains("eula.txt")));
     }
 }

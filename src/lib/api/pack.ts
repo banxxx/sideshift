@@ -59,11 +59,11 @@ export async function listMcVersions(): Promise<VersionOption[]> {
 export async function listLoaderVersions(
     mcVersion: string
 ): Promise<VersionOption[]> {
-    if (!isTauri) return mock.mockLoaderVersions;
+    if (!isTauri) return mock.mockLoaderVersions(mcVersion);
     return invokeOrMock(
         "list_loader_versions",
         { mcVersion },
-        () => mock.mockLoaderVersions
+        () => mock.mockLoaderVersions(mcVersion)
     );
 }
 

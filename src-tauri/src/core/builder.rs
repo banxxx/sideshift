@@ -60,6 +60,9 @@ pub struct BuildReport {
     pub args_files: Vec<String>,
     /// 本次把本机装好的 loader 树并进了产物（目标机不需要再联网首装）
     pub installed: bool,
+    /// 包内自带、因此本次**没有**按配置生成的包根文件（用户在保留内容里勾了同名条目 ⇒ 以包内那份为准）。
+    /// 与 `generated` 是互斥的两半：配置卡里对应的值这次不会进产物，报告和界面都得说实话
+    pub reused_root: Vec<String>,
 }
 
 /// 打包过程事件：Plan 先给总量（实时条的分母），File 逐文件累加字节，
@@ -122,7 +125,8 @@ pub fn build(
             let _ = std::fs::remove_file(input.staging.join(jar));
         }
     }
-    let generated = write_root_files(input, &shape)?;
+    let mut reused_root: Vec<String> = Vec::new();
+    let generated = write_root_files(input, &shape, &mut reused_root)?;
     std::fs::create_dir_all(input.output_dir)?;
     let out_path = resolve_out(
         input.output_dir,
@@ -165,6 +169,7 @@ pub fn build(
             _ => Vec::new(),
         },
         installed: input.installed.is_some(),
+        reused_root,
     })
 }
 
@@ -491,8 +496,32 @@ fn resolve_shape(installed: Option<&Installed>) -> Result<RunShape, BuilderError
     )))
 }
 
+/// 写一份包根交付文件。**包内已自带同名文件（用户在「客户端保留内容」里勾了它）就以包内那份为准**：
+/// 勾了就是要自己那份，再按配置写一遍等于把用户的决定覆盖掉。跳过的那枚记进 `reused`，
+/// 由流水线打日志、由报告与界面说明「这一项本次没按配置生成」
+fn emit_root(
+    staging: &Path,
+    name: &str,
+    body: impl FnOnce() -> String,
+    generated: &mut Vec<String>,
+    reused: &mut Vec<String>,
+) -> Result<(), BuilderError> {
+    let to = staging.join(name);
+    if to.exists() {
+        reused.push(name.to_string());
+        return Ok(());
+    }
+    std::fs::write(to, body())?;
+    generated.push(name.to_string());
+    Ok(())
+}
+
 /// 启动脚本、eula、server.properties、README；返回本次实际生成的包根文件名
-fn write_root_files(input: &BuildInput, shape: &RunShape) -> Result<Vec<String>, BuilderError> {
+fn write_root_files(
+    input: &BuildInput,
+    shape: &RunShape,
+    reused: &mut Vec<String>,
+) -> Result<Vec<String>, BuilderError> {
     let mut generated: Vec<String> = Vec::new();
     let jvm = jvm_args(input.options);
     if input.options.generate_scripts {
@@ -511,8 +540,13 @@ fn write_root_files(input: &BuildInput, shape: &RunShape) -> Result<Vec<String>,
             LoaderKind::Forge | LoaderKind::NeoForge => {
                 // 三态里两态靠 `@user_jvm_args.txt` 注入 JVM 参数（老 Forge 没有这套，参数上命令行）
                 if !matches!(shape, RunShape::LegacyJar { .. }) {
-                    std::fs::write(input.staging.join("user_jvm_args.txt"), format!("{jvm}\n"))?;
-                    generated.push("user_jvm_args.txt".to_string());
+                    emit_root(
+                        input.staging,
+                        "user_jvm_args.txt",
+                        || format!("{jvm}\n"),
+                        &mut generated,
+                        reused,
+                    )?;
                 }
                 match shape {
                     // 已装好：直接引用安装器生成的参数文件（内部全是相对路径，整棵树可整体搬运）
@@ -550,21 +584,27 @@ fn write_root_files(input: &BuildInput, shape: &RunShape) -> Result<Vec<String>,
                 }
             }
         };
-        std::fs::write(input.staging.join("start.bat"), bat)?;
-        std::fs::write(input.staging.join("start.sh"), sh)?;
-        generated.push("start.bat".to_string());
-        generated.push("start.sh".to_string());
+        emit_root(input.staging, "start.bat", move || bat, &mut generated, reused)?;
+        emit_root(input.staging, "start.sh", move || sh, &mut generated, reused)?;
     }
-    // eula.txt 恒生成：开关只决定值（false 时服务端拒启，用户按 README 手改 true）
-    std::fs::write(
-        input.staging.join("eula.txt"),
-        format!(
+    // eula.txt 按开关生成（false 时服务端拒启，用户按 README 手改 true）
+    emit_root(
+        input.staging,
+        "eula.txt",
+        || {
+            format!(
             "# eula=true 表示同意 Mojang 服务端最终用户协议（由 SideShift 按开关写入）\neula={}\n",
             if input.options.agree_eula { "true" } else { "false" }
-        ),
+        )
+        },
+        &mut generated,
+        reused,
     )?;
-    generated.push("eula.txt".to_string());
-    if !input.staging.join("server.properties").exists() {
+    // 同一条规矩：包内自带 `server.properties` 就整份沿用。我们只写界面上那 8 项 + 模板默认值，
+    // 覆盖过去会丢掉包内没在界面上暴露的键（`level-type` / `generator-settings` / `view-distance` …）
+    if input.staging.join("server.properties").exists() {
+        reused.push("server.properties".to_string());
+    } else {
         let o = input.options;
         // 枚举字段白名单收口，防脏值写入属性文件
         let gamemode = match o.gamemode.as_str() {
@@ -650,11 +690,13 @@ simulation-distance=10
         generated.push("server.properties".to_string());
     }
     if !input.readme_lines.is_empty() {
-        std::fs::write(
-            input.staging.join("README-SideShift.txt"),
-            input.readme_lines.join("\n") + "\n",
+        emit_root(
+            input.staging,
+            "README-SideShift.txt",
+            || input.readme_lines.join("\n") + "\n",
+            &mut generated,
+            reused,
         )?;
-        generated.push("README-SideShift.txt".to_string());
     }
     Ok(generated)
 }
@@ -820,6 +862,68 @@ mod tests {
         let _ = std::fs::remove_dir_all(&root);
     }
 
+    /* ---------------- 包根撞车：勾了就以包内那份为准 ---------------- */
+
+    /// 用户在保留内容里勾了根文件 ⇒ staging 里已经有了（流水线按 keep 清单拷进来的），
+    /// 这时 builder 不能再按配置写一遍。eula 走开关、server.properties 走那 8 项，
+    /// 覆盖等于把用户的决定抹掉
+    #[test]
+    fn kept_eula_wins_and_the_rest_still_get_generated() {
+        let root = tmp();
+        let staging = root.join("staging");
+        let out = root.join("out");
+        put(&staging.join("mods/example-mod.jar"), b"PK\x03\x04");
+        // agree_eula 是 false，所以只要我们那一份就会写成 eula=false
+        put(&staging.join("eula.txt"), b"eula=true\n");
+
+        let o = opts();
+        let report = build(&input(&staging, &out, &o), &mut |_| {}).unwrap();
+
+        assert_eq!(report.reused_root, vec!["eula.txt".to_string()], "{:?}", report.reused_root);
+        assert!(
+            !report.generated.contains(&"eula.txt".to_string()),
+            "勾了的不能再算生成：{:?}",
+            report.generated
+        );
+        // 没勾的那两枚照旧按配置生成
+        assert!(report.generated.contains(&"server.properties".to_string()));
+        assert!(report.generated.contains(&"start.bat".to_string()));
+        assert_eq!(
+            zip_text(&report.path, "eula.txt"),
+            "eula=true\n",
+            "包里必须是用户那份字节，不是开关算出来的 false"
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// server.properties 是整份沿用、不是按键合并：builder 只认识界面上那 8 项 + 模板，
+    /// 包内那些没暴露的键（level-type / generator-settings / view-distance）一旦被覆盖就永久丢了
+    #[test]
+    fn kept_server_properties_is_carried_whole_not_merged() {
+        let root = tmp();
+        let staging = root.join("staging");
+        let out = root.join("out");
+        put(&staging.join("mods/example-mod.jar"), b"PK\x03\x04");
+        put(
+            &staging.join("server.properties"),
+            b"level-type=minecraft\\:large_biomes\nmax-players=99\n",
+        );
+
+        let o = opts();
+        let report = build(&input(&staging, &out, &o), &mut |_| {}).unwrap();
+
+        assert_eq!(report.reused_root, vec!["server.properties".to_string()]);
+        let props = zip_text(&report.path, "server.properties");
+        assert!(props.contains("large_biomes"), "包内独有的键要原样带过：{props}");
+        assert!(
+            !props.contains("server-port"),
+            "沿用 = 整份照搬，不是把配置项并进去：{props}"
+        );
+        // eula 没勾 → 这一枚仍然按开关生成
+        assert!(report.generated.contains(&"eula.txt".to_string()));
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
     /* ---------------- 本机安装的并树与启动脚本三分叉 ---------------- */
 
     use crate::core::installer;
@@ -896,10 +1000,14 @@ mod tests {
         assert!(!props.contains("level-type"), "{props}");
         assert!(props.contains("level-name=world"), "{props}");
 
-        // 关掉「无界面」就该原样不带参数，而不是恒塞 nogui
+        // 关掉「无界面」就该原样不带参数，而不是恒塞 nogui。
+        // 换一份 staging：包根文件只在缺席时才生成，共用 staging 的话这里复用的是上一步自己写的脚本
+        // （生产里不会撞上——流水线每次跑先清空 staging）
+        let staging2 = root.join("staging-2");
+        put(&staging2.join("mods/example-mod.jar"), b"PK\x03\x04");
         let mut off = opts();
         off.nogui = false;
-        let mut i2 = input(&staging, &out, &off);
+        let mut i2 = input(&staging2, &out, &off);
         i2.loader = LoaderKind::Forge;
         i2.server_jar_name = None;
         i2.installer_jar_name = Some("forge-installer.jar".into());

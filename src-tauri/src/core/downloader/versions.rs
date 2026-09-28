@@ -97,25 +97,7 @@ impl Downloader {
             LoaderKind::Fabric => {
                 let url = format!("{FABRIC_META}/versions/loader/{mc_version}");
                 let v = self.get_json(&url).await?;
-                let mut out = Vec::new();
-                if let Some(arr) = v.as_array() {
-                    for e in arr {
-                        if e["loader"]["stable"].as_bool() != Some(true) {
-                            continue;
-                        }
-                        let ver = e["loader"]["version"].as_str().unwrap_or_default().to_string();
-                        out.push(VersionOption {
-                            value: ver.clone(),
-                            label: ver,
-                            recommended: None,
-                            group: None,
-                        });
-                    }
-                }
-                if let Some(first) = out.first_mut() {
-                    first.recommended = Some(true);
-                }
-                Ok(out)
+                Ok(fabric_loader_options(&v))
             }
             LoaderKind::Forge => {
                 // 双官方接口：promotions_slim 只给每个 MC 版本的 recommended/latest 两个
@@ -261,6 +243,41 @@ impl Downloader {
     }
 }
 
+/// Fabric meta `/versions/loader/{mc}` 的响应 → 下拉候选。
+///
+/// 不按 `loader.stable` 过滤（2026-09-28 实测否掉了旧口径）：`loader.stable` 是**这款 loader 全局**
+/// 的稳定标记，全平台只有最新那一枚为 true，而接口的 MC 过滤对近版本几乎不生效——
+/// 1.16.5 / 1.17.1 / 1.20.1 / 1.20.6 / 1.21.1 五档都返回 253 条、集合逐条相同。
+/// 旧口径把 253 条压成 1 条，等于下拉里只有一个号、且换 MC 版本也不变。
+/// 顺序照官方响应（新→旧），推荐位落在第一枚 stable 上（没有 stable 就落首条）。
+fn fabric_loader_options(v: &serde_json::Value) -> Vec<VersionOption> {
+    let mut out: Vec<VersionOption> = Vec::new();
+    let mut rec: Option<usize> = None;
+    if let Some(arr) = v.as_array() {
+        for e in arr {
+            let Some(ver) = e["loader"]["version"].as_str() else {
+                continue;
+            };
+            if ver.is_empty() || out.iter().any(|o| o.value == ver) {
+                continue;
+            }
+            if rec.is_none() && e["loader"]["stable"].as_bool() == Some(true) {
+                rec = Some(out.len());
+            }
+            out.push(VersionOption {
+                value: ver.to_string(),
+                label: ver.to_string(),
+                recommended: None,
+                group: None,
+            });
+        }
+    }
+    if let Some(slot) = out.get_mut(rec.unwrap_or(0)) {
+        slot.recommended = Some(true);
+    }
+    out
+}
+
 /// MC 版本 → NeoForge 版本号的公共前缀。NeoForge 版本号的前两段就是它对应 MC 的
 /// 「版本线.补丁号」（`21.1.3` ↔ MC 1.21.1、`26.2.0.1-beta` ↔ MC 26.2），偏移恒为 0，
 /// 两套 MC 写法都从 `mc_version::parse` 出（`1.21.1` → `21.1.`、`26.2` → `26.2.`）。
@@ -358,5 +375,43 @@ mod tests {
         // 认不出的串给 None ⇒ 空列表，而不是把全表端出去
         assert_eq!(neoforge_prefix("24w14a"), None);
         assert_eq!(neoforge_prefix(""), None);
+    }
+
+    /// Fabric 的候选＝整份响应，不是「只留 stable 那一枚」。
+    /// 形状照 2026-09-28 实测：`/versions/loader/1.20.1` 返回 253 条，`loader.stable` 全表只有
+    /// 首条（0.19.5）为 true ⇒ 按 stable 过滤会把下拉压成一个号，换 MC 版本也看不出演变。
+    #[test]
+    fn fabric_candidates_keep_every_version_and_mark_the_stable_one() {
+        let v = serde_json::json!([
+            { "loader": { "version": "0.19.5", "stable": true } },
+            { "loader": { "version": "0.19.4", "stable": false } },
+            { "loader": { "version": "0.15.3", "stable": false } },
+            { "loader": { "version": "", "stable": false } },
+            { "loader": { "version": "0.15.3", "stable": false } },
+            { "instantiator": {} },
+        ]);
+        let out = fabric_loader_options(&v);
+        // 空号与重复号都不进列表
+        assert_eq!(
+            out.iter().map(|o| o.value.as_str()).collect::<Vec<_>>(),
+            ["0.19.5", "0.19.4", "0.15.3"]
+        );
+        // 推荐位是 stable 那一枚，不是首条之外的位置；其余都不带推荐
+        let rec: Vec<&str> = out
+            .iter()
+            .filter(|o| o.recommended == Some(true))
+            .map(|o| o.value.as_str())
+            .collect();
+        assert_eq!(rec, ["0.19.5"]);
+        // 全表没有 stable ⇒ 回落首条，推荐位不能整份缺席
+        let none_stable = serde_json::json!([
+            { "loader": { "version": "0.16.9", "stable": false } },
+            { "loader": { "version": "0.16.5", "stable": false } },
+        ]);
+        let out = fabric_loader_options(&none_stable);
+        assert_eq!(out[0].recommended, Some(true));
+        assert_eq!(out[1].recommended, None);
+        // 空响应给空列表（源包声明的那一档由前端兜着，这里不硬造号）
+        assert!(fabric_loader_options(&serde_json::json!([])).is_empty());
     }
 }

@@ -14,15 +14,18 @@ export function Bar({
     percent,
     className,
     fillClass,
+    flow,
 }: {
     percent: number;
     className?: string;
     fillClass: string;
+    /** 进行中：已完成段扫一道光（口径见 App.css 的 `.bar-flow`）。不给就不动，静止的条是诚实的 */
+    flow?: boolean;
 }) {
     return (
         <div className={cn("h-1.5 w-full overflow-hidden rounded-full bg-surface-2", className)}>
             <div
-                className={cn("h-1.5 rounded-full transition-[width]", fillClass)}
+                className={cn("h-1.5 rounded-full transition-[width]", fillClass, flow && "bar-flow")}
                 style={{ width: `${Math.max(0, Math.min(100, percent))}%` }}
             />
         </div>

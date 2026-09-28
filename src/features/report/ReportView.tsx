@@ -18,6 +18,7 @@ import type {
     ModDisposition,
     PlanMod,
 } from "@/lib/types";
+import { holdsRootFile, ROOT_EULA } from "@/lib/types";
 import { cn } from "@/lib/utils";
 import {
     ChangeRow,
@@ -103,6 +104,8 @@ export function ReportView({
     const duration = formatDuration(report.durationSec * 1000);
     /** 进服务端包的模组数 = 保留 + 新增（剔除项不算，首启核对日志用的就是这个数） */
     const modCount = report.kept + report.added;
+    /** 勾了包内同名根文件时让位的那几枚（老快照没这一键 ⇒ 空）：报告要说「沿用」而不是「生成」 */
+    const reused = report.reusedRootFiles ?? [];
 
     const rowsOf = (d: ModDisposition) => (plan ?? []).filter((m) => m.disposition === d);
     const toggle = (d: ModDisposition) => setOpenKey((cur) => (cur === d ? null : d));
@@ -286,15 +289,30 @@ export function ReportView({
                     />
                 </Collapse>
                 {/* 包根文件来自 builder 实写清单：勾了脚本才会有 start.*，别按开关猜。
-                    名字串会长，单独给一行可换行的展示位，不进右对齐的 InfoRow */}
-                <Collapse when={report.generatedFiles.length > 0} gap={12}>
+                    名字串会长，单独给一行可换行的展示位，不进右对齐的 InfoRow。
+                    让位那一半和它同位：上面那 8 项当时没进产物，读报告的人要能看到这条分界线 */}
+                <Collapse when={report.generatedFiles.length > 0 || reused.length > 0} gap={12}>
                     <div className="flex w-full flex-col gap-1">
-                        <span className="text-[11px] leading-[16px] font-normal text-text-3">
-                            {t("report.generated-root", "包根生成")}
-                        </span>
-                        <span className="break-words font-mono text-[11px] leading-[16px] font-medium text-text-1">
-                            {report.generatedFiles.join("、")}
-                        </span>
+                        {report.generatedFiles.length > 0 && (
+                            <>
+                                <span className="text-[11px] leading-[16px] font-normal text-text-3">
+                                    {t("report.generated-root", "包根生成")}
+                                </span>
+                                <span className="break-words font-mono text-[11px] leading-[16px] font-medium text-text-1">
+                                    {report.generatedFiles.join("、")}
+                                </span>
+                            </>
+                        )}
+                        {reused.length > 0 && (
+                            <>
+                                <span className="text-[11px] leading-[16px] font-normal text-text-3">
+                                    {t("report.reused-root", "包根沿用 · 本次未按配置生成")}
+                                </span>
+                                <span className="break-words font-mono text-[11px] leading-[16px] font-medium text-gold">
+                                    {reused.join("、")}
+                                </span>
+                            </>
+                        )}
                     </div>
                 </Collapse>
             </Panel>
@@ -391,6 +409,9 @@ export function buildPlanSummary(
             o.onlineMode ? "开" : "关"
         }`,
         report.generatedFiles.length ? `包根文件: ${report.generatedFiles.join("、")}` : "",
+        report.reusedRootFiles?.length
+            ? `包根沿用: ${report.reusedRootFiles.join("、")}（这几枚取自包内，本次没按配置生成）`
+            : "",
         o.keepDirs.length || o.keepFiles.length
             ? `保留内容: ${[...o.keepDirs.map((d) => `${d}/`), ...o.keepFiles].join("、")}`
             : "",
@@ -495,7 +516,7 @@ function buildSteps(a: {
         t("report.upload-file", "将 {{file}} 上传到服务器，解压为独立目录后在其中启动", { file: fileName }),
     ];
 
-    if (!o.agreeEula) {
+    if (!o.agreeEula && !holdsRootFile(report.reusedRootFiles, ROOT_EULA)) {
         steps.push(
             t("report.before-starting", "启动前把包根 eula.txt 的 eula=false 改为 eula=true，否则服务端拒启")
         );

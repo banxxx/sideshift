@@ -93,6 +93,34 @@ export interface JavaInstall {
  */
 export const SERVER_PORT_RANGE = { min: 1, max: 65535 } as const;
 
+/**
+ * 会让 builder **让位**的两枚包根文件：文件名是 vanilla 写死的，用户在保留内容里勾了它就以包内那份为准，
+ * 界面上对应的设置项这次不进产物（让位规则单源在后端 `src-tauri/src/core/builder.rs` 的 `emit_root`）。
+ * 名字在这里单源：勾选弹窗、启动参数卡、服务端设置卡与报告都按它改口，否则界面在播报没进产物的配置。
+ * `start.bat` / `start.sh` / `user_jvm_args.txt` 后端同样让位，但那一档没有成组的界面字段要灰，暂不挂进来。
+ */
+export const ROOT_EULA = "eula.txt";
+export const ROOT_PROPERTIES = "server.properties";
+export const YIELDED_ROOT_NAMES = [ROOT_EULA, ROOT_PROPERTIES];
+
+/** 相对路径的落位名（最后一段）：勾选键恒小写，落位用的是条目自身名字，
+ *  所以「这条勾上去在产物里叫什么」只能问它自己（后端单源：`parser::base_name`） */
+export const baseName = (rel: string): string => rel.split("/").pop() ?? rel;
+
+/**
+ * 这枚包根文件在不在名单里（`keepFiles` / `reusedRootFiles` 都是包内相对路径）。
+ * 比的是**落位名**而不是整条勾选键：勾深层那档（`Config/eula.txt`）落出来也是包根这枚，
+ * 后端 `emit_root` 看的是磁盘上有没有它，前端要跟着同一件事改口才能对上
+ */
+export function holdsRootFile(names: string[] | undefined, name: string): boolean {
+    return (names ?? []).some((n) => baseName(n).toLowerCase() === name.toLowerCase());
+}
+
+/** 名单里命中的让位文件名（勾选弹窗底栏用：只报真勾了的那几枚，不整句念规则） */
+export function yieldedIn(names: string[]): string[] {
+    return YIELDED_ROOT_NAMES.filter((n) => holdsRootFile(names, n));
+}
+
 /** 数字落在闭区间内（含端点）。非整数/NaN 一律算不合法 */
 export const inRange = (v: number, r: { min: number; max: number }) =>
     Number.isFinite(v) && v >= r.min && v <= r.max;

@@ -36,6 +36,9 @@ export interface ConversionReport {
     fileCount: number;
     /** 本次实际写入包根的文件（start.bat / eula.txt / server.properties / …） */
     generatedFiles: string[];
+    /** 与上面互斥的另一半：保留内容里勾了同名包根文件 ⇒ builder 让位，这几项配置这次没进产物。
+     *  旧任务快照没有这一键 ⇒ undefined */
+    reusedRootFiles?: string[];
     /** 启动脚本指向的 jar 名：Fabric 为服务端 jar，未本机安装的 Forge/NeoForge 为 installer；
      *  已装好的新式布局为 undefined（起跳靠 libraries/ 下的参数文件，没有单一 jar 可指） */
     startJar?: string;

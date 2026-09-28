@@ -222,13 +222,14 @@ pub fn list_pack_dirs(state: S<'_>) -> PackDirTree {
     }
 
     let mut root = Node::default();
-    // mods 由「模组方案」卡管理；resourcepacks 是客户端资源，服务端不消费——都不进保留树
-    // （判据单源在 parser::KEEP_SKIP_TOP，取件与预估两条腿共用）；
+    // mods 由「模组方案」卡管理；resourcepacks 是客户端资源，服务端不消费——两族都不进保留树
+    // （判据单源在 parser::KEEP_SKIP_TOP，看的是路径任一段，取件与预估两条腿共用；
+    //  落位是「勾哪层剪哪层」，所以 `config/mods` 也必须拦，否则它落出来就是包根 mods/）；
     // overrides/ 壳前缀剥离后再入树（CF 格式内容映射到包根，与拷贝口径一致）
     let mut root_files: Vec<PackFileNode> = Vec::new();
     for f in &p.extra_files {
         let rel = f.path.replace('\\', "/");
-        let logical = parser::logical_rel(&rel);
+        let logical = p.logical_rel(&rel);
         let lower = logical.to_lowercase();
         let segs: Vec<&str> = lower.split('/').collect();
         if parser::keep_denied(&lower) {

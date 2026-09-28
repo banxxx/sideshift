@@ -1,7 +1,7 @@
 /** Convert 页的静态配置与纯函数：下拉选项、行落位节拍、目录树定位 */
 import { t } from "@/lib/i18n";
 import type { SelectOption } from "@/components/ui";
-import type { PackDirNode, VersionOption } from "@/lib/types";
+import type { PackDirNode, PackDirTree, PackFileNode, VersionOption } from "@/lib/types";
 
 /** VersionOption → 下拉项（group/recommended 透传，供分组与「推荐」标记） */
 export const toOption = (v: VersionOption): SelectOption => ({
@@ -17,6 +17,15 @@ export function findDirNode(nodes: PackDirNode[], path: string): PackDirNode | u
     const n = nodes.find((x) => x.name.toLowerCase() === head.toLowerCase());
     if (!n || rest.length === 0) return n;
     return n.children.length ? findDirNode(n.children, rest.join("/")) : undefined;
+}
+
+/** 按逻辑相对路径定位勾选中的文件：包根散文件在 `tree.files`，深层的挂在所在节点的 `files` 上。
+ *  卡片行内要拿它读大小，只查 `tree.files` 的老写法对深层那档一律读不到 */
+export function findFileNode(tree: PackDirTree, path: string): PackFileNode | undefined {
+    const i = path.lastIndexOf("/");
+    const want = (i < 0 ? path : path.slice(i + 1)).toLowerCase();
+    if (i < 0) return tree.files.find((f) => f.name.toLowerCase() === want);
+    return findDirNode(tree.dirs, path.slice(0, i))?.files.find((f) => f.name.toLowerCase() === want);
 }
 
 /** 卡片内直接展示的行数：卡高 280（内容 240 = p-5 后）− 头 36 − 距 14 = 190 给行区。

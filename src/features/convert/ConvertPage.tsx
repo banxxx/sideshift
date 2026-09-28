@@ -76,6 +76,10 @@ export function ConvertPage() {
     const [tab, setTab] = useState<ModDisposition>("remove");
     const [mcOptions, setMcOptions] = useState<SelectOption[]>([]);
     const [loaderOptions, setLoaderOptions] = useState<SelectOption[]>([]);
+    /** 已经为哪一档 MC 版本拉过加载器列表；与当前 `mcVersion` 不等 ⇒ 用户换过档，选中值要跟着重选 */
+    const loaderMcRef = useRef<string | null>(null);
+    /** 源包 `modrinth.index.json` 声明的加载器版本：换档后查不到可用列表时回归的默认选择 */
+    const declaredLoaderRef = useRef<string>("");
     // 处置清单弹窗：null=关；remove/keep 决定壳的视角（剔除/保留共用一壳）
     /** 「全部清单」弹窗：视角与开关分两个状态。
      *  关闭只翻 listOpen——视角一旦跟着清空，退场那 200ms（base-ui 在 data-[ending-style] 期间仍挂着
@@ -160,6 +164,10 @@ export function ConvertPage() {
                     ...o,
                     mcVersion: manifest.mcVersion,
                 });
+                // 记住「源包声明的那一档」与它属于哪个 MC 版本：下面加载器版本那条腿靠这两枚
+                // 区分「首次装载」与「用户换档」——首次那档是 `modrinth.index.json` 给的，不该被动。
+                declaredLoaderRef.current = o.loaderVersion;
+                loaderMcRef.current = manifest.mcVersion;
             }
         );
         if (!draft || draft.onlinePending) void runClassify(false);
@@ -252,11 +260,42 @@ export function ConvertPage() {
         };
     }, [packName]);
 
-    // MC 版本变更 → 重新拉取该版本可用的加载器版本
+    // MC 版本变更 → 重新拉取该版本可用的加载器版本，并让**选中值**跟着这一档走。
+    // 2026-09-28 实测两件事：Fabric 的 `versions/loader/{mc}` 对 1.13 以上各档给的是同一份全量表
+    // （所以这一档的"变化"来自候选列表整份，而不是选中值自己挪位）；Forge/NeoForge 才是按 MC 分代
+    // （1.20.1 是 47.x、1.21 是 2.x），旧号在新档里不存在 ⇒ 必须重选，否则会留在一个跑不通的号上，
+    // 而 SearchSelect 找不到匹配项时是原样把字符串显示出来的，看上去就是"切了版本没反应"。
     const mcVersion = options?.mcVersion;
     useEffect(() => {
         if (!mcVersion) return;
-        void api.listLoaderVersions(mcVersion).then((l) => setLoaderOptions(l.map(toOption)));
+        // 换档时上一轮的迟到回包不能盖成新档的列表（与 Java 探测那条腿同一个 alive 口径）
+        let alive = true;
+        // 首次装载那一档的版本号来自源包声明（`modrinth.index.json` 的 dependencies），属于「包里写的」
+        // 而不是「我们选的」，不能在这里改写；只有用户换过 MC 版本才重选。
+        const switched = loaderMcRef.current !== mcVersion;
+        loaderMcRef.current = mcVersion;
+        /** 选中值落到新档：用户的挑选在新档依然成立就不动，否则取推荐项（无推荐取首项）；
+         *  列表空（那档查无可用版本，或请求失败）时回归源包声明那一档——他定的口径：拉不到数据就用默认。 */
+        const settle = (opts: SelectOption[]) => {
+            setLoaderOptions(opts);
+            if (!switched) return;
+            const rec = opts.find((o) => o.recommended) ?? opts[0];
+            setOptions((o) => {
+                if (!o || opts.some((x) => x.value === o.loaderVersion)) return o;
+                return { ...o, loaderVersion: rec?.value ?? declaredLoaderRef.current };
+            });
+        };
+        void api
+            .listLoaderVersions(mcVersion)
+            .then((l) => {
+                if (alive) settle(l.map(toOption));
+            })
+            .catch(() => {
+                if (alive) settle([]);
+            });
+        return () => {
+            alive = false;
+        };
     }, [mcVersion]);
 
     // 需求线也跟着 MC 版本走：不重取的话，提示里那句「本次需要 Java N 及以上」、「自动选择」挑哪一枚、

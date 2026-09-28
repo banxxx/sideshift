@@ -437,6 +437,7 @@ export function TaskDetailPage() {
                                             <Bar
                                                 percent={task.progress}
                                                 fillClass={BAR_COLOR[task.status]}
+                                                flow={task.status === "running"}
                                             />
                                             <ActivitySubBar activity={act} />
                                         </div>

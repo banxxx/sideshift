@@ -293,14 +293,18 @@ pub struct ConversionOptions {
     /* ---- 单包输出覆写 ---- */
     /// 本次转换输出目录；空 = 用全局设置
     pub output_override: String,
-    /* ---- 客户端保留目录 ---- */
-    /// 需要原样带入服务端的包内目录：相对路径（任意层级，如 kubejs/client_scripts），按前缀匹配
+    /* ---- 客户端保留内容 ---- */
+    /// 要带入服务端的包内目录：相对路径（任意层级，如 kubejs/client_scripts），按 `{path}/` 前缀匹配。
+    ///
+    /// 落位是「勾哪一层就剪掉上层」：`kubejs/client_scripts` 落在产物根 `client_scripts/`，
+    /// 它内部的层级原样保留（见 `parser::kept_rel`）
     pub keep_dirs: Vec<String>,
-    /// 需要原样带入服务端的包内**根级散文件**（如 `options.txt`）：按逻辑相对路径**精确全等**匹配。
+    /// 要带入服务端的包内**文件**（任意层级，如 `options.txt`、`kubejs/startup.js`）：
+    /// 按逻辑相对路径**精确全等**匹配，落位同样剪到产物根（`startup.js`）。
     ///
     /// 与 `keep_dirs` 分成两个字段而不是混进一个字符串数组：拷贝/预估那两处要按条目形状分叉
     /// （目录走 `{path}/` 前缀、文件走全等），混在一起前端就得猜"这条到底是不是文件"。
-    /// 根级文件天然没有父目录，所以这一档不会触发「勾子项要不要收掉父级」那条冲突。
+    /// 落位名（最后一段）在两档之间唯一，由勾选弹窗当场保证——同名会撞到同一个包根位置。
     pub keep_files: Vec<String>,
     /* ---- 本机安装 Loader ---- */
     /// 本次转换是否在本机跑 loader installer（Forge / NeoForge 产物「上传即跑」的前提）。
@@ -351,18 +355,19 @@ pub struct PackFileNode {
     pub path: String,
 }
 
-/// 包内可保留内容的整棵树（客户端保留目录弹窗数据源）
+/// 包内可保留内容的整棵树（客户端保留内容弹窗数据源）
 #[derive(Serialize, Deserialize, Clone, Debug, Default)]
 #[serde(rename_all = "camelCase", default)]
 pub struct PackDirTree {
-    /// 目录树（mods 与 resourcepacks 已在建树时跳过）
+    /// 目录树（路径里出现 mods 与 resourcepacks 的子树已在建树时跳过）
     pub dirs: Vec<PackDirNode>,
-    /// 根级散文件（`options.txt`、`servers.dat` 这类）：不带目录段，过去连展示位都没有
+    /// 包根散文件（`options.txt`、`servers.dat` 这类）；目录里的直属文件挂在各节点 `files` 上，
+    /// 两档在弹窗里都可勾，勾选值都是完整逻辑路径
     pub files: Vec<PackFileNode>,
 }
 
-/// 包内可保留目录树节点（客户端保留目录弹窗数据源）；
-/// keep_dirs 条目 = 从包根起算的相对路径（如 kubejs/client_scripts），按前缀匹配拷贝
+/// 包内可保留目录树节点（客户端保留内容弹窗数据源）；
+/// keep_dirs 条目 = 从包根起算的相对路径（如 kubejs/client_scripts），前缀匹配拷贝、剪层落位
 #[derive(Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct PackDirNode {
@@ -509,6 +514,10 @@ pub struct ConversionReport {
     /// 本次实际写入包根的文件（start.bat / eula.txt / server.properties / …）
     #[serde(default)]
     pub generated_files: Vec<String>,
+    /// 与上面互斥的另一半：包内自带同名文件（保留内容里勾了它），本次**没有**按配置生成，
+    /// 配置卡里对应的值没进产物。报告与「服务端设置」那几项要按它改口，否则是在播报没生效的数
+    #[serde(default)]
+    pub reused_root_files: Vec<String>,
     /// 启动脚本指向的 jar 名：Fabric 是官方服务端 jar（首启自装），未本机安装的 Forge/NeoForge 是 installer。
     /// 已装好的新式布局为 None —— 它靠 `libraries/` 下的参数文件启动，没有单一 jar 可指
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1174,6 +1183,7 @@ mod tests {
             options: ConversionOptions::default(),
             file_count: 42,
             generated_files: vec!["start.bat".into()],
+            reused_root_files: vec!["eula.txt".into()],
             start_jar: Some("fabric-server-launch.jar".into()),
             installed: true,
             checks: Vec::new(),
@@ -1182,12 +1192,15 @@ mod tests {
         let obj = v.as_object_mut().unwrap();
         obj.remove("fileCount");
         obj.remove("generatedFiles");
+        obj.remove("reusedRootFiles");
         obj.remove("startJar");
         obj.remove("installed");
         obj.remove("checks");
         let old: ConversionReport = serde_json::from_value(v).unwrap();
         assert_eq!((old.file_count, old.start_jar), (0, None));
         assert!(old.generated_files.is_empty());
+        // 老存档没有撞车这一说：那半天还没写出来过
+        assert!(old.reused_root_files.is_empty());
         // 旧存档没这一键 ⇒ 没本机装过（那条链路当时还不存在）
         assert!(!old.installed);
         assert!(old.checks.is_empty());

@@ -44,6 +44,32 @@ pub struct ParsedPack {
     pub extra_files: Vec<PackFile>,
     /// mrpack 的 dependencies 段（minecraft/fabric-loader 版本）
     pub loader_version: Option<String>,
+    /// 裸 zip 的「包根外层文件夹」（从 `MyPack/mods/` 那枚 jar 探出来的 `MyPack/`）；mrpack 与 CF 恒空。
+    /// 逻辑路径换算要先剥它——不然勾选值、保留树、落位、预估全都会多出这一层，
+    /// 而服务端按实例根读 `config/`，带着一层自定义目录的产物根本读不到
+    pub root_prefix: String,
+}
+
+impl ParsedPack {
+    /// 条目物理路径 → 交付包逻辑路径：先剥包根外层文件夹，再剥 `overrides/` 壳。
+    /// 保留树 / 勾选键 / 落位 / 预估四条腿都走这一个入口，判据不会漂
+    /// （`overrides/` 是格式壳、`root_prefix` 是打包习惯，两件事各剥一次，顺序固定）
+    pub fn logical_rel<'a>(&self, rel: &'a str) -> &'a str {
+        logical_rel(strip_root_prefix(&self.root_prefix, rel))
+    }
+}
+
+/// 大小写不敏感地剥掉外层文件夹前缀（前缀与条目路径来自同一个 zip，正常同 case；混合大小的包靠这条兜住）。
+/// 边界安全：前缀恒以 `/` 结尾，切点是 ASCII 字节
+fn strip_root_prefix<'a>(prefix: &str, rel: &'a str) -> &'a str {
+    if prefix.is_empty() {
+        return rel;
+    }
+    let p = prefix.as_bytes();
+    if rel.len() >= p.len() && rel.as_bytes()[..p.len()].eq_ignore_ascii_case(p) {
+        return &rel[p.len()..];
+    }
+    rel
 }
 
 pub const MRPACK_ENTRY: &str = "modrinth.index.json";
@@ -60,15 +86,42 @@ pub fn logical_rel(rel: &str) -> &str {
     rel
 }
 
-/// 保留范围之外的顶层目录：`mods` 由「模组方案」卡逐条决策，`resourcepacks` 是客户端资源、
+/// 保留范围之外的目录名：`mods` 由「模组方案」卡逐条决策，`resourcepacks` 是客户端资源、
 /// 服务端不消费。**显示层（保留树）与取件层（构建 3.2 / 预估 3.2）共用这一条判据**——
 /// 只在显示层挡等于给数据层留后门：旧草稿或手改存档里的一条 `mods` 就能把模组整棵复制进服务端。
 pub const KEEP_SKIP_TOP: &[&str] = &["mods", "resourcepacks"];
 
-/// 逻辑相对路径的首段是否落在保留范围外。勾选键与包内条目路径都走它，两侧口径不会漂。
-pub fn keep_denied(logical_rel: &str) -> bool {
-    let lower = logical_rel.to_lowercase();
-    KEEP_SKIP_TOP.contains(&lower.split('/').next().unwrap_or(""))
+/// 路径里**任一段**叫这两个名字 ⇒ 不在保留范围内（目录档与文件档同一判据）。
+///
+/// 为什么不只看首段：落位规则是「勾哪一层就把那一层剪到包根」（见 `kept_rel`），
+/// 于是 `config/mods` 勾上之后落位就是包根 `mods/`，和直接勾 `mods` 是同一件事。
+/// 外层壳的名字还不固定（`MyPack/mods` 这类压根不在首段上），按首段拦等于没拦。
+/// 段与段全等，所以 `mods_backup` 不算 `mods`。
+pub fn keep_denied(path: &str) -> bool {
+    path.to_lowercase()
+        .split('/')
+        .any(|seg| KEEP_SKIP_TOP.contains(&seg))
+}
+
+/// 相对路径的落位名（最后一段）：勾选键是小写逻辑路径，而落位用的是条目自身的名字，
+/// 所以「这条勾上去会叫什么」在两测都只能问这枚函数
+pub fn base_name(path: &str) -> &str {
+    path.rsplit('/').next().unwrap_or(path)
+}
+
+/// 剪层落位：勾选键有 k 段 ⇒ 交付路径从原始逻辑路径的第 k 段（1 基）起算，
+/// 也就是「勾的那一层挂到包根，它自己的内部层级原样保留」。大小写跟着条目原样走，不跟勾选键。
+///
+/// `config/mods` + `config/mods/fabric/a.jar` → `mods/fabric/a.jar`；
+/// `kubejs/startup.js` → `startup.js`；顶层勾选（k=1）恒等，旧勾选值的行为不变。
+/// 返回空串表示勾选键与条目路径段数不匹配（匹配逻辑出错），调用方必须跳过这条而不是落到包根。
+pub fn kept_rel(pick: &str, logical: &str) -> String {
+    let k = pick.split('/').count();
+    let segs: Vec<&str> = logical.split('/').collect();
+    if k == 0 || k > segs.len() {
+        return String::new();
+    }
+    segs[k - 1..].join("/")
 }
 
 /// 解析入口：按扩展名分派；任何失败都返回 parsed:false 的 manifest（不 panic）
@@ -115,6 +168,7 @@ pub fn parse(path: &Path) -> ParsedPack {
             mod_files: Vec::new(),
             extra_files: Vec::new(),
             loader_version: None,
+            root_prefix: String::new(),
         },
     }
 }
@@ -338,6 +392,8 @@ fn parse_mrpack(path: &Path) -> Result<ParsedPack, String> {
         mod_files,
         extra_files,
         loader_version,
+        // mrpack 的路径本身就相对实例根，没有外层文件夹可剥（CF 那层是 overrides/，由 logical_rel 剥）
+        root_prefix: String::new(),
     })
 }
 
@@ -379,6 +435,13 @@ fn parse_plain_zip(path: &Path) -> Result<ParsedPack, String> {
     let in_mods = |name: &str| match &mods_prefix {
         ModsLayout::Prefix(p) => name.starts_with(p.as_str()),
         ModsLayout::Root => !name.contains('/') && !name.contains('\\'),
+    };
+
+    // 包根外层文件夹 = `mods/` 前缀里 `mods/` 之前那一段（`MyPack/mods/` → `MyPack/`；`mods/` → 空）。
+    // 只探一次，只用于换算逻辑路径：条目物理路径原样留着，取件仍按它从 zip 里抽字节
+    let root_prefix = match &mods_prefix {
+        ModsLayout::Prefix(p) => p[..p.len() - "mods/".len()].to_string(),
+        ModsLayout::Root => String::new(),
     };
 
     let mut mod_files = Vec::new();
@@ -447,6 +510,7 @@ fn parse_plain_zip(path: &Path) -> Result<ParsedPack, String> {
         mod_files,
         extra_files,
         loader_version: None,
+        root_prefix,
     })
 }
 
@@ -640,7 +704,8 @@ mod tests {
         assert!(undeclared.url.is_empty()); // 构建时走 ZipEntry 直接从源包抽取
     }
 
-    /// 保留范围硬闸：勾选键与条目路径同一条判据，大小写与 overrides 壳都不能放过
+    /// 保留范围硬闸：判据是「路径里任一段」，所以 `config/mods` 也拦——剪层落位之后它就是包根 `mods/`。
+    /// 段全等，`mods_x` 不是 mods（裸 zip 收录侧的 `starts_with("mods")` 是同族问题，未收进这里）
     #[test]
     fn keep_gate_covers_top_dirs_on_both_sides() {
         assert!(keep_denied("mods"));
@@ -649,7 +714,69 @@ mod tests {
         assert!(keep_denied(logical_rel("overrides/ResourcePacks/x.zip")));
         assert!(!keep_denied("config"));
         assert!(!keep_denied("config/jei/jei.ini"));
-        // 首段判据：`mods_x` 不是 mods（裸 zip 收录侧的 `starts_with("mods")` 是同族问题，未收进这里）
+        assert!(keep_denied("config/mods"));
+        assert!(keep_denied("MyPack/mods/fabric/a.jar"));
         assert!(!keep_denied("mods_backup/a.cfg"));
+        assert_eq!(base_name("kubejs/client_scripts"), "client_scripts");
+        assert_eq!(base_name("options.txt"), "options.txt");
+    }
+
+    /// 勾哪一层就落哪一层：内部层级保留，祖先剪掉；顶层勾选恒等（旧勾选值不受影响）
+    #[test]
+    fn kept_rel_lands_the_picked_level_at_root() {
+        assert_eq!(kept_rel("config", "config/jei/jei.ini"), "config/jei/jei.ini");
+        assert_eq!(kept_rel("config/jei", "config/jei/jei.ini"), "jei/jei.ini");
+        assert_eq!(
+            kept_rel("kubejs/client_scripts", "kubejs/client_scripts/demo.js"),
+            "client_scripts/demo.js"
+        );
+        assert_eq!(kept_rel("kubejs/startup.js", "kubejs/startup.js"), "startup.js");
+        // 落位名跟条目自己的大小写，不跟小写勾选键
+        assert_eq!(kept_rel("config/jei", "Config/JEI/jei.ini"), "JEI/jei.ini");
+        // 勾选键比条目还深（匹配逻辑出错才会出现）⇒ 无从落位，返回空串让调用方跳过，不能落到包根
+        assert_eq!(kept_rel("config/jei/jei.ini/deep", "config/jei/jei.ini"), "");
+    }
+
+    /// 裸 zip 外面套一层自定义文件夹：mods 那条腿早就按 `MyPack/mods/` 探测了，保留内容这条腿
+    /// 必须剥同一层——否则勾选值与落位都带着 `MyPack/`，而服务端按实例根读 `config/`
+    #[test]
+    fn bare_zip_wrapper_folder_leaves_logical_paths() {
+        let path = std::env::temp_dir().join(format!(
+            "sideshift-parser-{}.zip",
+            uuid::Uuid::new_v4()
+        ));
+        let mut w = zip::ZipWriter::new(File::create(&path).unwrap());
+        let opts = zip::write::SimpleFileOptions::default();
+        w.start_file("MyPack/mods/a.jar", opts).unwrap();
+        w.write_all(b"PK\x03\x04").unwrap();
+        // mods 下的非 jar 会落进 extra_files（mods 判据只看 jar），靠段名闸拦住
+        w.start_file("MyPack/mods/README.md", opts).unwrap();
+        w.write_all(b"r").unwrap();
+        w.start_file("MyPack/config/jei/jei.ini", opts).unwrap();
+        w.write_all(b"x").unwrap();
+        w.start_file("MyPack/options.txt", opts).unwrap();
+        w.write_all(b"y").unwrap();
+        w.finish().unwrap();
+
+        let parsed = parse(&path);
+        assert_eq!(parsed.root_prefix, "MyPack/");
+        assert_eq!(parsed.extra_files.len(), 3);
+        // 物理路径留着（取件按它从 zip 里抽字节），逻辑路径才是交付包里的位置
+        assert_eq!(parsed.extra_files[0].path, "MyPack/config/jei/jei.ini");
+        assert_eq!(parsed.logical_rel("MyPack/config/jei/jei.ini"), "config/jei/jei.ini");
+        assert_eq!(parsed.logical_rel("MyPack/options.txt"), "options.txt");
+        // 前缀是从某一条 jar 探出来的，别的条目大小写不同也要剥
+        assert_eq!(parsed.logical_rel("mypack/Config/a.toml"), "Config/a.toml");
+        // 不在这层文件夹下的路径不动它
+        assert_eq!(parsed.logical_rel("other/x.cfg"), "other/x.cfg");
+        // mods 下的非 jar 会落进 extra_files（jar 才归模组那条腿）：剥完前缀正好撞上段名闸，
+        // 不剥的话它叫 `mypack/mods/…`——段名闸照样拦得住，两道保险叠着，落位剪层也不给后门
+        let mut denied: Vec<String> = Vec::new();
+        for f in &parsed.extra_files {
+            if keep_denied(parsed.logical_rel(&f.path)) {
+                denied.push(f.path.clone());
+            }
+        }
+        assert_eq!(denied, vec!["MyPack/mods/README.md".to_string()]);
     }
 }

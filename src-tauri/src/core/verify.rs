@@ -359,18 +359,18 @@ fn keep_check(input: &Input) -> CheckResult {
         let Some(expect) = input.expected_kept.get(dir) else { continue };
         kept_dirs += 1;
         total += expect;
-        let have = files_under(&input.staging.join(dir)).len();
+        let have = files_under(&landed_root(&input.staging, dir)).len();
         if have < *expect {
             // 同 deps 那条：条目是「目录名 + 中文账目」，界面按原文显示
             short.push(format!("{dir}（应 {expect} · 实 {have}）"));
         }
     }
-    // 根级散文件：一条就对应一个落位文件。`staging.join(path)` 指向的是文件，
+    // 文件档：一条就对应一个落位文件。`landed_root` 指向的是文件，
     // 走 `files_under` 会数出 0（它只列目录里的条目），所以这里单独判存在性
     for file in &input.options.keep_files {
         let Some(expect) = input.expected_kept.get(file) else { continue };
         total += expect;
-        let have = usize::from(input.staging.join(file).is_file());
+        let have = usize::from(landed_root(&input.staging, file).is_file());
         if have < *expect {
             short.push(format!("{file}（应 {expect} · 实 {have}）"));
         }
@@ -394,6 +394,22 @@ fn ext_of(p: &Path) -> String {
 
 fn nonempty(p: &Path) -> bool {
     fs::metadata(p).is_ok_and(|m| m.is_file() && m.len() > 0)
+}
+
+/// 勾选键在 staging 里的落位根：剪层落位（`parser::kept_rel`）之后它就是包根下的那**一段**，
+/// 上层不存在。勾选键恒小写而落位名跟条目自身的大小写，所以只能在 staging 里按名字
+/// 不区分大小写地找那一层——直接 `staging.join(小写键)` 在大小写敏感的平台上指到不存在的目录，
+/// 会把「已经带入」误报成缺口
+fn landed_root(staging: &Path, pick: &str) -> PathBuf {
+    let want = crate::core::parser::base_name(pick).to_lowercase();
+    fs::read_dir(staging)
+        .ok()
+        .into_iter()
+        .flatten()
+        .flatten()
+        .find(|e| e.file_name().to_string_lossy().to_lowercase() == want)
+        .map(|e| e.path())
+        .unwrap_or_else(|| staging.join(want))
 }
 
 /// 目录内文件递归清单；目录不存在返回空（缺目录由调用方定级，不在这里炸）
@@ -587,6 +603,43 @@ mod tests {
         assert_eq!(keep.items.len(), 1, "{:?}", keep.items);
         assert!(keep.items[0].starts_with("config"), "{}", keep.items[0]);
         assert_eq!(status_of(&checks, "files"), CheckStatus::Pass);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// 勾深层那一档 ⇒ staging 里没有上层（`kubejs/`），只有落位名那一段。
+    /// 自检必须按落位名数，而且要认条目自身的大小写——直接 join 小写勾选键在大小写敏感的
+    /// 平台上指到不存在的目录，会把「已带入」误报成缺口
+    #[test]
+    fn deep_pick_is_checked_at_its_landed_root() {
+        let dir = temp_staging(
+            &[("client_scripts/a.js", b"x".as_slice())],
+            &[
+                ("fabric-server.jar", b"PK\x03\x04".as_slice()),
+                // 包内那枚叫 `Startup.js`，勾选键是小写逻辑路径 `kubejs/startup.js`
+                ("Startup.js", b"y".as_slice()),
+            ],
+        );
+        let mut expected = HashMap::new();
+        expected.insert("kubejs/client_scripts".to_string(), 1usize);
+        expected.insert("kubejs/startup.js".to_string(), 1usize);
+        let opts = ConversionOptions {
+            keep_dirs: vec!["kubejs/client_scripts".into()],
+            keep_files: vec!["kubejs/startup.js".into()],
+            ..Default::default()
+        };
+        let checks = run(&Input {
+            staging: &dir,
+            options: &opts,
+            loader: LoaderKind::Fabric,
+            plan: &[],
+            start_jar: Some("fabric-server.jar"),
+            args_files: &[],
+            installed: false,
+            generated: &[],
+            expected_mod_files: &[],
+            expected_kept: &expected,
+        });
+        assert_eq!(status_of(&checks, "keep"), CheckStatus::Pass);
         let _ = fs::remove_dir_all(&dir);
     }
 

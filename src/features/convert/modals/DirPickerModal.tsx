@@ -2,20 +2,35 @@
 import { ChevronRight, FileText, Folder, MinusSquare, SquareCheck } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { PackDirNode, PackDirTree, PackFileNode } from "@/lib/types";
+import { baseName, yieldedIn } from "@/lib/types";
 import { formatSize } from "@/lib/format";
 import { Btn, CheckBox, ListRow, ModalShell, SearchBox, HOVER_FILL } from "@/components/ui";
 import { useT } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
 
-/** 树内目录节点总数（标题「共 N 个目录」口径） */
+/** 树内目录节点总数（标题口径） */
 function countDirNodes(nodes: PackDirNode[]): number {
     return nodes.reduce((s, n) => s + 1 + countDirNodes(n.children), 0);
 }
 
-/** 父子去重：祖先已勾选的目录是冗余项（整个父目录都会保留） */
+/** 全树可勾的文件数（每个节点的直属文件都可勾，深层的要钻进去才看得见） */
+function countFileNodes(nodes: PackDirNode[]): number {
+    return nodes.reduce((s, n) => s + n.files.length + countFileNodes(n.children), 0);
+}
+
+/** 父子去重：父目录落位时子目录已经在它内部一起进包了，另勾子级等于同一份内容落两处 */
 function pruneRedundant(paths: string[]): string[] {
     const sorted = [...paths].sort();
     return sorted.filter((p) => !sorted.some((q) => q !== p && p.startsWith(`${q}/`)));
+}
+
+/** 两条勾选键落位后是否撞在产物里的同一个位置：落位名（最后一段）相同就是撞 */
+const sameLanding = (a: string, b: string) =>
+    a !== b && baseName(a).toLowerCase() === baseName(b).toLowerCase();
+
+/** 去掉与本次勾选落位同名的其它条目（目录档与文件档一起查）；新点的那条说了算 */
+function dropLandingClash(paths: string[], key: string): string[] {
+    return paths.filter((p) => !sameLanding(p, key));
 }
 
 /** 两条路径是否互为父子/祖孙（`kubejs` 与 `kubejs/client_scripts`）；树上名字已按后端口径小写 */
@@ -48,9 +63,10 @@ const canEnter = (n: PackDirNode) => n.children.length > 0 || n.files.length > 0
  * 头部返回键 + 面包屑回退层级。父子互斥在勾选当场解决（见 `withPrecedence`），
  * 「应用」再兜一次遗留的父子对（见 `pruneRedundant`）后整体回写。
  *
- * 文件按所在层级分两档：**根级散文件**（`options.txt` 这类）没有父目录，勾与不勾就是它自己的事，
- * 所以可勾；**目录里的文件**只是展示（让你判断该勾哪个目录），勾选仍然只有「勾整个目录」这一条路——
- * 否则清单里会同时出现父目录和它的某个文件，前后端都得为「谁说了算」再加一套规则。
+ * 目录与文件在**任意层级**都可勾，落位规则是「勾哪一层就剪掉上层」（后端单源 `parser::kept_rel`）：
+ * 勾 `config/mods` ⇒ 产物根 `mods/`，勾 `kubejs/startup.js` ⇒ 产物根 `startup.js`，
+ * 勾 `config` ⇒ 产物根 `config/` 且内部层级原样保留。于是两条勾选键只要落位名相同就撞到同一个位置
+ * ——新点的那条说了算（`dropLandingClash`，目录档与文件档之间同样查）。
  */
 export function DirPickerModal({
     open,
@@ -100,20 +116,28 @@ export function DirPickerModal({
         return { dirs, files };
     }, [tree, path]);
 
-    const atRoot = path.length === 0;
     const match = (name: string) => !query || name.toLowerCase().includes(query.toLowerCase());
     const filtered = level.dirs.filter((n) => match(n.name));
     const filteredFiles = level.files.filter((f) => match(f.name));
 
-    /** 行/勾选的唯一键 = 包根起算的相对路径 */
+    /** 行/勾选的唯一键 = 包根起算的相对路径；落位时剪掉它前面的所有层 */
     const keyOf = (n: PackDirNode) => [...path, n.name].join("/");
 
-    const toggle = (key: string) =>
+    /** 目录档：勾上时收掉父子对（`withPrecedence`）与落位同名的文件条目 */
+    const toggle = (key: string) => {
         setDraft((v) => (v.includes(key) ? v.filter((x) => x !== key) : withPrecedence(v, key)));
+        // 判据只读最新草稿，不读渲染期的 `draft`：单击是 240ms 后才落地的，那时闭包里的草稿可能已经旧了一轮
+        setDraftFiles((v) => (v.some((x) => sameLanding(x, key)) ? dropLandingClash(v, key) : v));
+    };
 
-    /** 根级文件没有父子关系，勾与不勾就是数组加减 */
-    const toggleFile = (key: string) =>
-        setDraftFiles((v) => (v.includes(key) ? v.filter((x) => x !== key) : [...v, key]));
+    /** 文件档：同样查落位名——`x/eula.txt` 与包根 `eula.txt` 是同一个位置，勾后者要把前者收掉。
+     *  `dropLandingClash` 只会减不会加，所以添加那一条必须先 `[...v, key]` 再拿去撞名过滤 */
+    const toggleFile = (key: string) => {
+        setDraftFiles((v) =>
+            v.includes(key) ? v.filter((x) => x !== key) : dropLandingClash([...v, key], key)
+        );
+        setDraft((v) => (v.some((x) => sameLanding(x, key)) ? dropLandingClash(v, key) : v));
+    };
 
     const clearTimer = () => {
         if (clickTimer.current !== null) {
@@ -144,10 +168,9 @@ export function DirPickerModal({
         if (canEnter(n)) setPath((p) => [...p, n.name]);
     };
 
-    // 全选/全取消（切换式）作用于当前层「可见」（含搜索过滤）的条目；
-    // 只有根层把散文件算进来——深层的文件是只读展示，勾了也不会进清单
+    // 全选/全取消（切换式）作用于当前层「可见」（含搜索过滤）的条目，目录与文件两档都算
     const levelDirKeys = filtered.map(keyOf);
-    const levelFileKeys = atRoot ? filteredFiles.map((f) => f.path) : [];
+    const levelFileKeys = filteredFiles.map((f) => f.path);
     const levelKeys = [...levelDirKeys, ...levelFileKeys];
     const allOn =
         levelKeys.length > 0 &&
@@ -158,13 +181,17 @@ export function DirPickerModal({
             setDraftFiles((v) => v.filter((k) => !levelKeys.includes(k)));
             return;
         }
-        // 两条腿各归各的草稿：文件路径混进 keepDirs 会被当成目录前缀匹配，整个包都留下来了
-        setDraft((v) => levelDirKeys.reduce(withPrecedence, v));
-        setDraftFiles((v) => [...new Set([...v, ...levelFileKeys])]);
+        // 两条腿各归各的草稿：文件路径混进 keepDirs 会被当成目录前缀匹配，整个包都留下来了。
+        // 每加一条都顺带查落位同名（`x/jei` 与刚勾的 `jei` 在产物里是同一个位置）
+        setDraft((v) => levelDirKeys.reduce((acc, k) => dropLandingClash(withPrecedence(acc, k), k), v));
+        setDraftFiles((v) => levelFileKeys.reduce((acc, k) => dropLandingClash([...new Set([...acc, k])], k), v));
     };
 
-    const totalCount = countDirNodes(tree.dirs) + tree.files.length;
+    const totalCount = countDirNodes(tree.dirs) + countFileNodes(tree.dirs) + tree.files.length;
     const checkedCount = draft.length + draftFiles.length;
+    /** 勾中的「让位」包根文件（eula.txt / server.properties）：文件名是 vanilla 写死的，勾了就以包内那份为准，
+     *  标题下那一行因此改口——不然用户带着勾回到页面，看到的还是照常可编辑的服务端设置 */
+    const yieldedChecked = yieldedIn(draftFiles);
 
     return (
         <ModalShell
@@ -176,9 +203,16 @@ export function DirPickerModal({
             height={440}
             title={t("convert-modals.choose-folders", "选择保留内容 · {{count}} 个目录", { count: countDirNodes(tree.dirs) })}
             sub={
-                atRoot
-                    ? t("convert-modals.double-click-opens", "双击进入子目录 · 单击勾选 · 根级散文件可单独保留")
-                    : t("convert-modals.nested-files-readonly", "目录内的文件仅作展示 · 勾选目录即整体保留（含子目录）")
+                yieldedChecked.length > 0
+                    ? t(
+                          "convert-modals.yielded-root",
+                          "已勾的 {{names}} 以包内那份为准 · 转换配置里对应的设置项这次不会写进包",
+                          { names: yieldedChecked.join("、") }
+                      )
+                    : t(
+                          "convert-modals.double-click-opens",
+                          "双击进入子目录 · 单击勾选 · 勾哪一层就按自己的名字落在产物根目录"
+                      )
             }
             footerNote={t("convert-modals.count-folder", "已勾 {{dirs}} 个目录 · {{files}} 个文件，将随包保留", {
                 dirs: draft.length,
@@ -307,19 +341,15 @@ export function DirPickerModal({
                         </ListRow>
                     );
                 })}
-                {/* 文件排在同层目录之后；根级可勾，深层只读（灰化 + 禁光标，见 `READONLY_MARK` 同口径） */}
-                {filteredFiles.map((f) =>
-                    atRoot ? (
-                        <FileRow
-                            key={f.path}
-                            file={f}
-                            checked={draftFiles.includes(f.path)}
-                            onToggle={() => toggleFile(f.path)}
-                        />
-                    ) : (
-                        <FileRow key={f.path} file={f} readOnly />
-                    )
-                )}
+                {/* 文件排在同层目录之后；与目录档一样任意层级可勾，勾上就按自己的名字落产物根 */}
+                {filteredFiles.map((f) => (
+                    <FileRow
+                        key={f.path}
+                        file={f}
+                        checked={draftFiles.includes(f.path)}
+                        onToggle={() => toggleFile(f.path)}
+                    />
+                ))}
                 {filtered.length === 0 && filteredFiles.length === 0 && (
                     <span className="py-8 text-center text-[11px] leading-[16px] text-text-3">
                         {tree.dirs.length === 0 && tree.files.length === 0
@@ -332,58 +362,37 @@ export function DirPickerModal({
     );
 }
 
-/**
- * 文件行：与目录行同一条版（勾选壳 + 图标 + 名 + 右侧读数），差的只是「能不能点」。
- * `readOnly` 那档整行不挂 hover 底色、光标禁掉，勾选框用 `CheckBox` 的只读态。
- */
+/** 文件行：与目录行同一条版（勾选壳 + 图标 + 名 + 右侧大小），只少了「能不能钻进去」 */
 function FileRow({
     file,
     checked,
-    readOnly,
     onToggle,
 }: {
     file: PackFileNode;
-    checked?: boolean;
-    readOnly?: boolean;
-    onToggle?: () => void;
+    checked: boolean;
+    onToggle: () => void;
 }) {
     const t = useT();
-    const on = !!checked;
+    const on = checked;
     return (
-        <ListRow
-            className={cn(readOnly ? "cursor-not-allowed" : "cursor-pointer hover:bg-surface-2")}
-            onClick={readOnly ? undefined : onToggle}
-        >
+        <ListRow className="cursor-pointer hover:bg-surface-2" onClick={onToggle}>
             <span onClick={(e) => e.stopPropagation()}>
-                <CheckBox checked={on} readOnly={readOnly} onChange={() => onToggle?.()} />
+                <CheckBox checked={on} onChange={onToggle} />
             </span>
-            <FileText
-                className={cn(
-                    "size-4 shrink-0",
-                    readOnly ? "text-text-3 opacity-70" : on ? "text-accent" : "text-text-3"
-                )}
-            />
-            <span
-                className={cn(
-                    "min-w-0 flex-1 truncate font-mono text-[12px] leading-[18px] font-medium",
-                    readOnly ? "text-text-2" : "text-text-1"
-                )}
-            >
+            <FileText className={cn("size-4 shrink-0", on ? "text-accent" : "text-text-3")} />
+            <span className="min-w-0 flex-1 truncate font-mono text-[12px] leading-[18px] font-medium text-text-1">
                 {file.name}
             </span>
             <span
                 className={cn(
                     "shrink-0 font-mono text-[11px] leading-[16px] tabular-nums",
-                    readOnly ? "text-text-3 opacity-70" : on ? "text-emerald" : "text-text-3"
+                    on ? "text-emerald" : "text-text-3"
                 )}
             >
-                {/* 0 = 后端没测到大小（index 与 zip 条目都缺 fileSize）；只读那档不显示数字，
-                    免得把「这条不能勾」误读成「这条是空的」 */}
-                {readOnly
-                    ? t("convert-modals.file-view-only", "仅展示")
-                    : file.sizeBytes
-                      ? formatSize(file.sizeBytes)
-                      : t("convert.size-unknown", "大小未知")}
+                {/* 0 = 后端没测到大小（index 与 zip 条目都缺 fileSize）；宁缺勿假，别写成 0 B */}
+                {file.sizeBytes
+                    ? formatSize(file.sizeBytes)
+                    : t("convert.size-unknown", "大小未知")}
             </span>
         </ListRow>
     );

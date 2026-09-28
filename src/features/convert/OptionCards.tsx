@@ -13,7 +13,14 @@ import type {
     PackDirTree,
     PackManifest,
 } from "@/lib/types";
-import { SERVER_PORT_RANGE, inRange } from "@/lib/types";
+import {
+    baseName,
+    holdsRootFile,
+    inRange,
+    ROOT_EULA,
+    ROOT_PROPERTIES,
+    SERVER_PORT_RANGE,
+} from "@/lib/types";
 import { formatSize } from "@/lib/format";
 import { RISE } from "@/lib/springs";
 import {
@@ -36,7 +43,7 @@ import {
 } from "@/components/ui";
 import { cn } from "@/lib/utils";
 import { useT } from "@/lib/i18n";
-import { difficultyOptions, findDirNode, gamemodeOptions } from "./constants";
+import { difficultyOptions, findDirNode, findFileNode, gamemodeOptions } from "./constants";
 
 /** 单包参数覆写入口（来自 ConvertPage 的 options state） */
 type Patch = (p: Partial<ConversionOptions>) => void;
@@ -386,10 +393,10 @@ export function KeepDirsCard({
                                 );
                             })}
                             {keepFiles.map((p) => {
-                                const f = packTree.files.find((x) => x.path === p);
+                                const f = findFileNode(packTree, p);
                                 return row(
                                     p,
-                                    f?.name ?? p.split("/").pop() ?? p,
+                                    f?.name ?? baseName(p),
                                     FileText,
                                     // 源包不在时读不到大小：留一行灰字而不是编一个 0 B
                                     f ? formatSize(f.sizeBytes) : t("convert.size-unknown", "大小未知"),
@@ -403,9 +410,9 @@ export function KeepDirsCard({
             </Swap>
             <NoteRow icon={Info}>
                 {readOnly
-                    ? t("convert.folders-copied", "这些目录与文件当时按原层级从源包复制进了服务端包（支持子目录）")
+                    ? t("convert.folders-copied", "这些目录与文件当时从源包带入，各自按自己的名字落在产物根目录")
                     : parsed
-                      ? t("convert.selected-folders", "勾选的目录整体复制，根级散文件按单个文件复制（文件列表在弹窗里只读展示）")
+                      ? t("convert.selected-folders", "勾哪一层就落哪一层：目录整棵（内部层级保留）、文件单个，都挂在产物根目录下")
                       : t("convert.source-pack", "源包已不在原位置 · 无法浏览包内内容，已有条目仍可移除")}
             </NoteRow>
         </Panel>
@@ -424,6 +431,9 @@ export function LaunchArgsCard({
     readOnly?: boolean;
 }) {
     const t = useT();
+    // 勾了包内那份 eula.txt ⇒ builder 让位（判据单源在后端 emit_root），这个开关这次不进产物。
+    // 行高按设计稿钉死，所以这里只把标签当场改口、并把开关灰化，不另起一行说明
+    const eulaYielded = holdsRootFile(options?.keepFiles, ROOT_EULA);
     return (
         <Panel gap={14}>
             <PanelHead title={t("convert.launch-args", "启动参数")} />
@@ -444,10 +454,16 @@ export function LaunchArgsCard({
                     onChange={(v) => patch({ nogui: v })}
                 />
             </InlineRow>
-            <InlineRow label={t("convert.write-eula", "自动写入 eula=true（同意 Mojang EULA）")}>
+            <InlineRow
+                label={
+                    eulaYielded
+                        ? t("convert.write-eula-kept", "eula.txt 取自包内 · 本项不进产物")
+                        : t("convert.write-eula", "自动写入 eula=true（同意 Mojang EULA）")
+                }
+            >
                 <Toggle
                     checked={options?.agreeEula ?? true}
-                    readOnly={readOnly}
+                    readOnly={readOnly || eulaYielded}
                     onChange={(v) => patch({ agreeEula: v })}
                 />
             </InlineRow>
@@ -484,6 +500,10 @@ export function ServerSettingsCard({
     readOnly?: boolean;
 }) {
     const t = useT();
+    // 勾了包内那份 server.properties ⇒ builder 整份沿用（不让位就会丢掉包内那些界面没暴露的键），
+    // 这 8 项这次不进产物 ⇒ 控件按只读口径灰化，底栏说明当场改口
+    const propsYielded = holdsRootFile(options?.keepFiles, ROOT_PROPERTIES);
+    const ro = readOnly || propsYielded;
     return (
         <Panel gap={14}>
             <PanelHead title={t("convert.server-settings", "服务端设置")} />
@@ -493,7 +513,7 @@ export function ServerSettingsCard({
                     label={t("convert.game-mode", "游戏模式")}
                     value={options?.gamemode ?? "survival"}
                     options={gamemodeOptions()}
-                    readOnly={readOnly}
+                    readOnly={ro}
                     onChange={(v) => patch({ gamemode: v as ConversionOptions["gamemode"] })}
                 />
                 <SearchSelect
@@ -501,7 +521,7 @@ export function ServerSettingsCard({
                     label={t("convert.difficulty", "难度")}
                     value={options?.difficulty ?? "easy"}
                     options={difficultyOptions()}
-                    readOnly={readOnly}
+                    readOnly={ro}
                     onChange={(v) => patch({ difficulty: v as ConversionOptions["difficulty"] })}
                 />
             </div>
@@ -512,7 +532,7 @@ export function ServerSettingsCard({
                         min={SERVER_PORT_RANGE.min}
                         max={SERVER_PORT_RANGE.max}
                         clamp={false}
-                        readOnly={readOnly}
+                        readOnly={ro}
                         onCommit={(v) => patch({ serverPort: v })}
                     />
                 </Field>
@@ -521,7 +541,7 @@ export function ServerSettingsCard({
                         value={options?.maxPlayers ?? 20}
                         min={1}
                         max={1000}
-                        readOnly={readOnly}
+                        readOnly={ro}
                         onCommit={(v) => patch({ maxPlayers: v })}
                     />
                 </Field>
@@ -530,7 +550,7 @@ export function ServerSettingsCard({
                 <TextInput
                     className="w-full"
                     value={options?.motd ?? ""}
-                    readOnly={readOnly}
+                    readOnly={ro}
                     onChange={(e) => patch({ motd: e.target.value })}
                     placeholder={t("convert.shown-server", "显示在服务器列表中的一行描述")}
                     spellCheck={false}
@@ -540,7 +560,7 @@ export function ServerSettingsCard({
                 <TextInput
                     className="w-full"
                     value={options?.levelSeed ?? ""}
-                    readOnly={readOnly}
+                    readOnly={ro}
                     onChange={(e) => patch({ levelSeed: e.target.value })}
                     placeholder={t("convert.4045151867437057206", "如 4045151867437057206")}
                     spellCheck={false}
@@ -550,12 +570,14 @@ export function ServerSettingsCard({
             <InlineRow label={t("convert.verified-accounts", "正版验证（online-mode）")}>
                 <Toggle
                     checked={options?.onlineMode ?? true}
-                    readOnly={readOnly}
+                    readOnly={ro}
                     onChange={(v) => patch({ onlineMode: v })}
                 />
             </InlineRow>
             <NoteRow icon={Info}>
-                {t("convert.writes-server", "以上字段写入包内 server.properties；整合包自带该文件时保留原文件")}
+                {propsYielded
+                    ? t("convert.server-fields-kept", "已勾包内 server.properties · 以上字段不进产物，属性以那份为准")
+                    : t("convert.writes-server", "以上字段写入包内 server.properties · 勾了包内同名文件时以那份为准")}
             </NoteRow>
         </Panel>
     );

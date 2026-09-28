@@ -408,6 +408,7 @@ mod tests {
             ],
             extra_files: Vec::new(),
             loader_version: None,
+            root_prefix: String::new(),
         };
         let plan = build_plan(&parsed, true, &EvidenceMap::new(), &CodeMap::new());
         // project_id 精确命中行 id；包内不存在的 "sodium" 被丢弃
@@ -436,6 +437,7 @@ mod tests {
             mod_files: files,
             extra_files: Vec::new(),
             loader_version: None,
+            root_prefix: String::new(),
         }
     }
 
