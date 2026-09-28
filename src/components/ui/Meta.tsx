@@ -190,7 +190,7 @@ export function MetaCell({
                         valueClass
                     )}
                 >
-                    {value ?? "—"}
+                    {value || "—"}
                 </span>
             )}
         </div>

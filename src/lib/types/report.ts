@@ -46,4 +46,7 @@ export interface ConversionReport {
     installed: boolean;
     /** 构建后自检结论；空数组 = 未开启该开关 */
     checks: CheckResult[];
+    /** 探明拿不到字节、又按「允许跳过」放行因而**没进产物**的那些模组名。
+     *  旧任务快照没这一键 ⇒ undefined（那时闸门还不存在，也没跳过过任何模组） */
+    skippedMods?: string[];
 }

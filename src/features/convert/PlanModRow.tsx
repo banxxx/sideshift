@@ -71,10 +71,13 @@ export function PlanModRow({
 }
 
 /** 卡内行右侧徽章只放「这行有什么特别的」：
+ *  缺件行排最前（拿不到字节是这一行最硬的事实，比「要人确认」更该当场看见）；
  *  剔除/保留行 = 自动补齐 > 需人工确认 > 本地，端标签交给「全部清单」弹窗，卡内不重复占宽
  *  （两端必需的保留行可能成批出现，卡底那句汇总才是它们该被看见的方式）；
  *  新增行 = 用户自己塞进来的（误下载、本地乱拿都在这一步），所以当场就要看到它是哪一端 */
 export function badgeFor(mod: PlanMod, local: boolean): React.ReactNode {
+    if (mod.cfBlocked)
+        return <ToneChip tone="redstone" size="sm">{t("convert.missing-file", "拿不到文件")}</ToneChip>;
     if (mod.autoSupplement) return <TagChip>{t("convert.auto-added", "自动补齐")}</TagChip>;
     if (mod.needsReview) return <ToneChip tone="gold" size="sm">{t("lib.needs-review", "需人工确认")}</ToneChip>;
     if (mod.disposition === "add")

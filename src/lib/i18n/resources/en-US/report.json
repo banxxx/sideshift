@@ -67,6 +67,7 @@
   "report.server-mods": "Server mods",
   "report.side-evidence": "By side evidence: jar / platform / modpack",
   "report.sides-unknown": "Both sides unknown · check if the server needs it",
+  "report.skipped-mods": "No fetchable file · not packed",
   "report.start-script": "No start script this time: in the extracted folder run java -jar {{jar}} --installServer to download the server, then start it with the run.bat / run.sh it writes",
   "report.start-script-time": "No start script this time: in the extracted folder run java <JVM args> @libraries/…/win_args.txt (unix_args.txt on Linux); the arg files ship with the dep tree",
   "report.strip-client": "Strip client-only mods",

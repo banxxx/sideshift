@@ -7,6 +7,7 @@ pub mod mc_version;
 pub mod java;
 pub mod installer;
 pub mod builder;
+pub mod cfpack;
 pub mod estimate;
 pub mod verify;
 pub mod cleanup;

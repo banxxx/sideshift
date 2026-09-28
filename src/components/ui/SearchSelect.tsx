@@ -52,6 +52,7 @@ export function SearchSelect({
     plain,
     searchable,
     searchPlaceholder,
+    placeholder,
     className,
     readOnly,
     onOpen,
@@ -66,6 +67,8 @@ export function SearchSelect({
     plain?: boolean;
     searchable?: boolean;
     searchPlaceholder?: string;
+    /** 值为空时的那格外显（裸 zip 认不出 MC 版本那一态）：不给就照旧留白，别处用法不受影响 */
+    placeholder?: string;
     className?: string;
     /** 回看态：值照显示，chevron 与浮层一起收掉——留着箭头就是「能点却不能点」的假出口 */
     readOnly?: boolean;
@@ -110,6 +113,8 @@ export function SearchSelect({
               )
             : options;
     const current = options.find((o) => o.value === value);
+    /** 空值 + 给了外显文案 ⇒ 这一格显示提示而不是留白（值不在列表里仍原样显示，那是另一回事） */
+    const showingPlaceholder = !value && !current && !!placeholder;
 
     return (
         <div
@@ -159,11 +164,15 @@ export function SearchSelect({
                             : plain
                               ? "font-mono text-[11px] leading-[16px] font-normal text-text-2"
                               : "font-mono text-[12px] leading-[18px] font-medium text-text-1",
-                        !isChip && readOnly && "text-text-2"
+                        !isChip && readOnly && "text-text-2",
+                        // 空值那格用正文字体 + 三级色：等宽体是给版本号准备的，汉字摆在里面既不像值也不够弱
+                        showingPlaceholder && "font-sans text-[12px] font-normal text-text-3"
                     )}
                 >
                     {prefix ? `${prefix} ` : ""}
-                    {tSource(current?.chip ?? current?.label ?? value)}
+                    {showingPlaceholder
+                        ? placeholder
+                        : tSource(current?.chip ?? current?.label ?? value)}
                 </span>
                 {!readOnly && (
                     <ChevronDown

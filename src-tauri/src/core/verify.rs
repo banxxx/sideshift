@@ -463,6 +463,8 @@ mod tests {
             client_side: None,
             server_side: None,
             bytecode_hint: None,
+            cf_blocked: false,
+            cf_required: false,
         }
     }
 

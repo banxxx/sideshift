@@ -11,6 +11,7 @@ use std::time::Instant;
 use tauri::AppHandle;
 
 use crate::core::builder::{self, BuildEvent, BuildInput, BuilderError};
+use crate::core::cfpack;
 use crate::core::detector;
 use crate::core::downloader::{
     DownloadError, Downloader, Fetch, FetchSource, ItemSpec, TransferProgress,
@@ -102,6 +103,33 @@ async fn run_pipeline(app: AppHandle, state: Arc<AppState>, id: String) {
             }
         }
     };
+    // CF 那一档（官方导出的包只给编号、jar 字节不在包里）：名字/大小/sha1 得向 CF 补。
+    // 自动分类那一轮通常已补完并落进 `cf-files-index.json`，这里只把索引贴回行上；索引冷的档
+    // （排队到重启后重跑、或分类那轮超时/没配 Key）才真发请求——构建期每行反正还要现取一条直链，
+    // 多这一发换来的是 sha1 能校验，值得
+    let parsed: Arc<ParsedPack> = if cfpack::cf_row_count(&parsed) > 0 {
+        let s = state.inner.lock().unwrap().settings.clone();
+        let cache_dir = PathBuf::from(&s.cache_dir);
+        let dl = Downloader::new(cache_dir.clone(), s.concurrency as usize)
+            .with_curseforge_key(s.curseforge_api_key.clone());
+        let out = cfpack::ensure(&dl, &cache_dir, &parsed, false).await;
+        if out.unresolved > 0 {
+            push_log(
+                &app,
+                &state,
+                &id,
+                PipelineStage::Parser,
+                LogLevel::Warn,
+                &format!(
+                    "CurseForge 编号补取：{} 行仍只有编号（没配 API Key 或本轮没查完），落位名按编号走",
+                    out.unresolved
+                ),
+            );
+        }
+        Arc::new(out.parsed)
+    } else {
+        parsed
+    };
     push_log(
         &app,
         &state,
@@ -128,12 +156,13 @@ async fn run_pipeline(app: AppHandle, state: Arc<AppState>, id: String) {
             ),
         );
     }
-    // index 声明了 URL 但包内没字节的残缺条目才需要联网补取
+    // index 声明了 URL 但包内没字节的残缺条目要联网补取；CF 那种「只有编号」的行同样没字节，
+    // 只是它的 url 恒空（直链构建期现取），漏掉这一档就会把要下载的行报成「包内内容」
     let off_pack = parsed
         .mod_files
         .iter()
         .chain(parsed.extra_files.iter())
-        .filter(|f| !f.in_pack && !f.url.is_empty())
+        .filter(|f| !f.in_pack && (!f.url.is_empty() || f.cf.is_some()))
         .count();
     push_log(
         &app,
@@ -246,6 +275,55 @@ async fn run_pipeline(app: AppHandle, state: Arc<AppState>, id: String) {
         .map(PathBuf::from)
         .unwrap_or_default();
 
+    // 3.0 缺件闸门：**问在下载之前**。自动分类那一轮逐枚探过取链许可（`cfpack::ensure`），
+    // 「两条路都拿不到字节」的行标在方案行的 `cf_blocked` 上，所以这里一行网络请求都不发。
+    // 少一枚 jar 的包在服上多半起不来，而那不是用户打算做的包 ⇒ 必选模组缺件要显式同意才放行；
+    // 可选模组缺了不炸服，跳过并逐条写进报告就行。
+    // 前端在「开始转换」那道上拦过一次，这一道是给旧任务存档与绕过界面的调用兜底：
+    // 停在取件之前——几百枚 jar 下到一半才发现少一件，等于让用户白等一趟
+    let blocked: Vec<&PlanMod> = plan
+        .iter()
+        .filter(|m| m.cf_blocked && m.disposition != ModDisposition::Remove)
+        .collect();
+    let blocked_names: Vec<String> = blocked.iter().map(|m| m.name.clone()).collect();
+    let blocked_required = blocked.iter().filter(|m| m.cf_required).count();
+    if blocked_required > 0 && !options.allow_missing_mods {
+        fail(&app, &state, &id, TaskError {
+            stage: PipelineStage::Downloader,
+            title: "整合包里有模组拿不到文件".into(),
+            detail: format!(
+                "CurseForge 上这 {} 个模组不通过接口发放下载链，两条取链路都拿不到字节：{}。\
+                 填了 API Key 也不会变——那是项目自己的设置。把它们在方案里改成剔除，\
+                 或勾选「允许跳过拿不到文件的模组」再构建",
+                blocked_required,
+                brief_list(&blocked_names)
+            ),
+            code: None,
+            retryable: false,
+            attempts: None,
+            log_tail: None,
+            exit_code: None,
+        });
+        return;
+    }
+    // 放行到这一档：缺的那些不进产物，但必须留名（报告与 README 逐条列，不是静默丢）
+    let skipped_mods: Vec<String> = blocked_names.clone();
+    if !blocked_names.is_empty() {
+        push_log(
+            &app,
+            &state,
+            &id,
+            PipelineStage::Downloader,
+            LogLevel::Warn,
+            &format!(
+                "跳过 {} 个拿不到文件的模组（必选 {} 个，已同意）：{}",
+                blocked_names.len(),
+                blocked_required,
+                brief_list(&blocked_names)
+            ),
+        );
+    }
+
     let mut items: Vec<ItemSpec> = Vec::new();
     let mut used_files: HashSet<usize> = HashSet::new();
     // mods/ 落位文件名（大小写口径）：防不同目录同名 jar 静默互相覆盖
@@ -258,6 +336,11 @@ async fn run_pipeline(app: AppHandle, state: Arc<AppState>, id: String) {
 
     // 3.1 保留 + 新增的模组
     for row in plan.iter().filter(|m| m.disposition != ModDisposition::Remove) {
+        // 缺件闸门放行到这一档的那些：不进取件计划（拿不到字行的行只能整条不装），
+        // 名字已经在上面向用户播报过，并逐条落在报告的「缺少模组」清单里
+        if row.cf_blocked {
+            continue;
+        }
         // 在线添加的钉住行最先匹配：用户选哪个构建，构建时就下哪个（不再解析最新版）
         if let Some(p) = &row.pinned {
             let file_name = unique_mod_name(&mut used_names, &p.file_name, &row.id);
@@ -265,7 +348,10 @@ async fn run_pipeline(app: AppHandle, state: Arc<AppState>, id: String) {
             // 拿不到必须停下：空 URL 下载要么报错要么落一个废 jar 进服务端包
             let url = if p.needs_curseforge_link() {
                 let file_id = p.file_id.clone().unwrap_or_default();
-                match dl.curseforge_download_url(&row.id, &file_id).await {
+                match dl
+                    .curseforge_build_url(&row.id, &file_id, &p.file_name, p.sha1.as_deref())
+                    .await
+                {
                     Ok(u) => u,
                     Err(e) => {
                         let detail = e.to_string();
@@ -298,9 +384,34 @@ async fn run_pipeline(app: AppHandle, state: Arc<AppState>, id: String) {
             .map(|i| (i, &parsed.mod_files[i]));
         if let Some((i, f)) = matched {
             used_files.insert(i);
-            // 物理在包内一律 ZipEntry 直取（mrpack index 几乎总带 URL，不能以 URL 定夺）；
-            // 仅「index 声明但包内缺字节」的残缺条目回落 URL 补下
-            let fetch = if f.in_pack || f.url.is_empty() {
+            // CF 那一档：清单只给编号、字节不在包里，且**url 恒空**（直链带时效）。
+            // 必须在「包内直取」那道判断**之前**分出去——`f.url.is_empty()` 那条写法会把这行
+            // 当成 ZipEntry 去包里抽一个不存在的条目，报出来是「包内没有这个条目」，
+            // 而真正的病因是没配 Key / CF 没答话。
+            // 拿不到直链必须停下：空 URL 下载要么报错、要么落一个废 jar 进服务端包。
+            // 被项目拒发 API 链那一档由 `curseforge_build_url` 内部退到推导链（只在有 sha1 锚时）
+            let fetch = if let Some(cf) = &f.cf {
+                match dl
+                    .curseforge_build_url(&cf.mod_id, &cf.file_id, &f.file_name, f.sha1.as_deref())
+                    .await
+                {
+                    Ok(u) => Fetch::Url(u),
+                    Err(e) => {
+                        let detail = e.to_string();
+                        fail(&app, &state, &id, TaskError {
+                            stage: PipelineStage::Downloader,
+                            title: "CurseForge 取链接失败".into(),
+                            detail,
+                            code: e.net_code(),
+                            retryable: true,
+                            attempts: None,
+                            log_tail: None,
+                            exit_code: None,
+                        });
+                        return;
+                    }
+                }
+            } else if f.in_pack || f.url.is_empty() {
                 Fetch::ZipEntry {
                     archive: source_path.clone(),
                     entry: f.path.clone(),
@@ -810,6 +921,7 @@ async fn run_pipeline(app: AppHandle, state: Arc<AppState>, id: String) {
         &options.keep_files,
         options.agree_eula,
         installed.is_some(),
+        &skipped_mods,
     );
     let build_state = state.clone();
     let build_app = app.clone();
@@ -1094,6 +1206,7 @@ async fn run_pipeline(app: AppHandle, state: Arc<AppState>, id: String) {
             start_jar: built.start_jar.clone(),
             installed: built.installed,
             checks,
+            skipped_mods: skipped_mods.clone(),
         };
         emit_progress(&app, t);
         inner.reports.insert(id.clone(), report);
@@ -1473,6 +1586,7 @@ fn build_readme(
     keep_files: &[String],
     agree_eula: bool,
     installed: bool,
+    skipped: &[String],
 ) -> Vec<String> {
     // 最后一维是「阶段 2.5 有没有在本机把 loader 装好并进了包」：README 的启动说法按它分叉
     let loader_line = match (loader, installed) {
@@ -1518,6 +1632,15 @@ fn build_readme(
         .collect();
     if !removed.is_empty() {
         lines.push(format!("已剔除客户端模组 {} 个", removed.len()));
+    }
+    // 缺件闸门放行才走到这一条：产物里就是没有这些模组，写在包里那张纸上，
+    // 免得服主日后按整合包的模组表来数、数出一堆「莫名消失」的模组
+    if !skipped.is_empty() {
+        lines.push(format!(
+            "缺少模组 {} 个（CurseForge 不通过接口发放下载链，两条取链路都拿不到，已按「允许跳过」跳过）：{}",
+            skipped.len(),
+            skipped.join("、")
+        ));
     }
     lines
 }
@@ -1599,7 +1722,7 @@ mod tests {
         let counts = PlanCounts { remove: 0, keep: 0, add: 0 };
         let lines = |keeps: &[&str], agree: bool| {
             let files: Vec<String> = keeps.iter().map(|s| s.to_string()).collect();
-            build_readme(&[], &counts, &[], LoaderKind::Fabric, &[], &files, agree, false)
+            build_readme(&[], &counts, &[], LoaderKind::Fabric, &[], &files, agree, false, &[])
         };
 
         let kept = lines(&["eula.txt"], false);
@@ -1612,5 +1735,21 @@ mod tests {
         assert!(lines(&[], false).iter().any(|l| l.contains("eula=false")));
         // 没勾 + 开关开：两句都不该出现
         assert!(!lines(&[], true).iter().any(|l| l.contains("eula.txt")));
+    }
+
+    /// 缺件闸门放行后，产物里就是没有这些模组 ⇒ 包里那张纸必须逐条点名，
+    /// 否则服主日后按整合包的模组表来数，数出一堆「莫名消失」的模组
+    #[test]
+    fn readme_lists_the_skipped_mods() {
+        let counts = PlanCounts { remove: 0, keep: 0, add: 0 };
+        let lines = |skipped: &[&str]| {
+            let names: Vec<String> = skipped.iter().map(|s| s.to_string()).collect();
+            build_readme(&[], &counts, &[], LoaderKind::Forge, &[], &[], true, false, &names)
+        };
+        assert!(lines(&[]).iter().all(|l| !l.contains("缺少模组")), "没跳过就不提这一档");
+        let got = lines(&["Mod A", "Mod B"]);
+        let line = got.iter().find(|l| l.contains("缺少模组")).unwrap();
+        assert!(line.contains("2 个"), "{line}");
+        assert!(line.contains("Mod A") && line.contains("Mod B"), "{line}");
     }
 }

@@ -146,6 +146,9 @@ export function RuntimeEnvCard({
                     label={t("convert.minecraft-version", "Minecraft 版本")}
                     value={options?.mcVersion ?? manifest.mcVersion}
                     options={mcOptions}
+                    // 裸 zip 认不出版本时后端给空串（不再凭空造一档）：这一格显示「未识别」，
+                    // 选没选由下面那行提示和「开始转换」那道闸说，不在框里堆第二句
+                    placeholder={t("convert.unrecognized", "未识别")}
                     searchable
                     searchPlaceholder={t("convert.search-versions", "搜索版本…")}
                     readOnly={readOnly}
@@ -156,6 +159,8 @@ export function RuntimeEnvCard({
                     label={`${loader} Loader`}
                     value={options?.loaderVersion ?? ""}
                     options={loaderOptions}
+                    // 裸 zip 没有 dependencies 段：列表到位前这一格是空的，给一句「待选择」而不是留白
+                    placeholder={t("convert.await-loader-version", "待选择")}
                     searchable
                     searchPlaceholder={t("convert.search-versions", "搜索版本…")}
                     readOnly={readOnly}

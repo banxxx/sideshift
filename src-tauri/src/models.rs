@@ -49,6 +49,26 @@ pub enum ModDisposition {
     Add,
 }
 
+/// 一枚 CF 构建的**取链许可**（自动分类那一轮探一次、落进 `cf-files-index.json`）。
+///
+/// 为什么非要探、不能离线判定：CF 的 file 对象里没有任何「这个项目允许不允许 API 发放
+/// 下载链」的字段——实测一个 495 行的官方导出包，被整项目 403 拒掉的那 6 行
+/// `isAvailable=true`、`fileStatus=4`、`externalLink=""`，与正常行**一模一样**。
+/// 只有真敲一次 `/download-url` 才知道，而这一次探测不下载任何字节（空 JSON + 一次 HEAD）
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum CfLink {
+    /// 官方 `/download-url` 给链：主路，唯一有成文文档的一条
+    #[default]
+    Unknown,
+    /// 官方给链（探过了，正常）
+    Official,
+    /// 官方不放行，但内容分发站按编号推得出来（构建期走回落链，见 `curseforge_build_url`）
+    Derived,
+    /// 两条路都没有 ⇒ 构建期拿不到字节。**必须在构建前就报出来**，不能等构建到一半炸
+    Unavailable,
+}
+
 /// 端信息的证据来源（前端据此显示「依据什么判定」）。
 /// 可信度顺序见 `env::rank`：jar 自证 > 平台按构建 > 平台按项目 > 镜像项目 > 整合包声明 > 名称启发
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -141,6 +161,14 @@ pub struct PlanMod {
     /// 字节码结构提示（只影响提示文案与名称层是否获准剔除，不改裁决口径）
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub bytecode_hint: Option<BytecodeHint>,
+    /// CF 编号行：这一枚**两条取链路都拿不到字节**（官方不放行、内容分发站也没有）。
+    /// true = 构建时必须显式跳过并写进报告，不许静默丢（闸门读的是它，不是构建期的意外）
+    #[serde(default)]
+    pub cf_blocked: bool,
+    /// 整合包清单把这枚声明成 `required`（字段缺失按 required 处理：CF 官方导出恒带这一条）。
+    /// 分档用：必选模组缺件与可选模组缺件不是一回事，前者的闸门更硬
+    #[serde(default)]
+    pub cf_required: bool,
 }
 
 /// 自动分类结果事件载荷（`plan://classified`）：离线层与在线层各推一次
@@ -164,6 +192,13 @@ pub struct PlanClassified {
 pub struct PlanClassification {
     pub plan: Vec<PlanMod>,
     pub online_pending: bool,
+    /// 这一包里**按编号声明**的 CF 行数（官方导出的 CF 包才有；带 jar 字节的民间包恒为 0）。
+    /// 它是包的属性、不是某一轮的补取结果：名字可能早就被磁盘索引答过了，但取字节每一步都要
+    /// `/download-url` ⇒ 界面那句「要去 CurseForge 取 N 个模组」按这个数说
+    pub cf_rows: usize,
+    /// 上面那些行存在、又没配 CurseForge API Key ⇒ **true**。不看补取成功与否：补名字能靠缓存免
+    /// Key，取 jar 字节不能，所以热索引的包也一样要说这句（否则人要到点转换才撞拒绝）
+    pub cf_needs_key: bool,
 }
 
 /// 取件构成（阶段 3 计划确定后写入）：网络 / 包内 / 本地 / 缓存命中四类来源的诚实汇总。
@@ -313,6 +348,10 @@ pub struct ConversionOptions {
     /// 于是重试与任务快照永远按快照走——不存在"跟随全局"那种会随设置漂移的语义（同一份方案隔几天
     /// 重跑做出不一样的包，比包本身有问题更难查）。老存档缺这个字段走容器级 `serde(default)` = `Default::default()`。
     pub install_loader_locally: bool,
+    /// 允许跳过「拿不到字节」的 CF 模组继续构建。**默认关**：关着时必选模组缺件直接把
+    /// 「开始转换」拦住——少一枚 jar 的包在服上多半起不来，而这正是用户没打算做的包。
+    /// 开了它=用户看过缺件清单并同意，缺的那些会逐条写进报告与 README，不是静默丢
+    pub allow_missing_mods: bool,
 }
 
 impl Default for ConversionOptions {
@@ -339,6 +378,7 @@ impl Default for ConversionOptions {
             keep_dirs: Vec::new(),
             keep_files: Vec::new(),
             install_loader_locally: true,
+            allow_missing_mods: false,
         }
     }
 }
@@ -528,6 +568,10 @@ pub struct ConversionReport {
     /// 构建后静态自检结论（core::verify）；空 = 没开这个开关
     #[serde(default)]
     pub checks: Vec<CheckResult>,
+    /// 探明「两条取链路都拿不到字节」而**没有**装进产物的那些模组名（缺件闸门放行后才非空）。
+    /// 报告与 README 逐条列出来：少件的包是用户看过清单并同意过的产物，不是静默丢件
+    #[serde(default)]
+    pub skipped_mods: Vec<String>,
 }
 
 /// 自检单项结论的三态：通过 / 提示（不致命但值得看一眼）/ 未通过（产物确实缺东西）
@@ -1152,6 +1196,8 @@ mod tests {
             client_side: Some(SideFlag::Required),
             server_side: Some(SideFlag::Optional),
             bytecode_hint: Some(BytecodeHint::ServerCode),
+            cf_blocked: true,
+            cf_required: false,
         };
         let to_frontend: Vec<PlanMod> =
             serde_json::from_value(serde_json::to_value([&row]).unwrap()).unwrap();
@@ -1187,6 +1233,7 @@ mod tests {
             start_jar: Some("fabric-server-launch.jar".into()),
             installed: true,
             checks: Vec::new(),
+            skipped_mods: vec!["X".into()],
         })
         .unwrap();
         let obj = v.as_object_mut().unwrap();
@@ -1196,6 +1243,7 @@ mod tests {
         obj.remove("startJar");
         obj.remove("installed");
         obj.remove("checks");
+        obj.remove("skippedMods");
         let old: ConversionReport = serde_json::from_value(v).unwrap();
         assert_eq!((old.file_count, old.start_jar), (0, None));
         assert!(old.generated_files.is_empty());
@@ -1204,6 +1252,9 @@ mod tests {
         // 旧存档没这一键 ⇒ 没本机装过（那条链路当时还不存在）
         assert!(!old.installed);
         assert!(old.checks.is_empty());
+        // 旧存档也没「缺件」这一说：那半天闸门还不存在 ⇒ 没跳过过任何模组
+        assert!(old.skipped_mods.is_empty());
+        assert!(!old.options.allow_missing_mods, "旧档缺键必须按不放行，不能默认跳过缺件");
     }
 }
 

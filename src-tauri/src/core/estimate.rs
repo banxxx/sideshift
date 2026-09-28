@@ -56,6 +56,9 @@ pub async fn estimate(
     for row in plan
         .iter()
         .filter(|m| m.disposition != ModDisposition::Remove)
+        // 与构建 3.0/3.1 一致：探明拿不到字节的那些不进产物，也就不进下载量。
+        // 留着它们报出来的数字是「要下多少」，而实际下的是另一回事
+        .filter(|m| !m.cf_blocked)
     {
         // 与构建 3.1 一致：钉住行最先匹配（用户所选版本 = 实际下载版本）
         if let Some(p) = &row.pinned {
@@ -83,6 +86,18 @@ pub async fn estimate(
             .map(|i| (i, &parsed.mod_files[i]));
         if let Some((i, f)) = matched {
             used.insert(i);
+            // CF 那一档（清单只给编号）：字节不在包里，直链带时效、构建期才取 ⇒ 这行**一定**是联网项。
+            // 大小问补回来的元数据；没补到（没配 Key / 离线 / CF 没答）就是真不知道，记 incomplete，
+            // 与上面 pinned 那条「url 恒空只用实测大小」同一口径。缓存按 URL 记账，这一档对不上号，
+            // 所以宁可多算一遍也不扣（少扣会低估，多扣只是让用户白看一眼数字）
+            if f.cf.is_some() {
+                if f.size_bytes == 0 {
+                    out.complete = false;
+                } else {
+                    out.download_bytes += f.size_bytes;
+                }
+                continue;
+            }
             // 与构建一致：物理在包内 → 直取；仅残缺条目回落 URL
             if f.in_pack || f.url.is_empty() {
                 out.from_pack_bytes += f.size_bytes;

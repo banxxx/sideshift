@@ -9,6 +9,7 @@ use tauri::{AppHandle, Emitter, State};
 use tauri_plugin_opener::OpenerExt;
 
 use crate::core::ack::{self, AckList};
+use crate::core::cfpack;
 use crate::core::cleanup;
 use crate::core::detector;
 use crate::core::downloader::{Downloader, net_code, reqwest_code};
@@ -309,6 +310,71 @@ fn online_running_of(inner: &task_engine::Inner) -> bool {
     inner.env_online_file.is_some() && inner.env_online_file == inner.last_file
 }
 
+/// 把「只有编号」的那些 CF 行补成带名字/大小/sha1 的行，并就地换掉解析缓存里那一份。
+///
+/// 补取只在自动分类入口跑一次，但它换掉的是**解析缓存那一份 Arc**，下载预估读的就是这一份
+/// （页面链路里 classify 恒在 estimate 之前），所以三样东西同时到位：
+/// - 名字：不然一排 `301445-4581013` 当模组名给用户看
+/// - sha1：这是取证层第 2 层（按构建哈希反查端声明）的入场券，CF 包本来一条都没有，
+///   补到 sha1 等于把「jar 自证」那一档缺失换来的取证能力补回半档
+/// - 大小：不然下载预估把这些行按 0 计，报出来的数字是假的
+///
+/// 换缓存必须落在同一把锁里（分类那边快照过这同一份），否则这一轮补到的名字进不了方案
+///
+/// 路径那枚锚点**不许跟着名字飘**（见 `cfpack` 模块头）：任务存档里的方案行按 `src_path` 回指，
+/// 一飘就把用户的手动改判全冲掉
+///
+/// 返回 `(按编号声明的行数, 要不要 CurseForge Key)`。第二个量**不看补取结果**：
+/// 名字可以早被索引答过（那之后一度零请求、一度不需要 Key），但取字节每一步都要
+/// `/download-url`，那是 CF 的接口、没 Key 就是拒绝。只看包里有几行编号声明 ⇒
+/// 「同一个包第二次打开」这种热索引状态不再能把缺 Key 藏住
+///
+/// `reprobe` = 用户点「重新自动分类」：把索引里探过的取链许可作废再问一遍（`ensure` 那侧有理由）
+async fn cf_enrich(state: &S<'_>, reprobe: bool) -> (usize, bool) {
+    let (parsed, file_name, cache_dir) = {
+        let inner = lock(&state);
+        let Some(p) = last_parsed_of(&inner) else {
+            return (0, false);
+        };
+        if cfpack::cf_row_count(&p) == 0 {
+            return (0, false);
+        }
+        (
+            p,
+            inner.last_file.clone().unwrap_or_default(),
+            PathBuf::from(&inner.settings.cache_dir),
+        )
+    };
+    let rows = cfpack::cf_row_count(&parsed);
+    let dl = downloader_of(state);
+    let needs_key = !dl.has_curseforge_key();
+    let out = cfpack::ensure(&dl, &cache_dir, &parsed, reprobe).await;
+    // 一轮下来行内容一点没变（索引本来就热、或没 Key 一条没补到、也没许可态可写）⇒
+    // 什么都不动，尤其别把 env 取证结论清掉：那会让同一个包切页往返又重跑一整轮离线探测
+    if !out.renamed && !out.links_changed {
+        return (rows, needs_key);
+    }
+    {
+        let mut inner = lock(&state);
+        // 补取期间用户可能换了包：不是同一个包就不落这一份（换了包就该按新包重算）
+        if inner.last_file.as_deref() == Some(file_name.as_str()) {
+            // 证据表按行归属，名字一变旧结论就对不上号 ⇒ 一并作废，让下一轮按新行重取。
+            // 只改写许可态的那一轮不作废：端判定与「这枚模组拿不拿得到字节」无关
+            if out.renamed
+                && inner.env_evidence_file.as_deref() == Some(file_name.as_str())
+            {
+                inner.env_evidence.clear();
+                inner.env_evidence_file = None;
+                inner.env_code.clear();
+            }
+            inner
+                .parsed_by_name
+                .insert(file_name.clone(), Arc::new(out.parsed));
+        }
+    }
+    (rows, needs_key)
+}
+
 /// 最近一次解析包的方案（用户勾改在前端本地模型中，start_conversion 回传最终版）
 fn current_plan(state: &S<'_>) -> Vec<PlanMod> {
     let inner = lock(&state);
@@ -339,6 +405,9 @@ pub async fn classify_pack(
     state: S<'_>,
     force: bool,
 ) -> Result<PlanClassification, String> {
+    // 编号行先补取，再谈分类：这一步换掉的正是下面要快照的那一份解析缓存，排在快照之后就会
+    // 拿着一份旧的名字去建方案（第一屏一排编号），而且 reuse 那条短路会把补取整个跳过
+    let (cf_rows, cf_needs_key) = cf_enrich(&state, force).await;
     // 快照 inputs：guard 必须在这个块里结束，否则 MutexGuard 跨 await 让命令 future 不 Send
     let (parsed, file_name, strip, online, mirror, cache_dir, concurrency, cached) = {
         let inner = lock(&state);
@@ -381,6 +450,8 @@ pub async fn classify_pack(
                 return Ok(PlanClassification {
                     plan: Vec::new(),
                     online_pending: false,
+                    cf_rows,
+                    cf_needs_key,
                 })
             }
         }
@@ -389,6 +460,8 @@ pub async fn classify_pack(
         return Ok(PlanClassification {
             plan,
             online_pending: online && online_running,
+            cf_rows,
+            cf_needs_key,
         });
     }
 
@@ -491,6 +564,8 @@ pub async fn classify_pack(
             return Ok(PlanClassification {
                 plan: fresh.unwrap_or(plan),
                 online_pending: still_running,
+                cf_rows,
+                cf_needs_key,
             });
         }
         let app = app.clone();
@@ -581,6 +656,8 @@ pub async fn classify_pack(
     Ok(PlanClassification {
         plan,
         online_pending: !offline_final,
+        cf_needs_key,
+        cf_rows,
     })
 }
 

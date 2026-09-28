@@ -102,8 +102,12 @@ export function ReportView({
     const loader = loaderLabel(task.pack.loader);
     const isForge = task.pack.loader === "forge" || task.pack.loader === "neoforge";
     const duration = formatDuration(report.durationSec * 1000);
-    /** 进服务端包的模组数 = 保留 + 新增（剔除项不算，首启核对日志用的就是这个数） */
-    const modCount = report.kept + report.added;
+    /** 本次探明拿不到字节、按「允许跳过」放过去的那几个名字（老快照同样没这一键 ⇒ 空） */
+    const skipped = report.skippedMods ?? [];
+    /** 进服务端包的模组数 = 保留 + 新增（剔除项不算，首启核对日志用的就是这个数）。
+     *  再扣掉缺件跳过的那几个：上面两个计数按方案处置算，跳过的行处置还在 keep/add 里，
+     *  不扣就是在教服主去日志里数一个包里根本没有的数 */
+    const modCount = report.kept + report.added - skipped.length;
     /** 勾了包内同名根文件时让位的那几枚（老快照没这一键 ⇒ 空）：报告要说「沿用」而不是「生成」 */
     const reused = report.reusedRootFiles ?? [];
 
@@ -248,6 +252,20 @@ export function ReportView({
                     open={openKey === "add"}
                     loading={plan === null}
                 />
+
+                {/* 缺件名单：上面三行报的是「方案怎么处置」，这一行报的是「实际少给了什么」——
+                    CurseForge 那些不通过接口发放下载链的项目，勾选允许跳过后就是走这条路出包。
+                    名字单独一行可换行，跟「包根沿用」同一形态，不进右对齐的计数行 */}
+                <Collapse when={skipped.length > 0} gap={12}>
+                    <div className="flex w-full flex-col gap-1">
+                        <span className="text-[11px] leading-[16px] font-normal text-text-3">
+                            {t("report.skipped-mods", "拿不到文件 · 本次未打包")}
+                        </span>
+                        <span className="break-words font-mono text-[11px] leading-[16px] font-medium text-redstone">
+                            {skipped.join("、")}
+                        </span>
+                    </div>
+                </Collapse>
 
                 {/* 待人工确认项不再单列成一行名单（几十项会顶爆这一行）：
                     转换时它们已被归进剔除并置顶，要看就在上面「剔除」行展开，行内带金色说明；
@@ -412,6 +430,9 @@ export function buildPlanSummary(
         report.reusedRootFiles?.length
             ? `包根沿用: ${report.reusedRootFiles.join("、")}（这几枚取自包内，本次没按配置生成）`
             : "",
+        report.skippedMods?.length
+            ? `缺件未打包: ${report.skippedMods.join("、")}（CurseForge 不通过接口发放下载链，已按「允许跳过」出包）`
+            : "",
         o.keepDirs.length || o.keepFiles.length
             ? `保留内容: ${[...o.keepDirs.map((d) => `${d}/`), ...o.keepFiles].join("、")}`
             : "",
@@ -459,6 +480,11 @@ function ChangeList({
                             {m.needsReview && (
                                 <span className="text-[10px] leading-[14px] text-gold">
                                     {t("report.sides-unknown", "未判定出两端 · 请核对服务端是否需要")}
+                                </span>
+                            )}
+                            {m.cfBlocked && m.disposition !== "remove" && (
+                                <span className="text-[10px] leading-[14px] text-redstone">
+                                    {t("report.skipped-mods", "拿不到文件 · 本次未打包")}
                                 </span>
                             )}
                         </span>

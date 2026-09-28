@@ -74,6 +74,7 @@ export function TaskErrorCard({
                     {/*i18n:
                         解析失败
                         CurseForge 取链接失败
+                        backend.mods-missing=整合包里有模组拿不到文件
                         依赖解析失败
                         未选择加载器版本
                         服务端加载器获取失败
@@ -135,6 +136,9 @@ export function TaskErrorCard({
                 裸 zip 包无法自动确定 Loader 版本，请在转换配置中选择后重试
                 应用退出时任务尚未完成，可重试
                 未检测到 Java（本机没有可用的 JDK）
+                backend.cf-key-missing=还没有配置 CurseForge API Key：在「设置 · 网络 · CurseForge API Key」填一把，或在 CurseForge 官方表单免费申请
+                backend.cf-unauthorized=CurseForge 不接受这把 API Key（HTTP 401）：Key 已过期或被撤销，请到设置里重新填写
+                backend.cf-forbidden=CurseForge 拒绝了这次请求（HTTP 403）：这把 Key 没有该接口的权限，或者这个模组不通过接口发放下载链
             */}
             <p className="text-[12px] leading-[18px] font-normal text-text-2">
                 {errOf(error.code ?? error.detail)}

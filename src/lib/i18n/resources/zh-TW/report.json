@@ -49,6 +49,7 @@
   "report.server-mods": "伺服器端模組",
   "report.side-evidence": "按端證據判定：jar 自證 / 平台反查 / 整合包聲明",
   "report.sides-unknown": "未判定出兩端 · 請核對伺服器端是否需要",
+  "report.skipped-mods": "拿不到檔案 · 本次未打包",
   "report.start-script": "本次未生成啟動腳本：在解壓目錄執行 java -jar {{jar}} --installServer 聯網裝出伺服器端，再用它生成的 run.bat / run.sh 啟動",
   "report.start-script-time": "本次未生成啟動腳本：在解壓目錄執行 java <JVM 參數> @libraries/…/win_args.txt（Linux 用 unix_args.txt），參數檔案隨依賴樹一起打進包",
   "report.strip-client": "剔除客戶端專屬模組",

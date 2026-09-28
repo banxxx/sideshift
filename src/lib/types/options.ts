@@ -57,6 +57,13 @@ export interface ConversionOptions {
      * 重试与回看读的是快照，不跟随全局（同一份方案不该隔几天重跑做出不同的包）。
      */
     installLoaderLocally: boolean;
+    /**
+     * 允许跳过「两条取链路都拿不到字节」的 CurseForge 模组继续构建。**缺省 = 关**（Rust 侧
+     * `ConversionOptions` 整表 `#[serde(default)]`，旧档没这一键同样按不放行）：
+     * 少一枚必选模组的包在服上多半起不来，那不是用户打算做的包 ⇒ 必须看过清单并显式同意。
+     * 开了它 = 缺的那些逐条写进报告与包内 README，不是静默丢。
+     */
+    allowMissingMods?: boolean;
 }
 
 /**

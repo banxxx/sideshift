@@ -20,6 +20,7 @@ mod util;
 mod versions;
 
 pub use client::Downloader;
+pub use curseforge::CfFileMeta;
 pub use modrinth::ModrinthEnv;
 pub use types::{
     DownloadError, Fetch, FetchSource, ItemSpec, TransferProgress, net_code, reqwest_code,

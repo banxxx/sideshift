@@ -105,6 +105,12 @@ impl Downloader {
         self
     }
 
+    /// 配了 CurseForge Key 吗。补取那一档在发第一发请求之前问的就是这个：
+    /// 没 Key 时逐行都只会撞回同一句拒绝，敲几百次门既没有新信息也只会被限流
+    pub fn has_curseforge_key(&self) -> bool {
+        self.cf_key.is_some()
+    }
+
     /// 缓存路径；`None` = 该项不落缓存。URL 项按 sha1（缺省按 URL 哈希，Modrinth 坐标与内容一一对应）
     /// 缓存；包内 / 本地项只有在声明 sha1 时才缓存——否则源文件被替换后缓存键不变，会静默复用旧内容
     fn cache_path_opt(&self, item: &ItemSpec) -> Option<PathBuf> {
@@ -594,6 +600,19 @@ impl Downloader {
         Ok(serde_json::from_slice(&bytes)?)
     }
 
+    /// CurseForge 取链探测专用的一次 HEAD：**只问「这个地址给不给字节」，一个字节都不取**。
+    /// 2xx 且带正的 `Content-Length` 才算给得出。
+    ///
+    /// 返回 `None` = **这一个问题没得到回答**（连不上、超时、TLS 挂）。这个区分是承重墙：
+    /// 「网络抖了一下」如果被记成「这枚模组永久拿不到」，一次抖动就能把一个本来能构建的包
+    /// 永久钉在缺件名单上（探测结论要落盘、下次零请求，见 `cfpack`）
+    pub(crate) async fn cf_head_answer(&self, url: &str) -> Option<bool> {
+        match self.client.head(url).timeout(METADATA_TIMEOUT).send().await {
+            Ok(r) => Some(r.status().is_success() && r.content_length().unwrap_or(0) > 0),
+            Err(_) => None,
+        }
+    }
+
     /// CurseForge 专用 JSON GET：挂 `x-api-key` 头，**不走镜像候选链**（`source` 模块表里 CF 没有镜像）。
     /// 缺 Key 与 Key 被拒都归 `Refused`：这两句是要原样显示给用户看的，前者要给「去配置」出口、
     /// 后者要说清是 Key 的问题而不是网络的问题。错误文案里绝不出现 Key 本身
@@ -617,12 +636,21 @@ impl Downloader {
                 status: e.status().map(|s| s.as_u16()).unwrap_or(0),
             })?;
         let status = resp.status();
-        if status == reqwest::StatusCode::UNAUTHORIZED || status == reqwest::StatusCode::FORBIDDEN
-        {
-            return Err(DownloadError::Refused(format!(
-                "CurseForge 拒绝了这次请求（HTTP {}）：API Key 无效、过期或没有该接口权限",
-                status.as_u16()
-            )));
+        // 401 与 403 是两回事，不能合成一句：实测（495 行的官方导出包）403 里绝大多数
+        // **与 Key 无关**——那些项目压根不通过 API 发放下载链（同项目的每一枚构建都拒，
+        // 而元数据接口照回 200）。把它们说成「Key 无效」会把人支去设置页重粘一把好 Key
+        if status == reqwest::StatusCode::UNAUTHORIZED {
+            return Err(DownloadError::Refused(
+                "CurseForge 不接受这把 API Key（HTTP 401）：Key 已过期或被撤销，请到设置里重新填写"
+                    .into(),
+            ));
+        }
+        if status == reqwest::StatusCode::FORBIDDEN {
+            return Err(DownloadError::Refused(
+                "CurseForge 拒绝了这次请求（HTTP 403）：这把 Key 没有该接口的权限，\
+                 或者这个模组不通过接口发放下载链"
+                    .into(),
+            ));
         }
         if !status.is_success() {
             return Err(DownloadError::Http {

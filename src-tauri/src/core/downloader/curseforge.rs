@@ -9,6 +9,10 @@
 //!    端判定只能等 jar 到手走离线取证层。宁缺毋滥，不从 `gameVersions` 的标签猜。
 //! 3. **下载链是临时的**：`latestFiles[].downloadUrl` 可空且带时效，所以这里给出去的
 //!    `url` 恒为空串，构建时再按 (mod id, file id) 现取一条（见 `curseforge_download_url`）。
+//!    个别项目**根本不发放 API 链**（实测 495 行里 6 行整项目 403），所以构建期取链走
+//!    `curseforge_build_url`：官方链优先、被拒时退到内容分发站的推导链。
+//!    「这一枚到底拿不拿得到字节」清单里没有字段预告、**只能问出来**，所以自动分类那一轮
+//!    逐枚探一次（`curseforge_probe_link`，不取字节），结论进 `cf-files-index.json`
 //!
 //! 枚举值口径抄自官方 OpenAPI（`/v1/mods/search` 的 `modLoaderType`、file 的 `hashes[].algo`）；
 //! 但 `algo` 的 1/2 在各语言实现里公认对不上（文档写 1=Sha1、2=Md5，多个第三方库相反），
@@ -17,7 +21,7 @@
 use serde_json::Value;
 
 use crate::models::{
-    LoaderKind, ModSearchPage, ModSearchQuery, ModSearchResult, ModSource, ModVersionEntry,
+    CfLink, LoaderKind, ModSearchPage, ModSearchQuery, ModSearchResult, ModSource, ModVersionEntry,
 };
 use super::client::Downloader;
 use super::types::DownloadError;
@@ -29,6 +33,26 @@ const CURSEFORGE_API: &str = "https://api.curseforge.com/v1";
 const MC_GAME_ID: u32 = 432;
 /// `classId` = Mods。同一个 game 下还混着整合包/材质包/世界/插件，不带这一条会搜出一堆 modpack
 const CLASS_MODS: u32 = 6;
+
+/// 由构建编号推 CurseForge 内容分发站的直链：`files/{id/1000}/{id%1000}/{文件名}`，
+/// 两段各补零到 4 位与 3 位（`8909889` → `files/8909/889/`）。
+///
+/// **官方没有文档**，`/download-url` 才是成文那条；但本机实测过 495 行的官方导出包：
+/// 其中 6 行整项目被拒发 API 链（HTTP 403、空响应体，而元数据接口照回 200），
+/// 走这条推导链拿到的字节 `长度 == fileLength`、头四字节 `504b0304`、
+/// **sha1 与 API 声明值逐字节相等**。所以它只当回落用，且**必须有 sha1 当锚**：
+/// 这条链按文件名定位文件，名字给错了它不报错，只给你另一枚 jar
+pub fn cf_cdn_url(file_id: &str, file_name: &str) -> Option<String> {
+    let id: u64 = file_id.trim().parse().ok()?;
+    let name = file_name.trim();
+    if name.is_empty() {
+        return None;
+    }
+    let hi = id / 1000;
+    let lo = id % 1000;
+    let enc = urlencoding(name);
+    Some(format!("https://edge.forgecdn.net/files/{hi:04}/{lo:03}/{enc}"))
+}
 
 /// 把 JSON 里的 id 读成字符串：CF 给数字（`id: 301445`），老接口个别给字符串，两种都得吃
 fn ident(v: &Value) -> String {
@@ -58,6 +82,27 @@ fn cf_sha1(file: &Value) -> Option<String> {
         let v = h["value"].as_str()?.trim().to_ascii_lowercase();
         (v.len() == 40 && v.chars().all(|c| c.is_ascii_hexdigit())).then_some(v)
     })
+}
+
+/// 一条构建的元数据，即 CF 清单**没写、只能联网要**的那三件事。
+/// 落 `cache_dir/cf-files-index.json` 时要序列化，所以 Serialize 也在这里挂上
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct CfFileMeta {
+    pub file_name: String,
+    pub size_bytes: u64,
+    pub sha1: Option<String>,
+    /// 索引顺带记的**取链许可态**（不属于 API 那三件事，是本地探出来的）。
+    /// `None` = 还没探过（老索引条目、以及没配 Key 的那些轮）；探过的行下次进同一个包零请求。
+    /// 存的是「能不能拿到链」这个结论，**不是链本身**——直链带时效，存下来就是埋雷
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub link: Option<CfLink>,
+}
+
+impl CfFileMeta {
+    /// 补取是否有效：没名字等于没补到，不能让方案行叫一个空文件名
+    pub fn usable(&self) -> bool {
+        !self.file_name.trim().is_empty()
+    }
 }
 
 /// 从 `gameVersions` 标签里挑 MC 版本号。CF 这一个数组同时装着加载器名、
@@ -283,6 +328,36 @@ impl Downloader {
         Ok(entries)
     }
 
+    /// 一条声明编号 → 那个构建的**离线拿不到的三件事**（文件名 / 大小 / sha1）。
+    ///
+    /// CF 的 `files[]` 只给 `projectID`/`fileID`，方案行因此连名字都是编号；这一档把名字补回来，
+    /// 顺带给取件档（`curseforge_download_url`）一条能校验的 sha1。
+    /// **一次一个构建**：`POST /v1/mods/files` 那条批量口我们没 Key 验不了响应形状，
+    /// 不照文档写推测代码（同「宁缺毋滥」那条口径）
+    pub async fn curseforge_file_meta(
+        &self,
+        mod_id: &str,
+        file_id: &str,
+    ) -> Result<CfFileMeta, DownloadError> {
+        let url = format!("{CURSEFORGE_API}/mods/{mod_id}/files/{file_id}");
+        let v = self.cf_get_json(&url).await?;
+        let f = &v["data"];
+        // 没 id 就等于没认出来：CF 的 404/空 data 都会落在这上面，不能让一行空行进方案
+        if ident(&f["id"]).is_empty() {
+            return Err(DownloadError::NotFound(format!(
+                "CurseForge 构建 {mod_id}/{file_id} 的元数据"
+            )));
+        }
+        Ok(CfFileMeta {
+            file_name: f["fileName"].as_str().unwrap_or_default().trim().to_string(),
+            size_bytes: num(&f["fileLength"]),
+            sha1: cf_sha1(f),
+            // 取链许可是**另一发请求**的结论，不在这条元数据里（CF 没有任何字段预告
+            // 「这个项目放不放行 API 链」，见 `CfLink` 的文档）。留 None = 还没探过
+            link: None,
+        })
+    }
+
     /// 现取一条构建的下载直链。返回的 URL 带时效，所以只在构建期调用、不落档不缓存。
     /// 响应按官方文档是 `{data: "<url>"}`；个别版本给 `{data:{downloadUrl}}` → 两种都认
     pub async fn curseforge_download_url(
@@ -302,6 +377,71 @@ impl Downloader {
             })?;
         Ok(link)
     }
+
+    /// 一条构建编号 → **拿得到字节**的 URL：官方直链优先，项目不放行时才退到内容分发站的推导链。
+    ///
+    /// 为什么不直接退：官方那条是唯一有文档背书的。为什么可以退：实测过（见 `cf_cdn_url`）。
+    /// 两道闸门——**配了 Key**（没配时真病因是缺 Key，去撞 CDN 只会换一个更难读的 404）、
+    /// **手里有 sha1**（推导链按文件名定位，文件名错了它不报错，只给你另一枚 jar）
+    pub async fn curseforge_build_url(
+        &self,
+        mod_id: &str,
+        file_id: &str,
+        file_name: &str,
+        sha1: Option<&str>,
+    ) -> Result<String, DownloadError> {
+        match self.curseforge_download_url(mod_id, file_id).await {
+            Ok(link) => Ok(link),
+            Err(e) => {
+                let anchored = sha1.map(|s| !s.trim().is_empty()).unwrap_or(false);
+                let cdn = if anchored && self.has_curseforge_key() {
+                    cf_cdn_url(file_id, file_name)
+                } else {
+                    None
+                };
+                match cdn {
+                    Some(u) => Ok(u),
+                    None => Err(e),
+                }
+            }
+        }
+    }
+
+    /// 探一枚构建**到底拿不拿得到字节**：自动分类那一轮跑，构建期不再问。
+    ///
+    /// 官方链一问，被拒时再多一次 HEAD：
+    /// - `/download-url` 给链 ⇒ `Official`
+    /// - 被拒 / 答「没有这条链」⇒ 试内容分发站的推导链，HEAD 有正长度 = `Derived`、明确没有 = `Unavailable`
+    /// - 连不上 / 超时 / 429 / 5xx ⇒ **`None`（不落档）**：这一档没有回答，把一次网络抖动写成
+    ///   「这枚模组永久拿不到」等于永久拦下一个本来能构建的包
+    ///
+    /// 为什么不离线判定：CF 的 file 对象里没有任何「允许不允许 API 发放下载链」的字段——
+    /// 实测 495 行的官方导出包，被整项目 403 拒掉的那 6 行 `isAvailable=true`、`fileStatus=4`、
+    /// `externalLink=""`，与正常行一模一样（见 `CfLink`）
+    pub async fn curseforge_probe_link(
+        &self,
+        mod_id: &str,
+        file_id: &str,
+        file_name: &str,
+    ) -> Option<CfLink> {
+        // 没 Key 就不探：每一发都会撞回「去配置 Key」，而那句不是这枚模组的属性
+        if !self.has_curseforge_key() {
+            return None;
+        }
+        match self.curseforge_download_url(mod_id, file_id).await {
+            Ok(_) => Some(CfLink::Official),
+            // 只有「平台答了、答的是不给」才值得去看回落链；`Http`（429/5xx/断连）没有结论
+            Err(DownloadError::Refused(_)) | Err(DownloadError::NotFound(_)) => {
+                let url = cf_cdn_url(file_id, file_name)?;
+                match self.cf_head_answer(&url).await {
+                    Some(true) => Some(CfLink::Derived),
+                    Some(false) => Some(CfLink::Unavailable),
+                    None => None,
+                }
+            }
+            Err(_) => None,
+        }
+    }
 }
 
 #[cfg(test)]
@@ -309,6 +449,60 @@ mod tests {
     use super::*;
     use crate::models::SideFlag;
     use LoaderKind::*;
+
+    /// 回落链那两段的补零是这条规则唯一容易写错的地方：`8797042` → `8797/042`，不是 `8797/42`。
+    /// 号码超过四位时只补不截（`12345678` → `12345/678`）
+    #[test]
+    fn derived_cdn_url_pads_both_segments() {
+        assert_eq!(
+            cf_cdn_url("8909889", "modelfix-1.21-1.10.jar").unwrap(),
+            "https://edge.forgecdn.net/files/8909/889/modelfix-1.21-1.10.jar"
+        );
+        assert!(cf_cdn_url("8797042", "a.jar")
+            .unwrap()
+            .contains("/files/8797/042/"));
+        assert!(cf_cdn_url("12345678", "a.jar")
+            .unwrap()
+            .contains("/files/12345/678/"));
+    }
+
+    /// 名字还没补到（没配 Key、或那一轮没查完）就不给链：这条链按**文件名**定位文件，
+    /// 名字错了它不报错，只给你另一枚 jar
+    #[test]
+    fn derived_cdn_url_requires_a_name_and_a_numeric_id() {
+        assert!(cf_cdn_url("8909889", "").is_none());
+        assert!(cf_cdn_url("8909889", "   ").is_none());
+        assert!(cf_cdn_url("", "a.jar").is_none());
+        assert!(cf_cdn_url("mods/44/a.jar", "a.jar").is_none());
+    }
+
+    #[test]
+    fn derived_cdn_url_percent_encodes_the_file_name() {
+        assert!(cf_cdn_url("5591286", "Structory 26.2 v1.3.7.jar")
+            .unwrap()
+            .ends_with("/Structory%2026.2%20v1.3.7.jar"));
+    }
+
+    /// 没配 Key 时**不许**退到推导链：那一句「去配置 Key」是真病因，换成 CDN 的 404 会把人带偏。
+    /// 这一条不发网络请求（`cf_get_json` 在门口就把 Keyless 挡下了），所以能当单测跑
+    #[tokio::test]
+    async fn keyless_build_url_keeps_the_key_prompt() {
+        let dir = std::env::temp_dir().join(format!("sideshift-cf-keyless-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let dl = Downloader::new(dir.clone(), 1);
+        let err = dl
+            .curseforge_build_url(
+                "636540",
+                "8396883",
+                "Structory_26.2_v1.3.7.jar",
+                Some("8a9a1a1b3f74398310420b6fbe2c26ef142bed42"),
+            )
+            .await
+            .unwrap_err();
+        assert!(matches!(err, DownloadError::Refused(_)), "{err}");
+        assert!(err.to_string().contains("还没有配置 CurseForge API Key"), "{err}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     /// 一条真形状的 CF 搜索结果（字段取自官方 OpenAPI 的 `Mod`/`File`），用来钉死映射口径
     const FIXTURE: &str = r#"{

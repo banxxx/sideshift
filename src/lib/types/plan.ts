@@ -39,6 +39,12 @@ export interface PlanMod {
     serverSide?: SideFlag;
     /** 在线添加时钉住的构建；缺省 = 构建期解析最新兼容版（自动补行） */
     pinned?: PinnedVersion;
+    /** CurseForge 编号行的取链探测结论：官方不放链、内容分发站也没有 ⇒ **构建期拿不到字节**。
+     *  自动分类那一轮探的（一次空 JSON + 一次 HEAD，不下载内容），缺省 = 没探过（不是拿得到） */
+    cfBlocked?: boolean;
+    /** 整合包清单把这枚声明成 required（字段缺失按必需处理）：必选缺件拦「开始转换」，
+     *  可选缺件跳过并逐条写进报告——少了可选模组不炸服，少了必选模组做出来的包跑不起来 */
+    cfRequired?: boolean;
     /** 仅前端展示态：新增行被停用（行保留在清单、不参与构建与计数），下发前整行过滤 */
     disabled?: boolean;
     /** 依赖的其他方案行 id（mrpack depends 元数据；反向依赖警告用） */
@@ -62,4 +68,10 @@ export interface PlanClassification {
     plan: PlanMod[];
     /** true = 联网反查已在后台起跑，最终结论走 plan://classified */
     onlinePending: boolean;
+    /** 这一包里按编号声明的 CF 行数（官方导出的 CF 包才有；带 jar 字节的民间包恒为 0）。
+     *  包的属性、不是某一轮的补取结果 ⇒ 名字已被磁盘索引补过时它照旧是全部 */
+    cfRows: number;
+    /** 有那些行、又没配 CurseForge API Key = true。补名字能靠缓存免 Key，**取 jar 字节不能**
+     *  （构建每行都要现取一条直链）⇒ 热索引的包也一样要提示，否则人要到点转换才撞拒绝 */
+    cfNeedsKey: boolean;
 }

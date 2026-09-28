@@ -69,6 +69,7 @@ export function PackCard({
                     整合包中没有任何模组文件（mods 目录为空）
                     mods 目录中没有任何 .jar 模组文件
                     未找到 mods 目录，不是可识别的整合包（推荐直接使用 .mrpack）
+                    backend.cf-empty-pack=这份 CurseForge 清单没有声明任何模组，包里也没有 jar 字节
                     暂不支持 .7z 格式，请先解压为 zip 或改用 .mrpack
                 */
                 <p className="text-[12px] leading-[16px] font-normal text-redstone">{tSource(error)}</p>

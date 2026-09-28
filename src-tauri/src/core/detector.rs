@@ -7,7 +7,7 @@ use std::collections::HashSet;
 use crate::core::env::{self, CodeMap, Evidence, EvidenceMap};
 use crate::core::parser::{PackFile, ParsedPack};
 use crate::models::{
-    BytecodeHint, EnvSource, LoaderKind, ModDisposition, PlanCounts, PlanMod, SideFlag,
+    BytecodeHint, CfLink, EnvSource, LoaderKind, ModDisposition, PlanCounts, PlanMod, SideFlag,
 };
 
 /// 客户端专属模组关键字（文件名小写子串匹配；仅在所有证据层都拿不到时兜底）
@@ -191,8 +191,10 @@ pub fn build_plan(
                 auto_supplement: false,
                 size_bytes: f.size_bytes,
                 // 只有「有 URL 可下且物理不在包内」才是真联网下载；
-                // mrpack 正常条目全部内嵌 → 包内直取
-                needs_download: !f.in_pack && !f.url.is_empty(),
+                // mrpack 正常条目全部内嵌 → 包内直取。
+                // CF 那一档特殊：清单只给编号、**url 恒空**（直链带时效，构建期现取），
+                // 但字节确实不在包里 ⇒ 也算联网下载，不能报成「包内直取」
+                needs_download: !f.in_pack && (!f.url.is_empty() || f.cf.is_some()),
                 local_path: None,
                 pinned: None,
                 depends: Vec::new(),
@@ -202,6 +204,11 @@ pub fn build_plan(
                 client_side: client,
                 server_side: server,
                 bytecode_hint,
+                // CF 编号行的「两条取链路都拿不到字节」（自动分类那一轮探出来的）。
+                // 挂在行上而不是另开一份清单：用户在界面上改判处置之后，闸门要按**当前这份方案**
+                // 重算缺件数（被判为剔除的行本来就进不了服务端包，缺不缺件与它无关）
+                cf_blocked: f.cf.as_ref().is_some_and(|r| r.link == CfLink::Unavailable),
+                cf_required: f.cf.as_ref().is_some_and(|r| r.required),
             }
         })
         .collect();
@@ -270,6 +277,9 @@ pub fn build_plan(
             client_side: None,
             server_side: Some(SideFlag::Required),
             bytecode_hint: None,
+            // 补齐行是我们自己加的、走 Modrinth 那条腿，与 CF 的取链许可无关
+            cf_blocked: false,
+            cf_required: false,
         });
     }
     plan
@@ -390,6 +400,7 @@ mod tests {
             env_server: Some(SideFlag::Required),
             env_client: None,
             depends: depends.iter().map(|s| s.to_string()).collect(),
+            cf: None,
         };
         let parsed = ParsedPack {
             manifest: PackManifest {
@@ -452,6 +463,7 @@ mod tests {
             env_server: env.0,
             env_client: env.1,
             depends: Vec::new(),
+            cf: None,
         }
     }
 

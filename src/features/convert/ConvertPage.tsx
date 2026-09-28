@@ -16,7 +16,7 @@
  * 本文件只留「状态 → 派生 → 动作 → 右栏摘要」这条数据主干：四张设置卡见 OptionCards，
  * 模组方案卡见 ModPlanCard，方案行与徽章见 PlanModRow，静态选项见 constants。
  */
-import { Archive, ChevronRight, Download, Folder, Layers } from "lucide-react";
+import { Archive, ChevronRight, Download, Folder, Layers, TriangleAlert } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { motion } from "motion/react";
 import * as api from "@/lib/api";
@@ -41,6 +41,7 @@ import type {
 import { SERVER_PORT_RANGE, inRange } from "@/lib/types";
 import {
     Btn,
+    CheckBox,
     CountRow,
     Divider,
     LinkBtn,
@@ -127,6 +128,17 @@ export function ConvertPage() {
             setReclassifying(false);
             setPlan(res.plan);
             setClassifying(res.onlinePending);
+            // CF 官方导出的包只声明编号，jar 字节全在网上。名字可能早就被磁盘索引补好了（那之后
+            // 补取零请求、屏上看着什么都不缺），但**取字节每一次都要现取直链**、没 Key 就是拒绝 ⇒
+            // 闸门只看「这包有编号行 + 没配 Key」，热索引不许把缺 Key 藏到点转换才炸
+            if (res.cfNeedsKey) {
+                notify(
+                    t("convert.cf-needs-key", "{{count}} 个模组的 jar 不在包里 · 构建要从 CurseForge 取，需要在设置里填 CurseForge API Key", {
+                        count: res.cfRows,
+                    }),
+                    "warn"
+                );
+            }
             if (manual) {
                 const remove = res.plan.filter((m) => m.disposition === "remove").length;
                 // 联网还没跑完时不报数：那一批发出去会把「剔除 N 项」当成结论，可方案还没落定
@@ -371,12 +383,31 @@ export function ConvertPage() {
         [visibleActive, visibleMods]
     );
 
+    /** CurseForge 探明「拿不到字节」的缺件行（结论由联网那一轮探链落在 `cfBlocked` 上）：
+     *  剔除行本就不进产物，不计入。分两档按包内 `required` 声明——
+     *  必选档拦住「开始转换」，要人显式勾选允许跳过才放行；可选档只报数，勾选框都不出。
+     *  用 visibleActive：分类中途行还没落定，那时整套摘要都是空的，这一档也一样不抢跑。 */
+    const missing = useMemo(() => {
+        const rows = visibleActive.filter((m) => m.cfBlocked && m.disposition !== "remove");
+        return {
+            total: rows.length,
+            required: rows.filter((m) => m.cfRequired).length,
+            optional: rows.filter((m) => !m.cfRequired).length,
+        };
+    }, [visibleActive]);
+
+    /** 必选缺件且没勾选跳过 = 拦。跟构建那道闸门（pipeline 阶段 3.0）同一判据，
+     *  差别只在这里是「开始前就说」，那一处是兜底（回看快照、旧任务重试都可能绕过本页） */
+    const missingBlocked = missing.required > 0 && !options?.allowMissingMods;
+
     /** 本地兜底聚合（后端答不上来时展示）：联网行按源 fileSize 求和 */
     const localEstimate = useMemo<DownloadEstimate>(() => {
         let downloadBytes = 0;
         let fromPackBytes = 0;
         for (const m of activeMods) {
             if (m.disposition === "remove") continue;
+            // 与后端预估同口径：探明拿不到字节的行不进产物，也就不进取件量
+            if (m.cfBlocked) continue;
             if (m.needsDownload) downloadBytes += m.sizeBytes ?? 0;
             else fromPackBytes += m.sizeBytes ?? 0;
         }
@@ -402,10 +433,16 @@ export function ConvertPage() {
     }, [activeMods, options?.mcVersion, options?.loaderVersion, options?.keepDirs, options?.keepFiles]);
 
     // 350ms 防抖向后端要真实预估；加载器版本未定时不发请求（构建期必失败，数字无意义）。
+    // MC 版本空（裸 zip 认不出来、用户还没选）同理不发：那一档既定不住模组兼容也定不住 Loader。
     // 分类中也不发：那批行马上会被联网结论改写，拿回来的数字是过期结论；
     // 落定时 classifying 跟着进依赖，这一趟才补上要的那一次。
     useEffect(() => {
-        if (classifying || !options || !options.loaderVersion.trim()) {
+        if (
+            classifying ||
+            !options ||
+            !options.mcVersion.trim() ||
+            !options.loaderVersion.trim()
+        ) {
             setRemoteEstimate(null);
             return;
         }
@@ -720,7 +757,10 @@ export function ConvertPage() {
                     title={t("convert.conversion-setup", "转换配置")}
                     // 前半截全是数据（文件名 / Loader / 版本号），不过 t：
                     // i18next 默认转义插值值，文件名里的 `&` `'` `/` 会被写成实体
-                    sub={`${truncateMiddle(manifest.fileName, 34)} · ${loader} · Minecraft ${manifest.mcVersion} · ${t("convert.detection-finished", "检测完成，确认转换方案后开始构建")}`}
+                    sub={`${truncateMiddle(manifest.fileName, 34)} · ${loader} · Minecraft ${
+                        // 裸 zip 认不出版本号时后端给空串：这里如实说「未识别」，不再显示一个凭空造的档
+                        manifest.mcVersion || t("convert.unrecognized", "未识别")
+                    } · ${t("convert.detection-finished", "检测完成，确认转换方案后开始构建")}`}
                 />
             </motion.div>
 
@@ -832,6 +872,36 @@ export function ConvertPage() {
                                 </LinkBtn>
                             )}
                         </div>
+                        {/* 缺件闸门：探测结论落在方案行上，这里在点转换之前就把「构建会少几个」说出来，
+                            而不是等几十秒下载后在日志里撞 403。必选档要人显式勾选才放行。 */}
+                        {missing.total > 0 && (
+                            <>
+                                <NoteRow icon={TriangleAlert} tone={missingBlocked ? "danger" : undefined}>
+                                    {missing.required > 0
+                                        ? t(
+                                              "convert.missing-required",
+                                              "{{total}} 个模组拿不到文件，其中必选 {{required}} 个",
+                                              { total: missing.total, required: missing.required }
+                                          )
+                                        : t(
+                                              "convert.missing-optional",
+                                              "{{count}} 个可选模组拿不到文件，本次会跳过",
+                                              { count: missing.optional }
+                                          )}
+                                </NoteRow>
+                                {missing.required > 0 && (
+                                    <div className="flex w-full items-start gap-2">
+                                        <CheckBox
+                                            checked={!!options?.allowMissingMods}
+                                            onChange={(v) => patch({ allowMissingMods: v })}
+                                        />
+                                        <span className="min-w-0 flex-1 text-[11px] leading-[16px] font-normal text-text-1">
+                                            {t("convert.allow-missing", "允许跳过拿不到文件的模组，其余照常构建")}
+                                        </span>
+                                    </div>
+                                )}
+                            </>
+                        )}
                         <Btn
                             variant="primary"
                             full
@@ -839,8 +909,10 @@ export function ConvertPage() {
                                 !options ||
                                 starting ||
                                 classifying ||
+                                missingBlocked ||
                                 javaBlocked ||
                                 portBlocked ||
+                                !options.mcVersion.trim() ||
                                 !options.loaderVersion.trim()
                             }
                             onClick={() => void start()}
@@ -853,18 +925,30 @@ export function ConvertPage() {
                         </Btn>
                         <p
                             className={`w-full text-center text-[10px] leading-[14px] font-normal ${
-                                javaBlocked || portBlocked ? "text-redstone" : "text-text-3"
+                                missingBlocked || javaBlocked || portBlocked ? "text-redstone" : "text-text-3"
                             }`}
                         >
                             {classifying
                                 ? t("convert.auto-classifying-wait", "自动分类进行中，方案落定后方可开始构建")
-                                : javaBlocked
-                                  ? t("convert.fix-java", "请先在「运行环境」里处理好 Java，本次装不了 Loader")
-                                  : portBlocked
-                                    ? t("convert.enter-port", "请先在「服务端设置」里填一个 1–65535 的端口")
-                                    : options && !options.loaderVersion.trim()
-                                      ? t("convert.fetching-loader", "正在获取 Loader 版本列表，选定后方可开始转换")
-                                      : t("convert.cancel-anytime", "转换过程可随时取消，已下载依赖自动缓存复用")}
+                                : missingBlocked
+                                  ? t(
+                                        "convert.fix-missing",
+                                        "有必选模组拿不到文件，先在方案里改成剔除，或勾选「允许跳过」"
+                                    )
+                                  : javaBlocked
+                                    ? t("convert.fix-java", "请先在「运行环境」里处理好 Java，本次装不了 Loader")
+                                    : portBlocked
+                                      ? t("convert.enter-port", "请先在「服务端设置」里填一个 1–65535 的端口")
+                                      : options && !options.mcVersion.trim()
+                                        // MC 版本这档要排在 Loader 那句前面：版本空时加载器列表根本不会去拉，
+                                        // 那句「正在获取 Loader 版本」会把人引向一个没在发生的过程
+                                        ? t(
+                                              "convert.pick-mc-version",
+                                              "未识别到 Minecraft 版本，请先在「运行环境」里选择版本"
+                                          )
+                                        : options && !options.loaderVersion.trim()
+                                          ? t("convert.fetching-loader", "正在获取 Loader 版本列表，选定后方可开始转换")
+                                          : t("convert.cancel-anytime", "转换过程可随时取消，已下载依赖自动缓存复用")}
                         </p>
                     </Panel>
                 </motion.aside>
