@@ -7,13 +7,12 @@ use std::sync::OnceLock;
 use tauri::{AppHandle, Manager};
 
 use crate::core::ack::{ACK_FILE, SKIN_DIR, SKIN_FILE};
-use crate::core::data_root::{self, APP_DATA_DIR_NAME, INSTALLER_FILE};
+use crate::core::data_root::{self, APP_DATA_DIR_NAME, INSTALLER_FILE, SETTINGS_FILE};
 use crate::models::*;
 use super::events::trim_logs;
 use super::state::Inner;
 use super::util::now_ms;
 
-const SETTINGS_FILE: &str = "settings.json";
 /// 目录默认值迁移做过一次的凭据（空文件，与 settings.json 同目录）
 const SETTINGS_MIGRATED: &str = "settings.migrated";
 /// 任务本地存档：注册表全量快照（任务 + 方案 + 报告），重启后可见可重试

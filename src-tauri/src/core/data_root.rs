@@ -25,6 +25,9 @@ pub const DATA_DIR_NAME: &str = "data";
 pub const APP_DATA_DIR_NAME: &str = "appdata";
 /// 自绘安装壳写入的数据根：`{"dataRoot":"E:\\Games\\SideShift"}`，只在这份文件存在时覆盖预选
 pub const INSTALLER_FILE: &str = "installer.json";
+/// 全局设置那份。卸载壳要读它里面的 `cacheDir`：人在设置里改过目录的话，默认布局算出来的
+/// 那个 `cache` 就不是缓存，照着删等于删错目录。名字在这里单源，而不是主应用与壳各写一遍
+pub const SETTINGS_FILE: &str = "settings.json";
 /// 数据根下的两个子目录。名字放这里而不是散在 `defaults_in` 里：安装壳要在装的时候
 /// 就把「以后会落在哪」显示给用户看，两边各写一遍字符串迟早分叉
 pub const OUTPUT_DIR_NAME: &str = "output";
@@ -34,6 +37,17 @@ pub const CACHE_DIR_NAME: &str = "cache";
 /// 主应用这边 dead_code：唯一的消费者是安装壳，它用 `#[path]` 编走本文件
 #[allow(dead_code)]
 pub const UNINSTALL_SHELL_NAME: &str = "SideShift-Uninstall.exe";
+/// NSIS 模板自己那份卸载器的**原名**（模板 :650 `WriteUninstaller "$INSTDIR\uninstall.exe"`）。
+/// 安装完它会被收进配置目录（见 `NSIS_UNINSTALLER_STASHED`），但卸载壳两处都认，
+/// 所以这两个名字都得留着
+#[allow(dead_code)]
+pub const NSIS_UNINSTALLER_NAME: &str = "uninstall.exe";
+/// 原生卸载器收起来之后叫的名字，躺在 `appdata\` 里。**为什么不干脆删掉它**：快捷方式
+/// （含从任务栏/开始菜单取消固定）、注册表项、文件清单都是它的删除清单在管，卸载壳只是把
+/// 界面换成我们这套、真正动手的仍是它；删了它等于把这些清单抄一份到 Rust，抄漏一项就是
+/// 用户机器上删不掉的残留。留在安装目录里则像第二个卸载入口，所以收进我们自己的目录
+#[allow(dead_code)]
+pub const NSIS_UNINSTALLER_STASHED: &str = "nsis-uninstall.exe";
 
 /// 低于此剩余空间的盘不参与预选：宁可用默认的用户目录，也不替用户把整盘塞满
 const MIN_FREE_BYTES: u64 = 10 * 1024 * 1024 * 1024;

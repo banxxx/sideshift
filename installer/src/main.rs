@@ -321,6 +321,9 @@ fn install(app: &AppHandle, cancel: &AtomicBool, req: Request) -> Result<Outcome
     let body = serde_json::json!({ "dataRoot": display(&root) }).to_string();
     std::fs::write(&target, &body).map_err(|e| format!("写 {} 失败：{e}", target.display()))?;
 
+    // 原生卸载器收到这里来。排在配置目录建好之后：它没有义务替我们建目录
+    stash_native_uninstaller(&install_dir, &config);
+
     cleanup(&tmp);
     let _ = app.emit(
         "installer://progress",
@@ -398,6 +401,20 @@ fn deliver_uninstall_shell(install_dir: &Path) -> Option<String> {
 fn deliver_uninstall_shell(_install_dir: &Path) -> Option<String> {
     // 非 Windows 不产出安装包，这条链不走；留个桩是为了 data_root 那份共享源码能在本机编过
     None
+}
+
+/// 把 NSIS 那份原生卸载器收进配置目录。安装目录里躺着两个能卸载东西的 exe，人和杀毒软件都分不清
+/// 哪个是正主；而它又**不能删**——快捷方式（含从任务栏取消固定）、注册表项、文件清单都写在它的
+/// 删除清单里，卸载壳只是把界面换成我们这套，真正动手的仍是它。所以是"收起来"，不是"删掉"。
+///
+/// 挪不动就算了（目标被占用/跨卷）：卸载壳两处都认，最坏的后果是那个文件还看得见，不是卸不掉。
+/// Windows 上 `rename` 会覆盖同名目标，所以升级时上一份留在那儿也不用先删——先删再挪失败就等于
+/// 把唯一的原生入口弄没了
+fn stash_native_uninstaller(install_dir: &Path, config: &Path) {
+    let from = install_dir.join(data_root::NSIS_UNINSTALLER_NAME);
+    if from.is_file() {
+        let _ = std::fs::rename(&from, config.join(data_root::NSIS_UNINSTALLER_STASHED));
+    }
 }
 
 /// `UNINSTKEY` = `Software\Microsoft\Windows\CurrentVersion\Uninstall\${PRODUCTNAME}`

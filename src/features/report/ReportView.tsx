@@ -278,8 +278,12 @@ export function ReportView({
                 <Collapse when={o.extraJvmArgs.trim() !== ""} gap={12}>
                     <InfoRow label={t("convert.extra-jvm", "附加 JVM 参数")} value={o.extraJvmArgs.trim()} />
                 </Collapse>
-                <Collapse when={o.keepDirs.length > 0} gap={12}>
-                    <InfoRow label={t("report.dirs-kept", "随包保留目录")} value={o.keepDirs.join("、")} />
+                <Collapse when={o.keepDirs.length > 0 || o.keepFiles.length > 0} gap={12}>
+                    <InfoRow
+                        label={t("report.dirs-kept", "随包保留内容")}
+                        // 目录带尾斜杠、根级文件就一个名字：一眼分得出勾的是哪一类
+                        value={[...o.keepDirs.map((d) => `${d}/`), ...o.keepFiles].join("、")}
+                    />
                 </Collapse>
                 {/* 包根文件来自 builder 实写清单：勾了脚本才会有 start.*，别按开关猜。
                     名字串会长，单独给一行可换行的展示位，不进右对齐的 InfoRow */}
@@ -387,7 +391,9 @@ export function buildPlanSummary(
             o.onlineMode ? "开" : "关"
         }`,
         report.generatedFiles.length ? `包根文件: ${report.generatedFiles.join("、")}` : "",
-        o.keepDirs.length ? `保留目录: ${o.keepDirs.join("、")}` : "",
+        o.keepDirs.length || o.keepFiles.length
+            ? `保留内容: ${[...o.keepDirs.map((d) => `${d}/`), ...o.keepFiles].join("、")}`
+            : "",
         `变更: 剔除 ${report.removed} / 保留 ${report.kept} / 新增 ${report.added}`,
         report.pendingReview.length ? `待人工确认: ${report.pendingReview.join("、")}` : "",
     ]
@@ -603,7 +609,7 @@ function CheckLine({ check }: { check: CheckResult }) {
                     {/*i18n:启动指向*/}
                     {/*i18n:Loader 就位*/}
                     {/*i18n:包根文件*/}
-                    {/*i18n:保留目录*/}
+                    {/*i18n:report.kept-dirs=保留内容*/}
                     <span className="shrink-0 text-[11px] leading-[16px] font-semibold text-text-1">
                         {tSource(check.label)}
                     </span>

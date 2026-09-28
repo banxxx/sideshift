@@ -11,6 +11,8 @@ import type {
     ModSearchQuery,
     ModVersionEntry,
     PackDirNode,
+    PackDirTree,
+    PackFileNode,
     PackManifest,
     PlanMod,
     SideFlag,
@@ -314,36 +316,77 @@ export const mockDefaultOptions: ConversionOptions = {
     extraJvmArgs: "",
     outputOverride: "",
     keepDirs: [],
+    keepFiles: [],
     installLoaderLocally: true,
 };
 
-/** 包内可保留目录树（客户端保留目录弹窗演示数据；fileCount 递归统计） */
-export const mockPackDirs: PackDirNode[] = [
-    {
-        name: "config",
-        fileCount: 138,
-        children: [
-            { name: "jei", fileCount: 6, children: [] },
-            { name: "sombreros", fileCount: 84, children: [] },
-        ],
-    },
-    {
-        name: "kubejs",
-        fileCount: 24,
-        children: [
-            { name: "client_scripts", fileCount: 5, children: [] },
-            { name: "server_scripts", fileCount: 8, children: [] },
-        ],
-    },
-    { name: "shaderpacks", fileCount: 6, children: [] },
-    {
-        name: "maps",
-        fileCount: 3,
-        children: [
-            { name: "journey_map", fileCount: 2, children: [] },
-        ],
-    },
-];
+/** 演示树里的文件条目：`path` 就是 `keepFiles` 的取值（从包根起算、小写、已剥 overrides 壳） */
+const packFile = (path: string, sizeBytes: number): PackFileNode => ({
+    name: path.split("/").pop() ?? path,
+    sizeBytes,
+    path,
+});
+
+/** 演示树里的目录节点：fileCount / sizeBytes 由「直属文件 + 子目录」递归聚合，
+ *  口径与后端 `list_pack_dirs` 一致——手填对不上的话，弹窗那行读数当场露馅 */
+const packDir = (
+    name: string,
+    files: PackFileNode[] = [],
+    children: PackDirNode[] = []
+): PackDirNode => ({
+    name,
+    files,
+    children,
+    fileCount: files.length + children.reduce((s, d) => s + d.fileCount, 0),
+    sizeBytes:
+        files.reduce((s, f) => s + f.sizeBytes, 0) + children.reduce((s, d) => s + d.sizeBytes, 0),
+});
+
+/** 包内可保留内容树（客户端保留目录弹窗演示数据） */
+export const mockPackTree: PackDirTree = {
+    dirs: [
+        packDir(
+            "config",
+            [
+                packFile("config/sodium-options.json", 3_182),
+                packFile("config/fabricloader.properties", 240),
+            ],
+            [
+                packDir("jei", [
+                    packFile("config/jei/jei.ini", 2_048),
+                    packFile("config/jei/item-blacklist.txt", 96),
+                ]),
+                packDir("sombreros", [
+                    packFile("config/sombreros/sombreros.toml", 1_180),
+                    packFile("config/sombreros/player_models.toml", 320),
+                ]),
+            ]
+        ),
+        packDir(
+            "kubejs",
+            [packFile("kubejs/startup.js", 1_420)],
+            [
+                packDir("client_scripts", [
+                    packFile("kubejs/client_scripts/tooltips.js", 2_880),
+                    packFile("kubejs/client_scripts/ping.js", 640),
+                ]),
+                packDir("server_scripts", [
+                    packFile("kubejs/server_scripts/recipes.js", 7_120),
+                ]),
+            ]
+        ),
+        packDir("shaderpacks", [
+            packFile("shaderpacks/complementary-reimagined.zip", 5_242_880),
+            packFile("shaderpacks/bsl.zip", 3_774_873),
+        ]),
+        packDir("maps", [], [packDir("journey_map", [packFile("maps/journey_map/map.dat", 18_208)])]),
+    ],
+    files: [
+        packFile("options.txt", 4_190),
+        packFile("optionsof.txt", 1_204),
+        packFile("servers.dat", 512),
+    ],
+};
 
 /**
  * 鸣谢名单的浏览器 dev 夹具。真名单在远端（Rust: `core::ack`），这份只保证纯浏览器

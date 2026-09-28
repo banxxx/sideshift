@@ -122,15 +122,20 @@ pub async fn estimate(
         }
     }
 
-    // 3.2 keepDirs 资源（与构建同一前缀匹配）
+    // 3.2 keepDirs / keepFiles 资源（与构建同一口径：目录走 `{path}/` 前缀，根级文件走精确全等）
     for f in &parsed.extra_files {
         let rel = f.path.replace('\\', "/");
         let logical = parser::logical_rel(&rel);
         let lower = logical.to_lowercase();
+        // 与构建 3.2 同一道硬闸：不在保留范围内的顶层目录不计进预估
+        if parser::keep_denied(&lower) {
+            continue;
+        }
         let keep = options
             .keep_dirs
             .iter()
-            .any(|d| lower.starts_with(&format!("{}/", d.to_lowercase())));
+            .any(|d| lower.starts_with(&format!("{}/", d.to_lowercase())))
+            || options.keep_files.iter().any(|p| **p == lower);
         if !keep {
             continue;
         }

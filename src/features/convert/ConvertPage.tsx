@@ -34,7 +34,7 @@ import type {
     ModDisposition,
     ModSearchResult,
     ModVersionEntry,
-    PackDirNode,
+    PackDirTree,
     PackManifest,
     PlanMod,
 } from "@/lib/types";
@@ -90,8 +90,8 @@ export function ConvertPage() {
     const [starting, setStarting] = useState(false);
     /** 全局设置：摘要卡展示默认输出目录（本次覆写为空时回落它） */
     const [settings, setSettings] = useState<AppSettings | null>(null);
-    /** 包内可保留目录树（目录勾选弹窗数据源） */
-    const [packDirs, setPackDirs] = useState<PackDirNode[]>([]);
+    /** 包内可保留内容（目录树 + 根级散文件），勾选弹窗与卡片行内读数的数据源 */
+    const [packTree, setPackTree] = useState<PackDirTree>({ dirs: [], files: [] });
     const [dirModalOpen, setDirModalOpen] = useState(false);
     /** 自动分类进行中：离线层是同步返回，在线层补全后走 classified 事件再刷一次。
      *  带草稿回来时它=「离开时联网还没跑完」，下面那条挂载 effect 会据此跟后端复核一次。 */
@@ -153,9 +153,9 @@ export function ConvertPage() {
     useEffect(() => {
         if (!manifest) return;
         void Promise.all([api.defaultOptions(manifest), api.listPackDirs()]).then(
-            ([o, nodes]) => {
-                setPackDirs(nodes);
-                // 保留目录不预勾任何条目：勾哪个保哪个是这张卡的语义（原先那批根级预勾已撤）
+            ([o, tree]) => {
+                setPackTree(tree);
+                // 保留条目不预勾任何一项：勾哪个保哪个是这张卡的语义（原先那批根级预勾已撤）
                 setOptions({
                     ...o,
                     mcVersion: manifest.mcVersion,
@@ -359,8 +359,8 @@ export function ConvertPage() {
                     `${m.id}|${m.disposition}|${m.sizeBytes ?? 0}|${m.needsDownload ? 1 : 0}|${m.localPath ?? ""}|${m.pinned?.url ?? ""}|${m.pinned?.fileId ?? ""}`
             )
             .join(";");
-        return `${rows}#${options?.mcVersion}#${options?.loaderVersion}#${(options?.keepDirs ?? []).join(",")}`;
-    }, [activeMods, options?.mcVersion, options?.loaderVersion, options?.keepDirs]);
+        return `${rows}#${options?.mcVersion}#${options?.loaderVersion}#${(options?.keepDirs ?? []).join(",")}#${(options?.keepFiles ?? []).join(",")}`;
+    }, [activeMods, options?.mcVersion, options?.loaderVersion, options?.keepDirs, options?.keepFiles]);
 
     // 350ms 防抖向后端要真实预估；加载器版本未定时不发请求（构建期必失败，数字无意义）。
     // 分类中也不发：那批行马上会被联网结论改写，拿回来的数字是过期结论；
@@ -425,9 +425,12 @@ export function ConvertPage() {
         notify(t("convert.manual-edits", "已清空手动修改，方案回到自动分类结果"), "success");
     };
 
-    /** 卡片行内移除单个保留目录（批量增删走 DirPickerModal 应用回写） */
+    /** 卡片行内移除单个保留条目（批量增删走 DirPickerModal 应用回写）；目录与根级文件是两个字段，各删各的 */
     const removeDir = (name: string) => {
         patch({ keepDirs: (options?.keepDirs ?? []).filter((d) => d !== name) });
+    };
+    const removeFile = (name: string) => {
+        patch({ keepFiles: (options?.keepFiles ?? []).filter((f) => f !== name) });
     };
 
     /** 新增行勾选 = 是否生效：取消勾选只停用（行保留在清单），自动补齐项停用另给全局警告 */
@@ -683,7 +686,7 @@ export function ConvertPage() {
             </motion.div>
 
             <div className="flex items-start gap-5">
-                {/* 左列：运行环境 / 模组方案 / 保留目录 / 启动参数 / 服务端设置（卡间 16） */}
+                {/* 左列：运行环境 / 模组方案 / 保留内容 / 启动参数 / 服务端设置（卡间 16） */}
                 <div className="flex min-w-0 flex-1 flex-col gap-4">
                     <motion.div variants={CARD_RISE} className="min-w-0">
                         <RuntimeEnvCard
@@ -736,9 +739,10 @@ export function ConvertPage() {
                     <motion.div variants={CARD_RISE} className="min-w-0">
                         <KeepDirsCard
                             options={options}
-                            packDirs={packDirs}
+                            packTree={packTree}
                             onPick={() => setDirModalOpen(true)}
                             onRemove={removeDir}
+                            onRemoveFile={removeFile}
                         />
                     </motion.div>
 
@@ -850,9 +854,10 @@ export function ConvertPage() {
             <DirPickerModal
                 open={dirModalOpen}
                 onClose={() => setDirModalOpen(false)}
-                dirs={packDirs}
+                tree={packTree}
                 selected={options?.keepDirs ?? []}
-                onApply={(next) => patch({ keepDirs: next })}
+                selectedFiles={options?.keepFiles ?? []}
+                onApply={(dirs, files) => patch({ keepDirs: dirs, keepFiles: files })}
             />
         </motion.div>
     );

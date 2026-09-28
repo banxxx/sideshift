@@ -102,7 +102,7 @@ function collect() {
             for (const line of m[1].split("\n")) {
                 const row = line.trim();
                 if (!row) continue;
-                const [, key, zh] = /^([\w.\-]+)\s*[=＝]\s*(.+)$/.exec(row)?.slice(1) ?? [];
+                const [key, zh] = /^([\w.\-]+)\s*[=＝]\s*(.+)$/.exec(row)?.slice(1) ?? [];
                 const text = (zh ?? row).trim();
                 if (!CJK.test(text)) continue;
                 const hit = dynamics.get(text) ?? { files: new Set(), key: undefined };

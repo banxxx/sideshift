@@ -9,9 +9,6 @@ export interface Snapshot {
     valid: boolean;
     /** SideShift.exe 在不在跑。在跑就不让开始卸载，也不去强杀它 */
     running: boolean;
-    /** 数据目录下那两个「卸载不碰」的位置；目录本来就不存在时为 null，界面不显示空路径 */
-    outputDir: string | null;
-    cacheDir: string | null;
 }
 
 export interface Progress {
@@ -19,10 +16,11 @@ export interface Progress {
     done: boolean;
 }
 
-/** 卸载完之后界面要复述的两条路径：Rust 侧实测「还在」的那两个目录，不是开屏那份快照 */
+/** 卸载完之后界面要复述的两条路径：Rust 侧卸载之后**实测还在**的那些，不是开屏那份快照。
+ *  `cacheLeftover` 只在「该删而没删掉」时才有值（正常卸载它是 null） */
 export interface Outcome {
     outputDir: string | null;
-    cacheDir: string | null;
+    cacheLeftover: string | null;
 }
 
 export const getSnapshot = () => invoke<Snapshot>("get_snapshot");

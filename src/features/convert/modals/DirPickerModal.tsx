@@ -1,7 +1,8 @@
-/* ================= 目录勾选弹窗（客户端保留目录卡「添加目录」） ================= */
-import { ChevronRight, Folder, MinusSquare, SquareCheck } from "lucide-react";
+/* ============ 保留内容勾选弹窗（客户端保留内容卡「添加内容」） ============ */
+import { ChevronRight, FileText, Folder, MinusSquare, SquareCheck } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
-import type { PackDirNode } from "@/lib/types";
+import type { PackDirNode, PackDirTree, PackFileNode } from "@/lib/types";
+import { formatSize } from "@/lib/format";
 import { Btn, CheckBox, ListRow, ModalShell, SearchBox, HOVER_FILL } from "@/components/ui";
 import { useT } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
@@ -36,28 +37,43 @@ function withPrecedence(v: string[], key: string): string[] {
 }
 
 /**
- * 层级目录浏览器：双击进入子目录（含子目录的行），单击勾选（延迟判定避让双击）；
+ * 这一行能不能钻进去：有子目录、或有直属文件都算。
+ * 只看 `children` 的那版判据把「只装文件的目录」（`shaderpacks/` 这类）整个挡在门外——
+ * 弹窗里那条目录行因此永远给不出它凭什么被勾选的依据，而这正是这张卡要展示的简略信息。
+ */
+const canEnter = (n: PackDirNode) => n.children.length > 0 || n.files.length > 0;
+
+/**
+ * 层级浏览器：双击进入下一层（有子目录或有直属文件的行），单击勾选（延迟判定避让双击）；
  * 头部返回键 + 面包屑回退层级。父子互斥在勾选当场解决（见 `withPrecedence`），
  * 「应用」再兜一次遗留的父子对（见 `pruneRedundant`）后整体回写。
+ *
+ * 文件按所在层级分两档：**根级散文件**（`options.txt` 这类）没有父目录，勾与不勾就是它自己的事，
+ * 所以可勾；**目录里的文件**只是展示（让你判断该勾哪个目录），勾选仍然只有「勾整个目录」这一条路——
+ * 否则清单里会同时出现父目录和它的某个文件，前后端都得为「谁说了算」再加一套规则。
  */
 export function DirPickerModal({
     open,
     onClose,
-    dirs,
+    tree,
     selected,
+    selectedFiles,
     onApply,
 }: {
     open: boolean;
     onClose: () => void;
-    dirs: PackDirNode[];
+    tree: PackDirTree;
     selected: string[];
-    onApply: (next: string[]) => void;
+    /** 已勾的根级散文件（逻辑相对路径，与 `tree.files[].path` 同源） */
+    selectedFiles: string[];
+    onApply: (dirs: string[], files: string[]) => void;
 }) {
     const t = useT();
     const [query, setQuery] = useState("");
     /** 当前浏览层级（从包根起算的目录段，[]=根） */
     const [path, setPath] = useState<string[]>([]);
     const [draft, setDraft] = useState<string[]>(selected);
+    const [draftFiles, setDraftFiles] = useState<string[]>(selectedFiles);
     /** 单击延迟句柄：等待第二次点击判定是否双击，避免双击=勾选两次 */
     const clickTimer = useRef<number | null>(null);
 
@@ -65,31 +81,39 @@ export function DirPickerModal({
     useEffect(() => {
         if (open) {
             setDraft(selected.slice());
+            setDraftFiles(selectedFiles.slice());
             setPath([]);
             setQuery("");
         }
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [open]);
 
-    const levelNodes = useMemo(() => {
-        let nodes = dirs;
-        for (const seg of path) nodes = nodes.find((n) => n.name === seg)?.children ?? [];
-        return nodes;
-    }, [dirs, path]);
+    /** 当前层的目录与直属文件；根级的文件来自 `tree.files`，深层的来自所在节点 */
+    const level = useMemo(() => {
+        let dirs = tree.dirs;
+        let files = tree.files;
+        for (const seg of path) {
+            const n = dirs.find((d) => d.name === seg);
+            dirs = n?.children ?? [];
+            files = n?.files ?? [];
+        }
+        return { dirs, files };
+    }, [tree, path]);
 
-    const filtered = useMemo(
-        () =>
-            levelNodes.filter(
-                (n) => !query || n.name.toLowerCase().includes(query.toLowerCase())
-            ),
-        [levelNodes, query]
-    );
+    const atRoot = path.length === 0;
+    const match = (name: string) => !query || name.toLowerCase().includes(query.toLowerCase());
+    const filtered = level.dirs.filter((n) => match(n.name));
+    const filteredFiles = level.files.filter((f) => match(f.name));
 
     /** 行/勾选的唯一键 = 包根起算的相对路径 */
     const keyOf = (n: PackDirNode) => [...path, n.name].join("/");
 
     const toggle = (key: string) =>
         setDraft((v) => (v.includes(key) ? v.filter((x) => x !== key) : withPrecedence(v, key)));
+
+    /** 根级文件没有父子关系，勾与不勾就是数组加减 */
+    const toggleFile = (key: string) =>
+        setDraftFiles((v) => (v.includes(key) ? v.filter((x) => x !== key) : [...v, key]));
 
     const clearTimer = () => {
         if (clickTimer.current !== null) {
@@ -105,7 +129,7 @@ export function DirPickerModal({
             return;
         }
         const key = keyOf(n);
-        if (n.children.length === 0) {
+        if (!canEnter(n)) {
             toggle(key);
             return;
         }
@@ -117,18 +141,30 @@ export function DirPickerModal({
 
     const handleRowDblClick = (n: PackDirNode) => {
         clearTimer();
-        if (n.children.length > 0) setPath((p) => [...p, n.name]);
+        if (canEnter(n)) setPath((p) => [...p, n.name]);
     };
 
-    // 全选/全取消（切换式）作用于当前层「可见」（含搜索过滤）的目录
-    const levelKeys = filtered.map(keyOf);
-    const allOn = levelKeys.length > 0 && levelKeys.every((k) => draft.includes(k));
-    const toggleAll = () =>
-        setDraft((v) =>
-            allOn
-                ? v.filter((k) => !levelKeys.includes(k))
-                : levelKeys.reduce(withPrecedence, v)
-        );
+    // 全选/全取消（切换式）作用于当前层「可见」（含搜索过滤）的条目；
+    // 只有根层把散文件算进来——深层的文件是只读展示，勾了也不会进清单
+    const levelDirKeys = filtered.map(keyOf);
+    const levelFileKeys = atRoot ? filteredFiles.map((f) => f.path) : [];
+    const levelKeys = [...levelDirKeys, ...levelFileKeys];
+    const allOn =
+        levelKeys.length > 0 &&
+        levelKeys.every((k) => draft.includes(k) || draftFiles.includes(k));
+    const toggleAll = () => {
+        if (allOn) {
+            setDraft((v) => v.filter((k) => !levelKeys.includes(k)));
+            setDraftFiles((v) => v.filter((k) => !levelKeys.includes(k)));
+            return;
+        }
+        // 两条腿各归各的草稿：文件路径混进 keepDirs 会被当成目录前缀匹配，整个包都留下来了
+        setDraft((v) => levelDirKeys.reduce(withPrecedence, v));
+        setDraftFiles((v) => [...new Set([...v, ...levelFileKeys])]);
+    };
+
+    const totalCount = countDirNodes(tree.dirs) + tree.files.length;
+    const checkedCount = draft.length + draftFiles.length;
 
     return (
         <ModalShell
@@ -138,9 +174,16 @@ export function DirPickerModal({
             back={path.length > 0 ? () => setPath((p) => p.slice(0, -1)) : undefined}
             width={560}
             height={440}
-            title={t("convert-modals.choose-folders", "选择保留目录 · {{count}} 个目录", { count: countDirNodes(dirs) })}
-            sub={t("convert-modals.double-click-opens", "双击进入子目录 · 单击勾选 · 勾选后随包复制到服务端")}
-            footerNote={t("convert-modals.count-folder", "{{count}} 个目录将随包保留", { count: draft.length })}
+            title={t("convert-modals.choose-folders", "选择保留内容 · {{count}} 个目录", { count: countDirNodes(tree.dirs) })}
+            sub={
+                atRoot
+                    ? t("convert-modals.double-click-opens", "双击进入子目录 · 单击勾选 · 根级散文件可单独保留")
+                    : t("convert-modals.nested-files-readonly", "目录内的文件仅作展示 · 勾选目录即整体保留（含子目录）")
+            }
+            footerNote={t("convert-modals.count-folder", "已勾 {{dirs}} 个目录 · {{files}} 个文件，将随包保留", {
+                dirs: draft.length,
+                files: draftFiles.length,
+            })}
             footerActions={
                 <>
                     <Btn size="sm" className="px-3.5" onClick={onClose}>
@@ -152,7 +195,7 @@ export function DirPickerModal({
                         className="px-3.5 font-semibold"
                         onClick={() => {
                             clearTimer();
-                            onApply(pruneRedundant(draft));
+                            onApply(pruneRedundant(draft), [...draftFiles].sort());
                             onClose();
                         }}
                     >
@@ -195,7 +238,7 @@ export function DirPickerModal({
             <SearchBox
                 value={query}
                 onChange={setQuery}
-                placeholder={t("convert-modals.search-folder", "搜索当前层目录名称…")}
+                placeholder={t("convert-modals.search-folder", "搜索当前层名称…")}
                 className="border border-stroke"
             />
 
@@ -214,8 +257,8 @@ export function DirPickerModal({
                 </button>
                 <span className="font-mono text-[11px] leading-[16px] font-normal tabular-nums text-text-3">
                     {t("convert-modals.checked-total", "已勾选 {{checked}} / {{total}}", {
-                        checked: draft.length,
-                        total: countDirNodes(dirs),
+                        checked: checkedCount,
+                        total: totalCount,
                     })}
                 </span>
             </div>
@@ -228,7 +271,13 @@ export function DirPickerModal({
                         <ListRow
                             key={key}
                             className="cursor-pointer hover:bg-surface-2"
-                            title={n.children.length > 0 ? t("convert-modals.double-click", "双击进入子目录") : undefined}
+                            title={
+                                !canEnter(n)
+                                    ? undefined
+                                    : n.children.length > 0
+                                      ? t("convert-modals.double-click", "双击进入子目录")
+                                      : t("convert-modals.double-click-files", "双击查看文件")
+                            }
                             onClick={() => handleRowClick(n)}
                             onDoubleClick={() => handleRowDblClick(n)}
                         >
@@ -252,16 +301,90 @@ export function DirPickerModal({
                                 )}
                             >
                                 {t("convert.count-file", "{{count}} 文件", { count: n.fileCount })}
+                                {" · "}
+                                {formatSize(n.sizeBytes)}
                             </span>
                         </ListRow>
                     );
                 })}
-                {filtered.length === 0 && (
-                    <span className="py-8 text-center text-[11px] text-text-3">
-                        {dirs.length === 0 ? t("convert-modals.folders-keep", "包内没有可保留的目录") : t("convert-modals.matching-folders", "无匹配目录")}
+                {/* 文件排在同层目录之后；根级可勾，深层只读（灰化 + 禁光标，见 `READONLY_MARK` 同口径） */}
+                {filteredFiles.map((f) =>
+                    atRoot ? (
+                        <FileRow
+                            key={f.path}
+                            file={f}
+                            checked={draftFiles.includes(f.path)}
+                            onToggle={() => toggleFile(f.path)}
+                        />
+                    ) : (
+                        <FileRow key={f.path} file={f} readOnly />
+                    )
+                )}
+                {filtered.length === 0 && filteredFiles.length === 0 && (
+                    <span className="py-8 text-center text-[11px] leading-[16px] text-text-3">
+                        {tree.dirs.length === 0 && tree.files.length === 0
+                            ? t("convert-modals.folders-keep", "包内没有可保留的目录与文件")
+                            : t("convert-modals.matching-folders", "无匹配条目")}
                     </span>
                 )}
             </div>
         </ModalShell>
+    );
+}
+
+/**
+ * 文件行：与目录行同一条版（勾选壳 + 图标 + 名 + 右侧读数），差的只是「能不能点」。
+ * `readOnly` 那档整行不挂 hover 底色、光标禁掉，勾选框用 `CheckBox` 的只读态。
+ */
+function FileRow({
+    file,
+    checked,
+    readOnly,
+    onToggle,
+}: {
+    file: PackFileNode;
+    checked?: boolean;
+    readOnly?: boolean;
+    onToggle?: () => void;
+}) {
+    const t = useT();
+    const on = !!checked;
+    return (
+        <ListRow
+            className={cn(readOnly ? "cursor-not-allowed" : "cursor-pointer hover:bg-surface-2")}
+            onClick={readOnly ? undefined : onToggle}
+        >
+            <span onClick={(e) => e.stopPropagation()}>
+                <CheckBox checked={on} readOnly={readOnly} onChange={() => onToggle?.()} />
+            </span>
+            <FileText
+                className={cn(
+                    "size-4 shrink-0",
+                    readOnly ? "text-text-3 opacity-70" : on ? "text-accent" : "text-text-3"
+                )}
+            />
+            <span
+                className={cn(
+                    "min-w-0 flex-1 truncate font-mono text-[12px] leading-[18px] font-medium",
+                    readOnly ? "text-text-2" : "text-text-1"
+                )}
+            >
+                {file.name}
+            </span>
+            <span
+                className={cn(
+                    "shrink-0 font-mono text-[11px] leading-[16px] tabular-nums",
+                    readOnly ? "text-text-3 opacity-70" : on ? "text-emerald" : "text-text-3"
+                )}
+            >
+                {/* 0 = 后端没测到大小（index 与 zip 条目都缺 fileSize）；只读那档不显示数字，
+                    免得把「这条不能勾」误读成「这条是空的」 */}
+                {readOnly
+                    ? t("convert-modals.file-view-only", "仅展示")
+                    : file.sizeBytes
+                      ? formatSize(file.sizeBytes)
+                      : t("convert.size-unknown", "大小未知")}
+            </span>
+        </ListRow>
     );
 }

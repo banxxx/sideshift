@@ -346,19 +346,28 @@ async fn run_pipeline(app: AppHandle, state: Arc<AppState>, id: String) {
         }
     }
 
-    // 3.2 用户在「客户端保留目录」卡勾选的目录（逻辑相对路径，任意层级），命中前缀的文件原样带入；
+    // 3.2 用户在「客户端保留目录」卡勾选的目录与根级文件（逻辑相对路径，任意层级），命中条目原样带入；
     // overrides/ 壳前缀剥离后匹配与落位（CF 格式内容映射到服务端根）
-    let mut kept_by_dir: HashMap<String, usize> = HashMap::new();
+    // 目录走 `{path}/` 前缀、文件走精确全等：两类勾选分成 keep_dirs / keep_files 两个字段，
+    // 这里就不必拿字符串猜"这条到底是不是文件"（根级文件没有父目录，天然不与目录档冲突）
+    let mut kept_entries: HashMap<String, usize> = HashMap::new();
     for f in &parsed.extra_files {
         let rel = f.path.replace('\\', "/");
         let logical = parser::logical_rel(&rel);
         let lower = logical.to_lowercase();
+        // 保留范围硬闸：`mods` / `resourcepacks` 整棵不带（与保留树同一判据，见 parser::KEEP_SKIP_TOP）。
+        // 前端勾不出这两条，但它们可能来自旧草稿或手改的存档——只靠显示层挡等于给这里留后门
+        if parser::keep_denied(&lower) {
+            continue;
+        }
         let hit = options
             .keep_dirs
             .iter()
-            .find(|d| lower.starts_with(&format!("{}/", d.to_lowercase())));
-        let Some(dir) = hit else { continue };
-        *kept_by_dir.entry(dir.clone()).or_default() += 1;
+            .find(|d| lower.starts_with(&format!("{}/", d.to_lowercase())))
+            .or_else(|| options.keep_files.iter().find(|p| **p == lower))
+            .cloned();
+        let Some(entry) = hit else { continue };
+        *kept_entries.entry(entry).or_default() += 1;
         let dest = staging.join(logical);
         let fetch = if f.in_pack || f.url.is_empty() {
             Fetch::ZipEntry {
@@ -377,7 +386,7 @@ async fn run_pipeline(app: AppHandle, state: Arc<AppState>, id: String) {
         });
     }
     for dir in &options.keep_dirs {
-        let n = kept_by_dir.get(dir).copied().unwrap_or(0);
+        let n = kept_entries.get(dir).copied().unwrap_or(0);
         push_log(
             &app,
             &state,
@@ -387,6 +396,20 @@ async fn run_pipeline(app: AppHandle, state: Arc<AppState>, id: String) {
             &format!(
                 "保留目录 {dir} · {n} 个文件{}",
                 if n == 0 { "（包内无此目录，已跳过）" } else { "" }
+            ),
+        );
+    }
+    for file in &options.keep_files {
+        let n = kept_entries.get(file).copied().unwrap_or(0);
+        push_log(
+            &app,
+            &state,
+            &id,
+            PipelineStage::Downloader,
+            if n == 0 { LogLevel::Warn } else { LogLevel::Info },
+            &format!(
+                "保留文件 {file}{}",
+                if n == 0 { "（包内已无此文件，已跳过）" } else { "" }
             ),
         );
     }
@@ -751,6 +774,7 @@ async fn run_pipeline(app: AppHandle, state: Arc<AppState>, id: String) {
         &review,
         parsed.manifest.loader,
         &options.keep_dirs,
+        &options.keep_files,
         options.agree_eula,
         installed.is_some(),
     );
@@ -851,7 +875,7 @@ async fn run_pipeline(app: AppHandle, state: Arc<AppState>, id: String) {
                 installed: build_installed.is_some(),
                 generated: &built.generated,
                 expected_mod_files: &expected_mod_files,
-                expected_keep_dirs: &kept_by_dir,
+                expected_kept: &kept_entries,
             })
         } else {
             Vec::new()
@@ -1397,6 +1421,7 @@ fn build_readme(
     review: &[String],
     loader: LoaderKind,
     keep_dirs: &[String],
+    keep_files: &[String],
     agree_eula: bool,
     installed: bool,
 ) -> Vec<String> {
@@ -1423,8 +1448,9 @@ fn build_readme(
     if !agree_eula {
         lines.push("eula.txt 已生成但为 eula=false：首次启动前请改为 eula=true，否则服务端会拒绝启动".to_string());
     }
-    if !keep_dirs.is_empty() {
-        lines.push(format!("已随包保留客户端目录：{}", keep_dirs.join("、")));
+    let kept: Vec<&str> = keep_dirs.iter().chain(keep_files.iter()).map(|s| s.as_str()).collect();
+    if !kept.is_empty() {
+        lines.push(format!("已随包保留客户端目录/文件：{}", kept.join("、")));
     }
     if !review.is_empty() {
         lines.push(format!("待人工确认模组：{}", review.join("、")));

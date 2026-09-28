@@ -22,7 +22,7 @@ export interface AppSettings {
     cacheDir: string;
     /** 剔除客户端专属资源（光影/小地图/键鼠等） */
     stripClientOnly: boolean;
-    /** 构建后自检：打包完成时对产物离线对账（模组/jar/依赖/启动件/包根/保留目录），不起服务端进程 */
+    /** 构建后自检：打包完成时对产物离线对账（模组/jar/依赖/启动件/包根/保留内容），不起服务端进程 */
     verifyAfterBuild: boolean;
     /** 下载源：版本表与加载器 jar 的镜像档位（模组文件与端信息反查都在 Modrinth，这一档管不到它们） */
     downloadSource: DownloadSource;

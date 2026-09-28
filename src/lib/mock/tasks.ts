@@ -511,15 +511,16 @@ export function mockReport(taskId: string): ConversionReport | undefined {
                   }),
               },
               { id: "root", label: "包根文件", status: "pass", ...msg("包根 {{count}} 个文件全部就位", { count: generated.length }) },
-              ...(o.keepDirs.length
+              ...(o.keepDirs.length || o.keepFiles.length
                   ? [
                         {
                             id: "keep",
-                            label: "保留目录",
+                            label: "保留内容",
                             status: "pass" as const,
                             ...msg("{{dirs}} 个目录 · {{files}} 个文件已带入", {
                                 dirs: o.keepDirs.length,
-                                files: 12,
+                                // 演示数据：目录按每条 12 个文件计，根级文件一条一个
+                                files: o.keepDirs.length * 12 + o.keepFiles.length,
                             }),
                         },
                     ]

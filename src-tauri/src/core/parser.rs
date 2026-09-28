@@ -60,6 +60,17 @@ pub fn logical_rel(rel: &str) -> &str {
     rel
 }
 
+/// 保留范围之外的顶层目录：`mods` 由「模组方案」卡逐条决策，`resourcepacks` 是客户端资源、
+/// 服务端不消费。**显示层（保留树）与取件层（构建 3.2 / 预估 3.2）共用这一条判据**——
+/// 只在显示层挡等于给数据层留后门：旧草稿或手改存档里的一条 `mods` 就能把模组整棵复制进服务端。
+pub const KEEP_SKIP_TOP: &[&str] = &["mods", "resourcepacks"];
+
+/// 逻辑相对路径的首段是否落在保留范围外。勾选键与包内条目路径都走它，两侧口径不会漂。
+pub fn keep_denied(logical_rel: &str) -> bool {
+    let lower = logical_rel.to_lowercase();
+    KEEP_SKIP_TOP.contains(&lower.split('/').next().unwrap_or(""))
+}
+
 /// 解析入口：按扩展名分派；任何失败都返回 parsed:false 的 manifest（不 panic）
 pub fn parse(path: &Path) -> ParsedPack {
     let file_name = path
@@ -627,5 +638,18 @@ mod tests {
             .find(|f| f.path == "kubejs/client_scripts/demo.js")
             .expect("未声明的 zip 文件应被补收");
         assert!(undeclared.url.is_empty()); // 构建时走 ZipEntry 直接从源包抽取
+    }
+
+    /// 保留范围硬闸：勾选键与条目路径同一条判据，大小写与 overrides 壳都不能放过
+    #[test]
+    fn keep_gate_covers_top_dirs_on_both_sides() {
+        assert!(keep_denied("mods"));
+        assert!(keep_denied("MODS/Some.jar"));
+        assert!(keep_denied("resourcepacks/x.zip"));
+        assert!(keep_denied(logical_rel("overrides/ResourcePacks/x.zip")));
+        assert!(!keep_denied("config"));
+        assert!(!keep_denied("config/jei/jei.ini"));
+        // 首段判据：`mods_x` 不是 mods（裸 zip 收录侧的 `starts_with("mods")` 是同族问题，未收进这里）
+        assert!(!keep_denied("mods_backup/a.cfg"));
     }
 }

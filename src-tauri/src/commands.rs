@@ -189,45 +189,85 @@ pub fn default_options(state: S<'_>, manifest: PackManifest) -> ConversionOption
     }
 }
 
-/// 最近一次解析包内可保留的目录树（mods 之外；文件数递归统计，同层按名升序）
+/// 最近一次解析包内可保留的内容：目录树 + 根级散文件
+/// （mods 之外；文件数与体积递归统计、直属文件另存一层，同层按名升序）
 #[tauri::command]
-pub fn list_pack_dirs(state: S<'_>) -> Vec<PackDirNode> {
+pub fn list_pack_dirs(state: S<'_>) -> PackDirTree {
     let Some(p) = last_parsed(&state) else {
-        return Vec::new();
+        return PackDirTree::default();
     };
 
     #[derive(Default)]
     struct Node {
         counts: u32,
+        bytes: u64,
+        files: Vec<PackFileNode>,
         children: std::collections::BTreeMap<String, Node>,
     }
-    fn build(name: &str, node: &Node) -> PackDirNode {
+    fn build(name: &str, node: &mut Node) -> PackDirNode {
+        let mut files = std::mem::take(&mut node.files);
+        // extra_files 的顺序不是名字序，这一层要自己排（子目录靠 BTreeMap 天然有序）
+        files.sort_by(|a, b| a.name.cmp(&b.name));
         PackDirNode {
             name: name.to_string(),
             file_count: node.counts,
-            // BTreeMap 迭代天然按 key 升序
-            children: node.children.iter().map(|(n, c)| build(n, c)).collect(),
+            size_bytes: node.bytes,
+            files,
+            children: node
+                .children
+                .iter_mut()
+                .map(|(n, c)| build(n, c))
+                .collect(),
         }
     }
 
     let mut root = Node::default();
-    // mods 由「模组方案」卡管理；resourcepacks 是客户端资源，服务端不消费——都不进保留树；
+    // mods 由「模组方案」卡管理；resourcepacks 是客户端资源，服务端不消费——都不进保留树
+    // （判据单源在 parser::KEEP_SKIP_TOP，取件与预估两条腿共用）；
     // overrides/ 壳前缀剥离后再入树（CF 格式内容映射到包根，与拷贝口径一致）
-    const TREE_SKIP_TOP: &[&str] = &["mods", "resourcepacks"];
+    let mut root_files: Vec<PackFileNode> = Vec::new();
     for f in &p.extra_files {
-        let rel = parser::logical_rel(&f.path.replace('\\', "/")).to_lowercase();
-        let segs: Vec<&str> = rel.split('/').collect();
-        // 末段是文件名；根文件（pack.png 等）无目录段，不入树
-        if segs.len() < 2 || TREE_SKIP_TOP.contains(&segs[0]) {
+        let rel = f.path.replace('\\', "/");
+        let logical = parser::logical_rel(&rel);
+        let lower = logical.to_lowercase();
+        let segs: Vec<&str> = lower.split('/').collect();
+        if parser::keep_denied(&lower) {
+            continue;
+        }
+        let dirs = &segs[..segs.len() - 1];
+        let node = PackFileNode {
+            name: segs[segs.len() - 1].to_string(),
+            size_bytes: f.size_bytes,
+            // 与目录节点同一口径：树上的路径一律小写逻辑路径，勾选值直接拿它当 key
+            path: lower.clone(),
+        };
+        if dirs.is_empty() {
+            // 根级散文件（`options.txt`、`servers.dat` 这类）：旧代码里 `segs.len() < 2` 一句
+            // 直接丢弃 ⇒ 既看不到也勾不走。现在单列成 files，勾选走精确全等（见 keep_files）
+            root_files.push(node);
             continue;
         }
         let mut cur = &mut root;
-        for seg in &segs[..segs.len() - 1] {
-            cur.counts += 1;
+        // 先下行再计数：这条文件要算进**每一层祖先目录**，包括它自己所在的那一层。
+        // 旧写法是「计数→下行」，最深那层永远拿不到自己的直属文件 ⇒ 一条只放在 `config` 根上的
+        // 文件让 config 报 0，而弹窗现在会把直属文件列出来，读数与列表当场对不上
+        for seg in dirs {
             cur = cur.children.entry((*seg).to_string()).or_default();
+            cur.counts += 1;
+            cur.bytes += f.size_bytes;
         }
+        cur.files.push(node);
     }
-    root.children.iter().map(|(n, c)| build(n, c)).collect()
+    root_files.sort_by(|a, b| a.name.cmp(&b.name));
+
+    PackDirTree {
+        dirs: root
+            .children
+            .iter_mut()
+            .map(|(n, c)| build(n, c))
+            .collect(),
+        files: root_files,
+    }
 }
 
 /* ---------------- 转换方案 ---------------- */

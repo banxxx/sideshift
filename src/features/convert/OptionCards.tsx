@@ -1,19 +1,20 @@
 /**
- * Convert 左列的配置卡族：运行环境 / 客户端保留目录 / 启动参数 / 服务端设置。
+ * Convert 左列的配置卡族：运行环境 / 客户端保留内容 / 启动参数 / 服务端设置。
  * 四张卡都只是 options 的分段视图，统一走 patch 覆写单包参数（离开页面即丢弃）。
  * 卡高与行距按设计稿定死，改动前先确认不会让卡片随内容抖动。
  */
-import { AlertTriangle, Folder, Info, Plus, X } from "lucide-react";
-import { useEffect, useState } from "react";
+import { AlertTriangle, FileText, Folder, Info, Plus, X, type LucideIcon } from "lucide-react";
+import { useEffect, useState, type ReactNode } from "react";
 import { AnimatePresence, motion } from "motion/react";
 import type {
     ConversionOptions,
     JavaInstall,
     JavaProbe,
-    PackDirNode,
+    PackDirTree,
     PackManifest,
 } from "@/lib/types";
 import { SERVER_PORT_RANGE, inRange } from "@/lib/types";
+import { formatSize } from "@/lib/format";
 import { RISE } from "@/lib/springs";
 import {
     Btn,
@@ -250,100 +251,150 @@ export function RuntimeEnvCard({
     );
 }
 
-/* ---------------- 客户端保留目录：默认空态，「添加目录」弹窗主动勾选 ---------------- */
+/* ---------------- 客户端保留内容：默认空态，「添加内容」弹窗主动勾选 ---------------- */
 
 export function KeepDirsCard({
     options,
-    packDirs,
+    packTree,
     parsed = true,
     onPick,
     onRemove,
+    onRemoveFile,
     readOnly,
 }: {
     options: ConversionOptions | null;
-    /** 目录勾选弹窗数据源（含递归文件数） */
-    packDirs: PackDirNode[];
+    /** 勾选弹窗数据源 + 行内读数（目录带递归文件数与体积，根级文件带自身大小） */
+    packTree: PackDirTree;
     /** 源包是否还能解析出目录树：回看旧任务时源文件可能已被移走，那时不能谎称「包内没有资源」 */
     parsed?: boolean;
     /** 只读视图（任务详情「方案」签）不传写入口：静态渲染下没有触发路径 */
     onPick?: () => void;
-    /** 卡片行内移除单个保留目录（批量增删走 DirPickerModal 应用回写） */
+    /** 卡片行内移除单个保留目录（根级文件走 onRemoveFile；批量增删走 DirPickerModal 应用回写） */
     onRemove?: (path: string) => void;
+    /** 行内移除单个根级保留文件 */
+    onRemoveFile?: (path: string) => void;
     readOnly?: boolean;
 }) {
     const keepDirs = options?.keepDirs ?? [];
+    const keepFiles = options?.keepFiles ?? [];
     const t = useT();
+    const isEmpty = keepDirs.length === 0 && keepFiles.length === 0;
+    const nothingToPick = packTree.dirs.length === 0 && packTree.files.length === 0;
+
+    /** 清单里的一行（目录与根级文件同一条版）：图标 + 名字 + 右侧读数 + 移除键。
+     *  建在组件体内、由两类条目各调一次：`AnimatePresence mode="popLayout"` 要直接拿到运动节点，
+     *  外面再套一层自定义组件它就量不到 DOM；放在这里也顺带让 `t` 只调一次（勾满几十条时不至于反复取句柄） */
+    const row = (
+        key: string,
+        name: string,
+        Icon: LucideIcon,
+        reading: ReactNode,
+        readingMuted: boolean,
+        onRemove?: () => void
+    ) => (
+        <motion.div
+            key={key}
+            layout
+            initial={{ opacity: 0, y: -6 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: -6 }}
+            transition={RISE}
+            className={`flex min-w-0 items-center gap-2.5 rounded-lg px-1.5 py-1 hover:bg-surface-2 ${HOVER_FILL}`}
+        >
+            <Icon className="size-3.5 shrink-0 text-accent" />
+            <span className="min-w-0 flex-1 truncate font-mono text-[12px] leading-[18px] font-medium text-text-1">
+                {name}
+            </span>
+            {reading !== null && (
+                <span
+                    className={cn(
+                        "shrink-0 font-mono text-[11px] leading-[16px] tabular-nums",
+                        readingMuted ? "text-text-3" : "text-emerald"
+                    )}
+                >
+                    {reading}
+                </span>
+            )}
+            {onRemove && (
+                <button
+                    onClick={onRemove}
+                    aria-label={t("convert.remove", "移除")}
+                    className={cn(
+                        TIP_TRIGGER,
+                        "size-6 rounded-md text-text-3",
+                        "flex shrink-0 items-center justify-center",
+                        "hover:bg-redstone-dim hover:text-redstone",
+                        HOVER_FILL
+                    )}
+                >
+                    <X className="size-3" />
+                    <Tip label={t("convert.remove", "移除")} />
+                </button>
+            )}
+        </motion.div>
+    );
+
     return (
         <Panel gap={14}>
             <PanelHead
-                title={t("convert.kept-client", "客户端保留目录")}
+                title={t("convert.kept-client", "客户端保留内容")}
                 right={
                     readOnly ? undefined : (
                         <Btn
                             size="sm"
                             icon={Plus}
-                            disabled={packDirs.length === 0}
+                            disabled={nothingToPick}
                             onClick={() => onPick?.()}
                         >
-                            {t("convert.add-folder", "添加目录")}
+                            {t("convert.add-folder", "添加内容")}
                         </Btn>
                     )
                 }
             />
             {/* 空态↔清单是同位换批（不是长出来），走 Swap：旧层当场让位、新层立刻占位，
                 两层的进出场节拍由 Swap 自己带 */}
-            <Swap swapKey={keepDirs.length === 0 ? "empty" : "list"}>
-                {keepDirs.length === 0 ? (
+            <Swap swapKey={isEmpty ? "empty" : "list"}>
+                {isEmpty ? (
                     <p className="w-full py-3 text-center text-[11px] text-text-3">
                         {readOnly
-                            ? t("convert.task-kept", "该任务未保留任何包内目录")
-                            : packDirs.length === 0
+                            ? t("convert.task-kept", "该任务未保留任何包内目录与文件")
+                            : nothingToPick
                               ? parsed
-                                    ? t("convert.keepable-folders", "包内未检测到可保留的目录（mods 之外没有资源文件）")
-                                    : t("convert.source-pack-missing", "源包已不在原位置 · 该任务未保留任何包内目录")
-                              : t("convert.folder-selected", "尚未选择目录 · 点击上方「添加目录」从包内勾选")}
+                                    ? t("convert.keepable-folders", "包内未检测到可保留的内容（mods 之外没有资源文件）")
+                                    : t("convert.source-pack-missing", "源包已不在原位置 · 该任务未保留任何包内目录与文件")
+                              : t("convert.folder-selected", "尚未选择 · 点击上方「添加内容」从包内勾选")}
                     </p>
                 ) : (
                     <div className="flex w-full flex-col gap-1">
                         <AnimatePresence initial={false} mode="popLayout">
                             {keepDirs.map((p) => {
-                                const dir = findDirNode(packDirs, p);
-                                return (
-                                    <motion.div
-                                        key={p}
-                                        layout
-                                        initial={{ opacity: 0, y: -6 }}
-                                        animate={{ opacity: 1, y: 0 }}
-                                        exit={{ opacity: 0, y: -6 }}
-                                        transition={RISE}
-                                        className={`flex min-w-0 items-center gap-2.5 rounded-lg px-1.5 py-1 hover:bg-surface-2 ${HOVER_FILL}`}
-                                    >
-                                        <Folder className="size-3.5 shrink-0 text-accent" />
-                                        <span className="min-w-0 flex-1 truncate font-mono text-[12px] leading-[18px] font-medium text-text-1">
-                                            {p}/
-                                        </span>
-                                        {dir && (
-                                            <span className="shrink-0 font-mono text-[11px] leading-[16px] tabular-nums text-emerald">
-                                                {t("convert.count-file", "{{count}} 文件", { count: dir.fileCount })}
-                                            </span>
-                                        )}
-                                        {!readOnly && (
-                                            <button
-                                                onClick={() => onRemove?.(p)}
-                                                aria-label={t("convert.remove", "移除")}
-                                                className={cn(
-                                                    TIP_TRIGGER,
-                                                    "size-6 rounded-md text-text-3",
-                                                    "flex shrink-0 items-center justify-center",
-                                                    "hover:bg-redstone-dim hover:text-redstone",
-                                                    HOVER_FILL
-                                                )}
-                                            >
-                                                <X className="size-3" />
-                                                <Tip label={t("convert.remove", "移除")} />
-                                            </button>
-                                        )}
-                                    </motion.div>
+                                const dir = findDirNode(packTree.dirs, p);
+                                return row(
+                                    p,
+                                    `${p}/`,
+                                    Folder,
+                                    // 源包不在原位置时读不到聚合数：宁缺勿假
+                                    dir ? (
+                                        <>
+                                            {t("convert.count-file", "{{count}} 文件", { count: dir.fileCount })}
+                                            {" · "}
+                                            {formatSize(dir.sizeBytes)}
+                                        </>
+                                    ) : null,
+                                    false,
+                                    readOnly ? undefined : () => onRemove?.(p)
+                                );
+                            })}
+                            {keepFiles.map((p) => {
+                                const f = packTree.files.find((x) => x.path === p);
+                                return row(
+                                    p,
+                                    f?.name ?? p.split("/").pop() ?? p,
+                                    FileText,
+                                    // 源包不在时读不到大小：留一行灰字而不是编一个 0 B
+                                    f ? formatSize(f.sizeBytes) : t("convert.size-unknown", "大小未知"),
+                                    !f,
+                                    readOnly ? undefined : () => onRemoveFile?.(p)
                                 );
                             })}
                         </AnimatePresence>
@@ -352,10 +403,10 @@ export function KeepDirsCard({
             </Swap>
             <NoteRow icon={Info}>
                 {readOnly
-                    ? t("convert.folders-copied", "这些目录当时按原层级从源包复制进了服务端包（支持子目录）")
+                    ? t("convert.folders-copied", "这些目录与文件当时按原层级从源包复制进了服务端包（支持子目录）")
                     : parsed
-                      ? t("convert.selected-folders", "勾选的目录按原层级从源包复制到服务端（支持子目录）")
-                      : t("convert.source-pack", "源包已不在原位置 · 无法浏览包内目录，已有条目仍可移除")}
+                      ? t("convert.selected-folders", "勾选的目录整体复制，根级散文件按单个文件复制（文件列表在弹窗里只读展示）")
+                      : t("convert.source-pack", "源包已不在原位置 · 无法浏览包内内容，已有条目仍可移除")}
             </NoteRow>
         </Panel>
     );

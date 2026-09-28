@@ -225,7 +225,8 @@ function ConfirmBody({
             </p>
             {!busy && (
                 <p className="mt-1 text-[11px] leading-[16px] text-text-3">
-                    数据目录里的<b className="font-medium text-text-2">转换产物与整合包缓存不会被删除</b>。
+                    数据目录里的<b className="font-medium text-text-2">转换产物不会被删除</b>
+                    ，整合包缓存会一并清除。
                 </p>
             )}
 
@@ -275,7 +276,7 @@ function ConfirmBody({
     );
 }
 
-/** 已完成：把"什么留在机器上"报出来，路径取卸载之后实测还存在的那两个 */
+/** 已完成：把"什么留在机器上"报出来。缓存本来该跟着走，所以它出现在这里＝没删掉，给个「打开」让人自己清 */
 function DoneBody({
     outcome,
     onOpen,
@@ -286,9 +287,11 @@ function DoneBody({
     error: string | null;
 }) {
     const rows = [
-        { label: "转换产物", value: outcome.outputDir, open: true },
-        { label: "整合包缓存", value: outcome.cacheDir, open: false },
-    ].filter((r) => r.value !== null);
+        { label: "转换产物", value: outcome.outputDir },
+        { label: "缓存未清除", value: outcome.cacheLeftover },
+    ]
+        .filter((r) => r.value !== null)
+        .map((r) => ({ ...r, open: true }));
 
     return (
         <div className="page-in flex flex-col">

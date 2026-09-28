@@ -78,7 +78,7 @@ export const SOURCE_KEYS: Readonly<Record<string, string>> = {
     "依赖闭合": "report.deps-intact",
     "无 jar 需校验": "report.jars-check",
     "jar 可用": "report.jars-valid",
-    "保留目录": "report.kept-dirs",
+    "保留内容": "report.kept-dirs",
     "启动指向": "report.launch-target",
     "未确定启动目标，需自行指定": "report.launch-target-yet",
     "本机装好了加载器，但依赖树里没有它的本体（并树这一步没跑成）": "report.loader-installed",

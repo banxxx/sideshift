@@ -2,7 +2,7 @@
 import type {
     ConversionOptions,
     JavaProbe,
-    PackDirNode,
+    PackDirTree,
     PackManifest,
     VersionOption,
 } from "@/lib/types";
@@ -113,8 +113,8 @@ export async function defaultOptions(
     );
 }
 
-/** 包内可保留目录树（Rust: list_pack_dirs） */
-export async function listPackDirs(): Promise<PackDirNode[]> {
-    if (!isTauri) return mock.mockPackDirs;
-    return invokeOrMock("list_pack_dirs", undefined, () => mock.mockPackDirs);
+/** 包内可保留内容树：目录 + 根级散文件（Rust: list_pack_dirs） */
+export async function listPackDirs(): Promise<PackDirTree> {
+    if (!isTauri) return mock.mockPackTree;
+    return invokeOrMock("list_pack_dirs", undefined, () => mock.mockPackTree);
 }

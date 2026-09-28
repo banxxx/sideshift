@@ -40,11 +40,11 @@ pub struct Input<'a> {
     pub generated: &'a [String],
     /// 取件前登记的 mods/ 应到文件名：下载静默少一条，只有对账才看得出来
     pub expected_mod_files: &'a [String],
-    /// 保留目录 → 计划带入的文件数
-    pub expected_keep_dirs: &'a HashMap<String, usize>,
+    /// 保留条目（目录名或根级文件路径）→ 计划带入的文件数
+    pub expected_kept: &'a HashMap<String, usize>,
 }
 
-/// 七项自检（未勾选保留目录时不出最后一项：空对空的「通过」是噪音）
+/// 七项自检（未勾选保留目录/文件时不出最后一项：空对空的「通过」是噪音）
 pub fn run(input: &Input) -> Vec<CheckResult> {
     let mut out = vec![
         fetch_check(input),
@@ -54,7 +54,7 @@ pub fn run(input: &Input) -> Vec<CheckResult> {
         loader_check(input),
         root_check(input),
     ];
-    if !input.options.keep_dirs.is_empty() {
+    if !input.options.keep_dirs.is_empty() || !input.options.keep_files.is_empty() {
         out.push(keep_check(input));
     }
     out
@@ -349,13 +349,15 @@ fn root_check(input: &Input) -> CheckResult {
     )
 }
 
-/// 7 · 保留目录：勾选的目录按取件阶段的账本再数一遍实际落位数
+/// 7 · 保留目录/文件：勾选的条目按取件阶段的账本再数一遍实际落位数
 fn keep_check(input: &Input) -> CheckResult {
     let mut short: Vec<String> = Vec::new();
     let mut total = 0usize;
+    let mut kept_dirs = 0usize;
     // 按勾选顺序走（不是 HashMap 迭代序）：报告要能稳定复现
     for dir in &input.options.keep_dirs {
-        let Some(expect) = input.expected_keep_dirs.get(dir) else { continue };
+        let Some(expect) = input.expected_kept.get(dir) else { continue };
+        kept_dirs += 1;
         total += expect;
         let have = files_under(&input.staging.join(dir)).len();
         if have < *expect {
@@ -363,12 +365,23 @@ fn keep_check(input: &Input) -> CheckResult {
             short.push(format!("{dir}（应 {expect} · 实 {have}）"));
         }
     }
+    // 根级散文件：一条就对应一个落位文件。`staging.join(path)` 指向的是文件，
+    // 走 `files_under` 会数出 0（它只列目录里的条目），所以这里单独判存在性
+    for file in &input.options.keep_files {
+        let Some(expect) = input.expected_kept.get(file) else { continue };
+        total += expect;
+        let have = usize::from(input.staging.join(file).is_file());
+        if have < *expect {
+            short.push(format!("{file}（应 {expect} · 实 {have}）"));
+        }
+    }
     let status = if short.is_empty() { CheckStatus::Pass } else { CheckStatus::Warn };
+    // 「个文件」把根级那几条也算进去了（它本来就是带入的文件），「个目录」只数目录档，两句都成立
     let detail = msg!(
         "{{dirs}} 个目录 · {{files}} 个文件已带入",
-        {"dirs": input.expected_keep_dirs.len(), "files": total}
+        {"dirs": kept_dirs, "files": total}
     );
-    check("keep", "保留目录", status, detail, short)
+    check("keep", "保留内容", status, detail, short)
 }
 
 /* ---------------- 文件系统小工具 ---------------- */
@@ -473,7 +486,7 @@ mod tests {
             installed: false,
             generated: &generated,
             expected_mod_files: &expected,
-            expected_keep_dirs: &HashMap::new(),
+            expected_kept: &HashMap::new(),
         })
     }
 
@@ -540,13 +553,19 @@ mod tests {
     fn keep_dir_shortfall_warns_and_absent_dir_is_skipped() {
         let dir = temp_staging(
             &[("mods/keep.jar", b""), ("config/a.toml", b"x".as_slice())],
-            &[("fabric-server.jar", b"PK\x03\x04".as_slice())],
+            &[
+                ("fabric-server.jar", b"PK\x03\x04".as_slice()),
+                ("options.txt", b"y".as_slice()),
+            ],
         );
         let mut expected = HashMap::new();
         // config 计划 3 个只落 1 个 → 提示；kubejs 计划 0 个 → 不进账本，也不报错
+        // 根级文件同一条路：options.txt 落到 → 通过；servers.dat 计划 0 个 → 不进账本
         expected.insert("config".to_string(), 3usize);
+        expected.insert("options.txt".to_string(), 1usize);
         let opts = ConversionOptions {
             keep_dirs: vec!["config".into(), "kubejs".into()],
+            keep_files: vec!["options.txt".into(), "servers.dat".into()],
             ..Default::default()
         };
         let generated = vec!["start.bat".to_string()];
@@ -560,10 +579,12 @@ mod tests {
             installed: false,
             generated: &generated,
             expected_mod_files: &["keep.jar".to_string()],
-            expected_keep_dirs: &expected,
+            expected_kept: &expected,
         });
         assert_eq!(status_of(&checks, "keep"), CheckStatus::Warn);
         let keep = checks.iter().find(|c| c.id == "keep").unwrap();
+        // 只有 config 那一条缺口；根级文件一条不缺 ⇒ 不该混进 items
+        assert_eq!(keep.items.len(), 1, "{:?}", keep.items);
         assert!(keep.items[0].starts_with("config"), "{}", keep.items[0]);
         assert_eq!(status_of(&checks, "files"), CheckStatus::Pass);
         let _ = fs::remove_dir_all(&dir);
@@ -621,7 +642,7 @@ mod tests {
                 installed: true,
                 generated: &generated,
                 expected_mod_files: &expected,
-                expected_keep_dirs: &HashMap::new(),
+                expected_kept: &HashMap::new(),
             })
             .into_iter()
             .find(|c| c.id == id)
@@ -666,7 +687,7 @@ mod tests {
             installed: true,
             generated: &generated,
             expected_mod_files: &expected,
-            expected_keep_dirs: &HashMap::new(),
+            expected_kept: &HashMap::new(),
         });
         assert_eq!(status_of(&checks, "start"), CheckStatus::Pass);
         assert_eq!(status_of(&checks, "loader"), CheckStatus::Pass);
@@ -696,7 +717,7 @@ mod tests {
             installed: false,
             generated: &generated,
             expected_mod_files: &expected,
-            expected_keep_dirs: &HashMap::new(),
+            expected_kept: &HashMap::new(),
         });
         assert_eq!(status_of(&checks, "start"), CheckStatus::Pass);
         let loader = checks.iter().find(|c| c.id == "loader").unwrap();

@@ -22,12 +22,34 @@ export interface PackManifest {
     sourcePath?: string;
 }
 
-/** 包内可保留目录树节点（客户端保留目录弹窗数据源） */
+/** 保留树里的一个文件条目；`keepFiles` 的取值 = 它的 `path`（逻辑相对路径，已小写） */
+export interface PackFileNode {
+    /** 文件名（不含路径），如 options.txt */
+    name: string;
+    /** 原始字节；0 = 未知（index 没给 fileSize 且 zip 条目也没测到） */
+    sizeBytes: number;
+    /** 从包根起算的逻辑相对路径（已剥 overrides 壳），如 kubejs/client_scripts/keep.js */
+    path: string;
+}
+
+/** 包内可保留内容的整棵树（客户端保留内容弹窗数据源） */
+export interface PackDirTree {
+    /** 目录树（mods 与 resourcepacks 已在建树时跳过） */
+    dirs: PackDirNode[];
+    /** 根级散文件（`options.txt`、`servers.dat` 这类）：不带目录段，可以单独勾 */
+    files: PackFileNode[];
+}
+
+/** 包内可保留目录树节点；keepDirs 条目 = 从包根起算的相对路径（如 kubejs/client_scripts） */
 export interface PackDirNode {
     /** 目录名（不含路径），如 client_scripts */
     name: string;
     /** 该目录内文件数（递归，含子目录） */
     fileCount: number;
+    /** 该目录内字节数（递归，含子目录）——勾选前得知道要带多大过去 */
+    sizeBytes: number;
+    /** **直属**文件（不含子目录里的），按名升序；只有展示，勾选仍走目录前缀 */
+    files: PackFileNode[];
     /** 子目录节点，同层按名升序 */
     children: PackDirNode[];
 }

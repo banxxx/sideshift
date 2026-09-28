@@ -19,7 +19,7 @@ import { loaderLabel, reviewFirst } from "@/lib/format";
 import type {
     ConversionOptions,
     ModDisposition,
-    PackDirNode,
+    PackDirTree,
     PackManifest,
     PlanMod,
 } from "@/lib/types";
@@ -39,7 +39,7 @@ export function PlanReviewView({
     const t = useT();
     const [options, setOptions] = useState<ConversionOptions | null>(null);
     const [plan, setPlan] = useState<PlanMod[]>([]);
-    const [packDirs, setPackDirs] = useState<PackDirNode[]>([]);
+    const [packTree, setPackTree] = useState<PackDirTree>({ dirs: [], files: [] });
     /** 源包是否还解析得动：文件被移走时不能说「包内没有资源」，只能说不读得到 */
     const [packParsed, setPackParsed] = useState(false);
     const [tab, setTab] = useState<ModDisposition>("remove");
@@ -55,11 +55,11 @@ export function PlanReviewView({
         void api
             .ensureParsed(manifest)
             .then((ok) => {
-                if (!alive) return [];
+                if (!alive) return { dirs: [], files: [] };
                 setPackParsed(ok);
-                return ok ? api.listPackDirs() : [];
+                return ok ? api.listPackDirs() : { dirs: [], files: [] };
             })
-            .then((nodes) => alive && setPackDirs(nodes));
+            .then((tree) => alive && setPackTree(tree));
         return () => {
             alive = false;
         };
@@ -150,7 +150,7 @@ export function PlanReviewView({
             />
             <KeepDirsCard
                 options={options}
-                packDirs={packDirs}
+                packTree={packTree}
                 parsed={packParsed}
                 readOnly
             />

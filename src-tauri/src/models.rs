@@ -296,6 +296,12 @@ pub struct ConversionOptions {
     /* ---- 客户端保留目录 ---- */
     /// 需要原样带入服务端的包内目录：相对路径（任意层级，如 kubejs/client_scripts），按前缀匹配
     pub keep_dirs: Vec<String>,
+    /// 需要原样带入服务端的包内**根级散文件**（如 `options.txt`）：按逻辑相对路径**精确全等**匹配。
+    ///
+    /// 与 `keep_dirs` 分成两个字段而不是混进一个字符串数组：拷贝/预估那两处要按条目形状分叉
+    /// （目录走 `{path}/` 前缀、文件走全等），混在一起前端就得猜"这条到底是不是文件"。
+    /// 根级文件天然没有父目录，所以这一档不会触发「勾子项要不要收掉父级」那条冲突。
+    pub keep_files: Vec<String>,
     /* ---- 本机安装 Loader ---- */
     /// 本次转换是否在本机跑 loader installer（Forge / NeoForge 产物「上传即跑」的前提）。
     ///
@@ -327,9 +333,32 @@ impl Default for ConversionOptions {
             extra_jvm_args: String::new(),
             output_override: String::new(),
             keep_dirs: Vec::new(),
+            keep_files: Vec::new(),
             install_loader_locally: true,
         }
     }
+}
+
+/// 保留树里的一个文件条目（弹窗展示用；`keep_files` 的取值 = 它的逻辑相对路径）
+#[derive(Serialize, Deserialize, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct PackFileNode {
+    /// 文件名（不含路径），如 options.txt
+    pub name: String,
+    /// 原始字节；0 = 未知（index 没给 fileSize 且 zip 条目也没测到）
+    pub size_bytes: u64,
+    /// 从包根起算的逻辑相对路径（已剥 overrides 壳），如 kubejs/client_scripts/keep.js
+    pub path: String,
+}
+
+/// 包内可保留内容的整棵树（客户端保留目录弹窗数据源）
+#[derive(Serialize, Deserialize, Clone, Debug, Default)]
+#[serde(rename_all = "camelCase", default)]
+pub struct PackDirTree {
+    /// 目录树（mods 与 resourcepacks 已在建树时跳过）
+    pub dirs: Vec<PackDirNode>,
+    /// 根级散文件（`options.txt`、`servers.dat` 这类）：不带目录段，过去连展示位都没有
+    pub files: Vec<PackFileNode>,
 }
 
 /// 包内可保留目录树节点（客户端保留目录弹窗数据源）；
@@ -341,6 +370,10 @@ pub struct PackDirNode {
     pub name: String,
     /// 该目录内文件数（递归，含子目录）
     pub file_count: u32,
+    /// 该目录内字节数（递归，含子目录；用于「勾之前先看多大」）
+    pub size_bytes: u64,
+    /// **直属**文件（不含子目录里的），按名升序；只读展示用，勾选仍走目录前缀
+    pub files: Vec<PackFileNode>,
     /// 子目录节点，名字升序
     pub children: Vec<PackDirNode>,
 }
