@@ -54,6 +54,7 @@ import {
 import { DirPickerModal, OnlineAddModal, PlanListModal, type ListFocus } from "@/features/convert/modals";
 import { LaunchArgsCard, KeepDirsCard, RuntimeEnvCard, ServerSettingsCard } from "./OptionCards";
 import { ModPlanCard } from "./ModPlanCard";
+import { TemplateMiniCard } from "@/features/templates/TemplateMiniCard";
 import { CARD_RISE, PAGE_RISE } from "@/lib/page-motion";
 import { PREVIEW_ROWS, toOption } from "./constants";
 
@@ -834,8 +835,9 @@ export function ConvertPage() {
                     </motion.div>
                 </div>
 
-                {/* 右栏：转换摘要（280px 固定宽） */}
+                {/* 右栏：配置模板小卡 + 转换摘要（280px 固定宽） */}
                 <motion.aside variants={CARD_RISE} className="flex w-[280px] shrink-0 flex-col gap-4">
+                    <TemplateMiniCard options={options} patch={patch} />
                     <Panel gap={14}>
                         <PanelHead title={t("convert.conversion-summary", "转换摘要")} />
                         <CountRow label={t("convert.client-mods", "剔除客户端模组")} count={counts.remove} tone="gold" />

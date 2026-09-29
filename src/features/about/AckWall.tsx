@@ -1,48 +1,51 @@
 /**
- * 密排卡名单：卡片入场、悬浮 3D、点击波浪涟漪，以及「收起 ≤4 行 / 展开看全部」那一档高度。
+ * 密排卡名单：卡片入场、悬浮 3D、点击让头像水平自转展示，以及「收起 ≤4 行 / 展开看全部」那一档高度。
  *
  * 五条硬约束都是撞出来的，改之前先读完：
  *
  *  1. **两条 transform 不能落在同一个元素上**。入场（motion 写 y/opacity）跑在外层 cell，
  *     倾斜（本组件用 inline style 写 transform）跑在内层按钮上：WAAPI 的 `fill:"both"` 会永久
  *     压住后来的 inline transform，两条挤一个节点上就是互相顶掉（样片里入场动画把视差压死过）。
- *     涟漪因此走 `scale` / `borderColor` 这两个**独立属性**——也正因为如此它**不能用 `filter`
- *     做"亮一下"**：`filter` 创建层叠上下文，会把 `preserve-3d` 当场压平。
+ *     按下的那一下因此走 `scale` 这个**独立属性**——也正因为如此它**不能用 `filter` 做"亮一下"**：
+ *     `filter` 创建层叠上下文，会把 `preserve-3d` 当场压平。
  *     同一件事在退场那一拍也成立：跟随器与那条 WAAPI 复位都写 `transform` ⇒ 退场期由 `releasing`
  *     挡住跟随器，它只负责把头带回正对。
  *  2. **`will-change` 与子层的 `translateZ` 只在悬停那一张上挂**。常驻的话 N 张卡 = N 个合成层
  *     与 N 个 3D 上下文，撞「日志量级=前端性能预算」那条。
- *  3. **涟漪的半径参照是「看得见的这一档」（壳），不是整条名单**：默认只露 4 行时按全高算半径，
- *     会把大半时间花在屏外那些行上。半径取"被点这张 → 可见区四角"的最远一个，点哪儿都扫得到全片。
+ *  3. **自转是单卡的事**：它只改被点那一张的头像 yaw，不量邻居、不算半径 ⇒ 这一档没有 per-card
+ *     `getBoundingClientRect` + `getComputedStyle` 那一圈同步布局测量（涟漪当初非要有半径不可）。
+ *     换来的是另一条时序约束：**头像的 yaw 有两个写者**（指针偏转与自转），必须单边持有——
+ *     闸门、曲线、收尾回位全收在 `McHead.spin` 里，别在调用点再写一份偏转。
+ *     卡片自己的倾斜照旧跟着指针：两条线各走各的，所以转的时候手还在动是设计，不是漏。
  *  4. 档高**量真 DOM**（按每张卡的 `offsetTop` 分行），不写公式：昵称字号跟卡尺走，
  *     公式算出来的行高会在换度量时差几像素。transform 不参与 offsetTop/offsetHeight，
- *     所以入场正演着也量得准。被裁住的行不演涟漪（名单很长时省掉一屏无效动画）。
+ *     所以入场正演着也量得准。
  *  5. **可悬浮区靠一张透明壳外扩，上限是行距的一半**（`HIT = GAP / 2`）。卡的盒子只有 45px 高，
  *     行间空档 8px ⇒ 扫过去必断；倾斜又把卡的**可见**边缘推出布局盒 1~2px ⇒ 那 2px 上 hover
  *     来回闪。外扩走的是 padding 盒（命中判定包含祖先），所以它不改布局、不改档高、不改行数。
  *     再多给就是两张卡的命中区重叠，重叠区归后来者 ⇒ 读成「点在 A 上亮的却是 B」。
- *     命中区管：描边染色、投影、高光跟指针、3D 倾斜、"点它＝波源"；**不管**涟漪波及谁（那由半径说了算）。
+ *     命中区管：描边染色、投影、高光跟指针、3D 倾斜、"点它＝这一张的头像自转"。
  *
  * `overflow:hidden` 是常驻的，这里**不能**照公共 `Collapse` 的「演完撤 overflow」办：
- * 收起档的内容本来就比壳高，撤了当场漏出后面几行。所以卡片的 3D 翘起、投影与涟漪的放大
+ * 收起档的内容本来就比壳高，撤了当场漏出后面几行。所以卡片的 3D 翘起、投影与按下那一缩
  * 全都被这个裁切框管着，留白见下面 `PAD`。
  *
  * 留白为什么挂在壳上而不是挤卡片的位：**裁切发生在 padding 盒**，于是「壳加 padding + 等值
  * 负 margin」两件事同时成立——裁切框外扩一圈，卡片的落位却一分不动（仍与「鸣谢名单」标题左对齐）。
  * 三个数各自的上限不一样，别图省事写成一个：
- *  - 左右 20：涟漪最大放大 18%，昵称顶到 150px 上限的那张卡（宽 ≈210）每边要吃 19px；
- *    再往外就顶到 Panel 的边框内缘（卡片的 p-5），圆角区会跟着被裁。
+ *  - 左右 20：吃它的是悬浮投影的侧边与倾斜那 1~2px 溢出（原先的大头是涟漪放大 18% 要 19px，
+ *    随涟漪一起没了）。这个数**先留着不动**：收紧它是改档高的观感，而它现在只是富余不是错。
  *  - 上 10：正好等于 Panel 的 gap，再大就往标题那行压过去了。
  *  - 下 `GAP - HIT`：底部能给的档高 = 行距 − 下一行命中壳往上顶的那截。留白一旦 ≥ 行距就会
  *    漏出下一行卡的顶边（硬边线，比裁掉的软投影显眼得多）；而命中壳是透明的，它在可见档里
  *    还会**抢指针**（点上去没反应、被裁掉的卡反而被点亮）。所以这里只给 4px，配套地把
- *    悬浮投影的尾巴也收进 4px（见 `SHADOW`）——**「不漏下一行」与「投影不裁」两头，只能要一头。**
+ *    悬浮投影的尾巴也收进 4px（见 `--ack-shadow`）——**「不漏下一行」与「投影不裁」两头，只能要一头。**
  */
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { PointerEvent as ReactPointerEvent } from "react";
 import { motion, useReducedMotion } from "motion/react";
 import { Btn, FoldBtn, Panel, PanelHead } from "@/components/ui";
-import { COLLAPSE, waveFrontDurMs, waveFrontTime, WAVE_FRONT_EASE } from "@/lib/page-motion";
+import { COLLAPSE, WAVE_FRONT_EASE } from "@/lib/page-motion";
 import { RISE } from "@/lib/springs";
 import { useT } from "@/lib/i18n";
 import type { AckPerson } from "@/lib/types";
@@ -101,19 +104,12 @@ const TILT = { deg: 12, lift: 14, pd: 800, zAvatar: 16, zName: 16, backMs: 620 }
 const FOLLOW = { tau: 70, backTau: 120 };
 /** 贴上目标的判据（归一化偏移的一格）：到了就撤 rAF，静止悬停不留常驻循环 */
 const SETTLED = 0.004;
-/** 涟漪：强度（%）、波速（px/s，口径＝等速主体段的速度）、单张脉冲时长（ms）、点击锁（ms） */
-const RIP = { strength: 18, speed: 250, durMs: 520, lockMs: 420 };
+/** 按下：行程（%）、时长（ms）与两条曲线（下压走 `down`，回弹那一段单独给 `up`）。
+ *  自转本体在 `McHead`（那里是「两个写者」的收口处），这里只留卡片自己那一下。
+ *  数值取自 `.scratch/ack-spin-proto.html` 的快照：`press=3` */
+const PRESS = { drop: 3, durMs: 300, down: "cubic-bezier(.16,1,.3,1)", up: "cubic-bezier(.2,.8,.2,1)" };
 /** 入场：行程（px）与错峰（秒），错峰总时长压进 budget（否则 240 人要排到 2 秒开外） */
 const ENTRY = { rise: 8, stagger: 0.008, budget: 0.7 };
-
-/** `#rrggbb` → rgba：涟漪的描边透明度按距离连续变，而 `--accent` 在 App.css 里就是十六进制字面量 */
-function withAlpha(hex: string, a: number): string {
-    const h = hex.replace("#", "").trim();
-    const full = h.length === 3 ? h.split("").map((c) => c + c).join("") : h;
-    const n = parseInt(full, 16);
-    if (Number.isNaN(n)) return hex;
-    return `rgba(${(n >> 16) & 255},${(n >> 8) & 255},${n & 255},${a})`;
-}
 
 /**
  * 卡的 React key：名字，同名时再挂「这是第几次出现」。
@@ -151,7 +147,7 @@ function AckCard({
     const btn = useRef<HTMLButtonElement>(null);
     /** 3D 头像的偏转走命令式：指针每动一次不该让整张卡重挂（见 `McHead` 的注释） */
     const head = useRef<McHeadHandle>(null);
-    /** 正在演的那条复位动画：只握它自己的句柄——`getAnimations()` 一把 cancel 会把正扫过来的涟漪掐断 */
+    /** 正在演的那条复位动画：只握它自己的句柄——`getAnimations()` 一把 cancel 会把正演着的按下掐断 */
     const back = useRef<Animation | null>(null);
     const reduced = useReducedMotion();
     /** 记的是「哪一份 URL 失败了」而不是一个 bool：版本对账换了头像地址时它自己失效，
@@ -271,6 +267,24 @@ function AckCard({
         [track]
     );
 
+    /**
+     * 点这一下：卡片按下一缩（`scale`，独立属性 ⇒ 不顶掉跟随器那条 transform），头像的自转交给
+     * `McHead`——只有它知道这一枚头到底建起来没有，闸门也在那儿。
+     *
+     * 按下**无条件**演（哪怕这台机器转不了、哪怕这个人根本没有 3D 那一层）：它就是"这一下点到了"
+     * 的全部回执，样片里静态图档那一档剩的也正是这一下。reduced-motion 两条都不演。
+     */
+    const fire = useCallback(() => {
+        if (reduced) return;
+        const el = btn.current;
+        if (el)
+            el.animate(
+                [{ scale: "1" }, { scale: String(1 - PRESS.drop / 100), offset: 0.24, easing: PRESS.up }, { scale: "1" }],
+                { duration: PRESS.durMs, easing: PRESS.down }
+            );
+        head.current?.spin();
+    }, [reduced]);
+
     // 卸载（切页、换语言重挂）时收掉没演完的那条动画与那条还没贴上目标的 rAF
     useEffect(
         () => () => {
@@ -327,11 +341,11 @@ function AckCard({
             <button
                 ref={btn}
                 type="button"
-                data-ack-card
                 aria-label={p.name}
                 onPointerEnter={enter}
                 onPointerMove={track}
                 onPointerLeave={leave}
+                onClick={fire}
                 className={cn(
                     "group/ack relative flex min-w-0 items-center rounded-md border border-stroke bg-surface",
                     "transition-[border-color,box-shadow] duration-200 hover:border-(--ack-border)",
@@ -388,12 +402,9 @@ export function AckWall({
     onRetry: () => void;
 }) {
     const t = useT();
-    const shell = useRef<HTMLDivElement>(null);
     const wall = useRef<HTMLDivElement>(null);
-    const gate = useRef(0);
     const [open, setOpen] = useState(false);
     const [band, setBand] = useState({ closed: 0, full: 0, expandable: false });
-    const reduced = useReducedMotion();
 
     /** 行按 `offsetTop` 分组：同一次换行落下来的卡 top 相同，差 1px 以内算测量误差 */
     const measure = useCallback(() => {
@@ -438,71 +449,6 @@ export function AckWall({
         if (!band.expandable && open) setOpen(false);
     }, [band.expandable, open]);
 
-    /** 点一张卡 ⇒ 波前从那儿扫过可见的这一档，半径内的邻居各脉冲一下 */
-    const ripple = useCallback(
-        (src: HTMLElement) => {
-            if (reduced || !RIP.strength || !wall.current) return;
-            // 前沿触发的闸门：锁窗口内的后续点击直接吞掉。不排队——两波浪叠在同一批卡上互相盖，
-            // 比"这一下没反应"更难读
-            const now = performance.now();
-            if (now < gate.current) return;
-            gate.current = now + RIP.lockMs;
-
-            const o = src.getBoundingClientRect();
-            const ox = o.left + o.width / 2;
-            const oy = o.top + o.height / 2;
-            const b = (shell.current ?? src).getBoundingClientRect();
-            const R = Math.round(
-                Math.max(
-                    Math.hypot(ox - b.left, oy - b.top),
-                    Math.hypot(b.right - ox, oy - b.top),
-                    Math.hypot(ox - b.left, oy - b.bottom),
-                    Math.hypot(b.right - ox, oy - b.bottom)
-                )
-            );
-            const T = waveFrontDurMs(R, RIP.speed);
-            const accent = getComputedStyle(document.documentElement).getPropertyValue("--accent");
-
-            for (const el of Array.from(wall.current.querySelectorAll<HTMLElement>("[data-ack-card]"))) {
-                if (el === src) continue;
-                const r = el.getBoundingClientRect();
-                // 被裁住的那几行不演：屏上看不见的东西没有观众。取严格比较——下一行的卡顶
-                // 正好压在裁切线上（`PAD.bottom` 只给到行距减命中外扩），等于号会让它白演一次
-                if (r.bottom <= b.top || r.top >= b.bottom) continue;
-                const dx = r.left + r.width / 2 - ox;
-                const dy = r.top + r.height / 2 - oy;
-                const d = Math.hypot(dx, dy) || 1;
-                if (d > R) continue;
-                // 幅度按线性衰减（半径就是"这一圈以外不理会"）；曲线只管**什么时候**扫到
-                const fall = 1 - d / R;
-                const sc = (RIP.strength / 100) * (0.3 + 0.7 * fall);
-                el.animate(
-                    [
-                        { scale: "1", borderColor: getComputedStyle(el).borderTopColor, easing: "cubic-bezier(.2,.8,.2,1)" },
-                        {
-                            scale: String(1 + sc),
-                            borderColor: withAlpha(accent, 0.2 + 0.6 * fall),
-                            offset: 0.34,
-                            easing: WAVE_FRONT_EASE,
-                        },
-                        { scale: "1", borderColor: getComputedStyle(el).borderTopColor },
-                    ],
-                    { duration: RIP.durMs, delay: waveFrontTime(d / R) * T, fill: "none" }
-                );
-            }
-            // 波源那张先被按下去一点、再慢慢回弹：没有圆环，这一下就是"点在这儿"的全部线索
-            src.animate(
-                [
-                    { scale: "1", easing: "cubic-bezier(.2,.8,.2,1)" },
-                    { scale: String(1 - (RIP.strength / 100) * 0.6), offset: 0.24, easing: WAVE_FRONT_EASE },
-                    { scale: "1" },
-                ],
-                { duration: 300, fill: "none" }
-            );
-        },
-        [reduced]
-    );
-
     /** 档高 = 内容高 + 上下留白（`height` 是 border-box，padding 含在里面） */
     const height = (band.expandable && open ? band.full : band.closed) + PAD.top + PAD.bottom;
     const keys = useMemo(() => cardKeys(people), [people]);
@@ -545,19 +491,15 @@ export function AckWall({
                 </div>
             ) : (
                 <motion.div
-                    ref={shell}
                     initial={false}
                     animate={{ height }}
                     transition={COLLAPSE}
-                    // 常驻裁剪，理由见文件头第 4 条；负 margin 抵掉 padding，卡片落位不动、裁切框外扩
+                    // 常驻裁剪，理由见文件头「`overflow:hidden` 是常驻的」那一段；
+                    // 负 margin 抵掉 padding，卡片落位不动、裁切框外扩
                     className="overflow-hidden"
                     style={{
                         margin: `-${PAD.top}px -${PAD.x}px -${PAD.bottom}px`,
                         padding: `${PAD.top}px ${PAD.x}px ${PAD.bottom}px`,
-                    }}
-                    onClick={(e) => {
-                        const card = (e.target as HTMLElement).closest("[data-ack-card]");
-                        if (card) ripple(card as HTMLElement);
                     }}
                 >
                     <div ref={wall} className="relative flex flex-wrap items-start" style={{ gap: GAP }}>

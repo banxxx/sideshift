@@ -9,5 +9,6 @@
   "shell.minimize": "Minimize",
   "shell.restore": "Restore",
   "shell.switch-shade": "Switch to {{shade}}",
-  "shell.tasks": "Tasks"
+  "shell.tasks": "Tasks",
+  "shell.templates": "Templates"
 }

@@ -9,7 +9,7 @@
  * 底部那行守「信息在左、动作在右」的全应用排布语法：版本号靠左（24px，正好对上导航行
  * 图标的左缘），主题钮靠右（12px，正好对上导航胶囊的右缘，也与标题栏窗口控件同一条竖线）。
  */
-import { Home, Info, ListChecks, Settings, Moon, Sun } from "lucide-react";
+import { Home, Info, LayoutTemplate, ListChecks, Settings, Moon, Sun } from "lucide-react";
 import { useRef, useState } from "react";
 import { AnimatePresence, motion } from "motion/react";
 import { NotificationStack } from "./NotificationStack";
@@ -25,10 +25,11 @@ import {
     type PrimaryPage,
 } from "@/lib/navigation";
 
-/** 导航四行的图标与 id（id 是路由 key，绝不翻译）；页名见下面组件里的 `navLabel` */
+/** 导航五行的图标与 id（id 是路由 key，绝不翻译）；页名见下面组件里的 `navLabel` */
 const navItems: { key: PrimaryPage; icon: typeof Home }[] = [
     { key: "home", icon: Home },
     { key: "tasks", icon: ListChecks },
+    { key: "templates", icon: LayoutTemplate },
     { key: "about", icon: Info },
     { key: "settings", icon: Settings },
 ];
@@ -41,6 +42,7 @@ export function Sidebar() {
     const navLabel: Record<PrimaryPage, string> = {
         home: t("shell.home", "首页"),
         tasks: t("shell.tasks", "任务列表"),
+        templates: t("shell.templates", "转换模板"),
         about: t("shell.about", "关于"),
         settings: t("common.settings", "设置"),
     };

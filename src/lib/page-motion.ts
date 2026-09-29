@@ -87,55 +87,16 @@ export const SWAP: Variants = {
  */
 export const COLLAPSE: Transition = { duration: 0.3, ease: [0.2, 0.8, 0.2, 1] };
 
-/* ===================== 波浪前缘（主题切换那条圆形波的 JS 副本） =====================
- * 逐字抄 `src/App.css` 的 `@keyframes theme-reveal`：前 WAVE_FRONT_T 时间**等速**走完
- * WAVE_FRONT_Q 半径，剩下的用 WAVE_FRONT_EASE 爬完。两处要点别改其一不改另一处：
- *  1. 刹车点要**早**（过了 80% 半径屏幕上只剩墙角，那段再慢也看不见）；
- *  2. 两段要**速度连续**（0.32/0.16 = 2.00 正好等于第一段的速度，接缝不窜一下）。
- * App.css 里那两个数值改了，这里必须同步——它们没有编译期联系，只有这段注释。
+/* ===================== 波浪前缘的刹车曲线（主题切换那条圆形波的 JS 副本） =====================
+ * 逐字抄 `src/App.css` 的 `@keyframes theme-reveal` 的刹车段：起始斜率 2.0 ⇒ 一撤就动，
+ * 末端斜率 0.013 ⇒ 最后那点是爬回去的。App.css 那一头改了这条必须跟着改——两处没有编译期
+ * 联系，只有这段注释。（原曲线前 22% 时间还有一段**等速**走完 36% 半径，那是给横跨整片的
+ * 大行程保匀速观感用的，单卡十几度用不上。）
  *
- * 为什么 CSS 曲线还不够用：CSS 只能描述"一个元素自己怎么走完"，而涟漪要的是
- * 「半径 d 处那张卡该在第几毫秒被扫到」——这是曲线的**反函数**，只能在 JS 里二分求。
- * 对账口径：拿 App.css 注释里那三条实测数字（660ms 档：50% 半径 192ms、80%→100% 尾程
- * 345ms、最后 100ms 推进 1.2% 半径）反算，本模块给出 192 / 345 / 1.24% ⇒ 逐点一致，不是近似。
+ * 这里原来还住着「半径 → 第几毫秒被扫到」那条反函数（`waveFrontTime` / `waveFrontDurMs`）
+ * 和它的两个分段常数：只有鸣谢名单的涟漪读它。涟漪撤成头像自转之后没有读者，一并删净——
+ * 要复原波浪，得连那两个函数一起从 git 里捞回来，只留这一条曲线是不够的。
  */
-export const WAVE_FRONT_T = 0.22;
-export const WAVE_FRONT_Q = 0.36;
 export const WAVE_FRONT_EASE = "cubic-bezier(0.16, 0.32, 0.25, 0.99)";
-
-/** 刹车段（0~1 归一化时间）→ 归一化进度 */
-function waveBrakeY(x: number): number {
-    const bx = (t: number) => 3 * (1 - t) * (1 - t) * t * 0.16 + 3 * (1 - t) * t * t * 0.25 + t * t * t;
-    const by = (t: number) => 3 * (1 - t) * (1 - t) * t * 0.32 + 3 * (1 - t) * t * t * 0.99 + t * t * t;
-    let lo = 0;
-    let hi = 1;
-    for (let i = 0; i < 26; i++) {
-        const m = (lo + hi) / 2;
-        if (bx(m) < x) lo = m;
-        else hi = m;
-    }
-    return by((lo + hi) / 2);
-}
-
-/** 归一化半径 → 归一化时间（整条两段曲线的反函数；二分求刹车段的段内参数） */
-export function waveFrontTime(q: number): number {
-    if (q <= 0) return 0;
-    if (q <= WAVE_FRONT_Q) return (WAVE_FRONT_T * q) / WAVE_FRONT_Q;
-    const target = (q - WAVE_FRONT_Q) / (1 - WAVE_FRONT_Q);
-    let lo = 0;
-    let hi = 1;
-    for (let i = 0; i < 26; i++) {
-        const m = (lo + hi) / 2;
-        if (waveBrakeY(m) < target) lo = m;
-        else hi = m;
-    }
-    return WAVE_FRONT_T + (1 - WAVE_FRONT_T) * ((lo + hi) / 2);
-}
-
-/** 走完半径 r 需要多少毫秒。速度口径＝**等速主体段**的速度（这条曲线里唯一读得出的"速度"），不是平均值 */
-export function waveFrontDurMs(r: number, speedPxPerSec: number): number {
-    if (speedPxPerSec <= 0) return 0;
-    return ((WAVE_FRONT_Q * r) / speedPxPerSec / WAVE_FRONT_T) * 1000;
-}
 
 

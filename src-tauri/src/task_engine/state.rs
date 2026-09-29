@@ -1,4 +1,4 @@
-//! 全局状态：内存任务注册表 + 回收站 + 已解析包缓存 + 设置 + 独占运行槽位。
+//! 全局状态：内存任务注册表 + 回收站 + 已解析包缓存 + 设置 + 转换模板 + 独占运行槽位。
 
 use std::collections::HashMap;
 use std::sync::atomic::AtomicBool;
@@ -9,7 +9,7 @@ use tauri::AppHandle;
 use crate::core::env;
 use crate::core::parser::ParsedPack;
 use crate::models::*;
-use super::persist::{load_settings, load_tasks};
+use super::persist::{load_settings, load_templates, load_tasks};
 use super::schedule::sweep_task_staging;
 use super::trash::Trashed;
 
@@ -27,6 +27,8 @@ pub struct Inner {
     /// 回收站：本次会话删掉的任务。只活在内存（不进 tasks.json），所以关应用即清空
     pub trash: HashMap<String, Trashed>,
     pub settings: AppSettings,
+    /// 转换模板表（有序：下标就是转换页那颗下拉的顺序）
+    pub templates: Vec<ConversionTemplate>,
     /// 当前独占运行的任务 id——同一时间只允许一条转换在跑，其余排队
     pub current: Option<String>,
     /// 最近一次自动分类取到的端证据（包内条目路径 → 证据）；只属于 env_evidence_file 那个包
@@ -48,6 +50,7 @@ impl AppState {
     pub fn new(app: &AppHandle) -> Self {
         let mut inner = Inner {
             settings: load_settings(app),
+            templates: load_templates(app),
             ..Default::default()
         };
         load_tasks(app, &mut inner);

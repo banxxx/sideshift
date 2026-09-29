@@ -1,4 +1,4 @@
-//! 本地持久化：全局设置（settings.json）与任务存档（tasks.json）。
+//! 本地持久化：全局设置（settings.json）、任务存档（tasks.json）与转换模板（templates.json）。
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -17,6 +17,8 @@ use super::util::now_ms;
 const SETTINGS_MIGRATED: &str = "settings.migrated";
 /// 任务本地存档：注册表全量快照（任务 + 方案 + 报告），重启后可见可重试
 const TASKS_FILE: &str = "tasks.json";
+/// 转换模板表（有序：数组下标就是转换页那颗下拉的顺序）
+const TEMPLATES_FILE: &str = "templates.json";
 
 #[derive(Default, serde::Serialize, serde::Deserialize)]
 struct TasksFile {
@@ -110,6 +112,7 @@ const KNOWN_CONFIG_ENTRIES: &[&str] = &[
     SETTINGS_FILE,
     SETTINGS_MIGRATED,
     TASKS_FILE,
+    TEMPLATES_FILE,
     INSTALLER_FILE,
     ACK_FILE,
     SKIN_FILE,
@@ -118,7 +121,8 @@ const KNOWN_CONFIG_ENTRIES: &[&str] = &[
 
 /// 「这份安装已经有主」的凭据：只有**应用自己**写过的文件算数。
 /// `installer.json` 不能算——安装壳在应用第一次启动之前就先往新目录写它，把它当凭据
-/// 会让升级用户的老设置永远搬不过来（判定当场成立，直接跳过搬运）
+/// 会让升级用户的老设置永远搬不过来（判定当场成立，直接跳过搬运）。
+/// `templates.json` 同理不算：它是那份设置搬过来之后才可能有的附件，顶上「有主」会把正主挡住
 const OCCUPYING_CONFIG_ENTRIES: &[&str] = &[SETTINGS_FILE, SETTINGS_MIGRATED, TASKS_FILE];
 
 /// 把老布局（`%APPDATA%\{identifier}`）里的已知文件**移动**到新配置目录。
@@ -261,6 +265,36 @@ pub fn save_settings(app: &AppHandle, s: &AppSettings) -> Result<(), String> {
     }
     let json = serde_json::to_string_pretty(s).map_err(|e| format!("设置序列化失败：{e}"))?;
     std::fs::write(&p, json).map_err(|e| format!("设置写入失败：{e}（{}）", p.display()))
+}
+
+/* ---------------- 转换模板 ---------------- */
+
+fn templates_path(app: &AppHandle) -> Option<PathBuf> {
+    config_dir(app).map(|d| d.join(TEMPLATES_FILE))
+}
+
+/// 启动回灌模板表。读不到/解析不了都当空表：模板是便利件，不是事实来源，
+/// 为一个坏文件把设置与任务一起挡在门外不值。
+pub fn load_templates(app: &AppHandle) -> Vec<ConversionTemplate> {
+    let Some(Ok(text)) = templates_path(app).map(|f| std::fs::read_to_string(f)) else {
+        return Vec::new();
+    };
+    // 裸数组：下标 = 转换页那颗下拉的顺序
+    serde_json::from_str::<Vec<ConversionTemplate>>(&text).unwrap_or_default()
+}
+
+/// 整表写回：模板的唯一改动入口是「列表页拖完/编辑页保存」，两处都拿到全量，
+/// 所以这里不做增量 upsert——一次写一个文件，顺序也就跟着一次落定。
+pub fn save_templates(app: &AppHandle, list: &[ConversionTemplate]) -> Result<(), String> {
+    let Some(p) = templates_path(app) else {
+        return Err("找不到应用配置目录，模板未能保存".to_string());
+    };
+    if let Some(dir) = p.parent() {
+        std::fs::create_dir_all(dir)
+            .map_err(|e| format!("模板写入失败：{e}（{}）", dir.display()))?;
+    }
+    let json = serde_json::to_string_pretty(list).map_err(|e| format!("模板序列化失败：{e}"))?;
+    std::fs::write(&p, json).map_err(|e| format!("模板写入失败：{e}（{}）", p.display()))
 }
 
 /* ---------------- 任务存档 ---------------- */

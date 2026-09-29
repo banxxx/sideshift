@@ -14,6 +14,8 @@ import { AboutPage } from "@/features/about/AboutPage";
 import { SettingsPage } from "@/features/settings/SettingsPage";
 import { ConvertPage } from "@/features/convert/ConvertPage";
 import { TaskDetailPage } from "@/features/task/TaskDetailPage";
+import { TemplatesPage } from "@/features/templates/TemplatesPage";
+import { TemplateEditPage } from "@/features/templates/TemplateEditPage";
 import { TrashBin } from "@/features/tasks/TrashBin";
 import { ResizeEdges } from "@/components/shared/ResizeEdges";
 import { useWindowControls } from "@/lib/window-controls";
@@ -36,6 +38,8 @@ const pages: Record<PageKey, ComponentType> = {
     settings: SettingsPage,
     convert: ConvertPage,
     task: TaskDetailPage,
+    templates: TemplatesPage,
+    template: TemplateEditPage,
 };
 
 function Shell() {

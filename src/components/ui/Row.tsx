@@ -75,6 +75,10 @@ export function SettingRow({
  * 提示行：gap 6 + 12px 图标 + 等宽 11 $text-3（Convert 摘要卡 i-row）。
  * `tone="danger"` 是"这条不满足，去做点什么"那一档：整行换 $redstone，图标跟着换色——
  * 只把图标换成三角形而文字还是一片灰，读起来像说明而不像拦阻。
+ * `tone="gold"` 同样整行换色，但说的是"已经生效、只是又偏了"（模板漂移），
+ * 红石那一档留给拦阻，两者不能共用：颜色在这里就是分档，不是装饰。
+ * `tone="ok"` 是反过来的一档：图标上 emerald、文字仍退回 $text-2——
+ * 一句"已经套好了"不需要喊，把整行染成绿色反而盖过下面那两个动作。
  */
 export function NoteRow({
     icon: Icon,
@@ -82,16 +86,33 @@ export function NoteRow({
     children,
 }: {
     icon: LucideIcon;
-    tone?: "danger";
+    tone?: "danger" | "gold" | "ok";
     children: ReactNode;
 }) {
     return (
         <div className="flex items-center gap-1.5">
-            <Icon className={cn("size-3 shrink-0", tone === "danger" ? "text-redstone" : "text-text-3")} />
+            <Icon
+                className={cn(
+                    "size-3 shrink-0",
+                    tone === "danger"
+                        ? "text-redstone"
+                        : tone === "gold"
+                          ? "text-gold"
+                          : tone === "ok"
+                            ? "text-emerald"
+                            : "text-text-3"
+                )}
+            />
             <span
                 className={cn(
                     "font-mono text-[11px] leading-[16px] font-normal",
-                    tone === "danger" ? "text-redstone" : "text-text-3"
+                    tone === "danger"
+                        ? "text-redstone"
+                        : tone === "gold"
+                          ? "text-gold"
+                          : tone === "ok"
+                            ? "text-text-2"
+                            : "text-text-3"
                 )}
             >
                 {children}

@@ -94,16 +94,23 @@ export function Panel({
  * 卡片头行：13/600 $text-1 标题 + 右侧插槽（芯片/分段 Tab）。
  * inline=true 时标题与右侧内容左对齐紧挨（Task 卡「转换进度 + 状态芯片」），
  * 否则两端对齐（Convert 卡「模组方案 + 分段 Tab」）。
+ * lead：标题左边那一枚小件（转换页模板卡的状态点）。给了它才多包一层横排壳，
+ * 没给的调用方输出与从前逐字一致——标题的字色字重仍由里层那一个 span 说话。
  */
 export function PanelHead({
     title,
     right,
+    lead,
     inline,
 }: {
     title: string;
     right?: ReactNode;
+    lead?: ReactNode;
     inline?: boolean;
 }) {
+    const label = (
+        <span className="text-[13px] leading-[20px] font-semibold text-text-1">{title}</span>
+    );
     return (
         <div
             className={cn(
@@ -111,9 +118,7 @@ export function PanelHead({
                 inline ? "gap-2" : "justify-between gap-3"
             )}
         >
-            <span className="text-[13px] leading-[20px] font-semibold text-text-1">
-                {title}
-            </span>
+            {lead ? <span className="flex min-w-0 items-center gap-1.5">{lead}{label}</span> : label}
             {right}
         </div>
     );

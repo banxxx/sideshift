@@ -24,5 +24,6 @@
   "shell.home": "首頁",
   "shell.restore": "還原",
   "shell.switch-shade": "切換到{{shade}}",
-  "shell.tasks": "任務列表"
+  "shell.tasks": "任務列表",
+  "shell.templates": "轉換模板"
 }

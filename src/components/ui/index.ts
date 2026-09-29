@@ -25,6 +25,8 @@ export {
 export { ToneChip, TagChip, type Tone } from "./Chip";
 export { Btn, IconBtn, LinkBtn } from "./Button";
 export { Stepper, Toggle, TextInput, CheckBox, SearchBox } from "./Field";
+/** 只读灰化那两套 class：自造控件（模板编辑页的目录格）要与真控件压得一模一样，口径得能引出去 */
+export { READONLY_BOX, READONLY_MARK } from "./Field";
 export { SearchSelect, type SelectOption } from "./SearchSelect";
 export { SegTabs } from "./Tabs";
 export { InlineRow, SectionTitle, SettingRow, NoteRow, ListRow } from "./Row";

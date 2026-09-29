@@ -13,6 +13,7 @@ export * from "./evidence";
 export * from "./l10n";
 export * from "./plan";
 export * from "./options";
+export * from "./template";
 export * from "./activity";
 export * from "./task";
 export * from "./report";

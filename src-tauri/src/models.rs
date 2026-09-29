@@ -383,6 +383,91 @@ impl Default for ConversionOptions {
     }
 }
 
+/// 模板收的那 16 档（前端 `src/lib/types/template.ts` 的 `TemplateFieldKey` 同一份名单）。
+///
+/// **`Option` + 缺席即不写入**：一条字段没进模板时，这个结构里压根没有那个键（`skip_serializing_if`），
+/// 套用就是"只写这里有的那些"。不另存一份「勾了哪些」的平行数组——那份数组和值表一旦分叉，
+/// 界面显示勾中而套用时不写（或反过来）都查不出来。
+#[derive(Serialize, Deserialize, Clone, Debug, Default)]
+#[serde(rename_all = "camelCase", default)]
+pub struct TemplateValues {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub install_loader_locally: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub generate_scripts: Option<bool>,
+    /// 手选那枚 JDK 的绝对路径；`Some("")` = 明确套用「自动选择」，与"这档不在模板里"是两回事
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub java_path: Option<String>,
+    /// 空串 = 明确套用「回落全局设置」，同上
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub output_override: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub memory_mb: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub nogui: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub agree_eula: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub use_aikar_flags: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub extra_jvm_args: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub gamemode: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub difficulty: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub server_port: Option<u16>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_players: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub motd: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub level_seed: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub online_mode: Option<bool>,
+}
+
+impl TemplateValues {
+    /// 从一份完整选项里抄出模板能收的那 16 档（全部视为「在模板里」）。
+    ///
+    /// 唯一的消费者是 `template_defaults`：新建模板时界面要显示的初值必须和
+    /// `ConversionOptions::default()` 是同一份事实，否则前端抄一份字面量，改默认就得出两处。
+    pub fn seeded_from(o: &ConversionOptions) -> Self {
+        Self {
+            install_loader_locally: Some(o.install_loader_locally),
+            generate_scripts: Some(o.generate_scripts),
+            java_path: Some(o.java_path.clone()),
+            output_override: Some(o.output_override.clone()),
+            memory_mb: Some(o.memory_mb),
+            nogui: Some(o.nogui),
+            agree_eula: Some(o.agree_eula),
+            use_aikar_flags: Some(o.use_aikar_flags),
+            extra_jvm_args: Some(o.extra_jvm_args.clone()),
+            gamemode: Some(o.gamemode.clone()),
+            difficulty: Some(o.difficulty.clone()),
+            server_port: Some(o.server_port),
+            max_players: Some(o.max_players),
+            motd: Some(o.motd.clone()),
+            level_seed: Some(o.level_seed.clone()),
+            online_mode: Some(o.online_mode),
+        }
+    }
+}
+
+/// 一份转换模板（`templates.json` 里的一条；顺序按数组下标，界面可拖）
+#[derive(Serialize, Deserialize, Clone, Debug, Default)]
+#[serde(rename_all = "camelCase", default)]
+pub struct ConversionTemplate {
+    /// 稳定 id（前端生成，形如 `tpl-xxxxxxxxxxxx`）：转换页的「已套用」认的是它，改名不影响
+    pub id: String,
+    pub name: String,
+    /// 备注：只在列表卡与下拉的第二行露个脸，**不参与套用**
+    pub note: String,
+    pub values: TemplateValues,
+    /// 最后保存的时刻（epoch 毫秒）
+    pub updated_at: u64,
+}
+
 /// 保留树里的一个文件条目（弹窗展示用；`keep_files` 的取值 = 它的逻辑相对路径）
 #[derive(Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]

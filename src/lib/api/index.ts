@@ -10,7 +10,7 @@
  *    同样回落 mock，保证 `pnpm tauri dev` 也能走通全部 UI 流程；PROD 不受影响。
  *  - 每个真实分支的 invoke 字符串（如 "parse_pack"）即 Rust 命令契约清单。
  *
- * 分文件按业务域切：client（环境探测/回落入口）/ pack / plan / mods / task / settings / system。
+ * 分文件按业务域切：client（环境探测/回落入口）/ pack / plan / mods / task / settings / templates / system。
  * 对外一律走本 barrel，import 路径仍是 "@/lib/api"。
  */
 export { isTauri } from "./client";
@@ -19,5 +19,6 @@ export * from "./plan";
 export * from "./mods";
 export * from "./task";
 export * from "./settings";
+export * from "./templates";
 export * from "./system";
 export * from "./about";

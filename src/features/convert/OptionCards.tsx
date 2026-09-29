@@ -55,7 +55,7 @@ type Patch = (p: Partial<ConversionOptions>) => void;
    回看要核对的就是「当时那套配置长什么样」，所以压的是容器，数值与颜色保持读得清。 */
 
 /** 「自动选择」在下拉里的 value。它不是路径 ⇒ 落盘时压成空串，后端按"没指定"走自动挑 */
-const JAVA_AUTO = "auto";
+export const JAVA_AUTO = "auto";
 
 /**
  * 本机候选打上显示名：只有一枚 17 就叫 `Java 17`，两枚以上才编号 `Java 17(1)/(2)`——
@@ -64,7 +64,7 @@ const JAVA_AUTO = "auto";
  * 序号是**渲染期算出来的显示别名**，不进快照：顺序跟着 `JAVA_HOME` → PATH 走，装或卸一枚就整体重排，
  * 拿它当标识会指错 JDK。真正的标识只有路径，所以序号会变、选中的那枚不会。
  */
-function labelInstalls(installed: JavaInstall[]) {
+export function labelInstalls(installed: JavaInstall[]) {
     const total = new Map<number, number>();
     for (const j of installed) total.set(j.major, (total.get(j.major) ?? 0) + 1);
     const seen = new Map<number, number>();
