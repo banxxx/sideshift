@@ -17,6 +17,9 @@
  *     换来的是另一条时序约束：**头像的 yaw 有两个写者**（指针偏转与自转），必须单边持有——
  *     闸门、曲线、收尾回位全收在 `McHead.spin` 里，别在调用点再写一份偏转。
  *     卡片自己的倾斜照旧跟着指针：两条线各走各的，所以转的时候手还在动是设计，不是漏。
+ *     收尾朝向按**指针此刻在不在命中区里**分两档（`setTilt` 的第三个参数）：还在里面就朝它此刻的
+ *     位置（转的过程中手挪过也跟着改），已经出去就朝正前。这两档必须分开——偏移量本身分不出来，
+ *     「正中心」和「已离开」都是 `(0,0)`。
  *  4. 档高**量真 DOM**（按每张卡的 `offsetTop` 分行），不写公式：昵称字号跟卡尺走，
  *     公式算出来的行高会在换度量时差几像素。transform 不参与 offsetTop/offsetHeight，
  *     所以入场正演着也量得准。
@@ -177,7 +180,10 @@ function AckCard({
             el.style.setProperty("--ack-gx", `${((x + 0.5) * 100).toFixed(1)}%`);
             el.style.setProperty("--ack-gy", `${((y + 0.5) * 100).toFixed(1)}%`);
         }
-        head.current?.setTilt(x, y);
+        /* 头像那份同时带上「指针在不在命中区里」：`releasing` 就是它的现成信号——`leave` 置真、
+         * `track`/`enter` 置假，所以不需要再开一份 hover ref。偏移量自己分不出「正中心」与「已离开」
+         * （两个都是 0,0），而自转收尾必须分（见 `McHead.aimPose`）。 */
+        head.current?.setTilt(x, y, !releasing.current);
     }, []);
 
     const step = useCallback(() => {

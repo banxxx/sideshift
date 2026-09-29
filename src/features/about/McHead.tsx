@@ -26,6 +26,9 @@
  *
  * 点击那一下的**自转**也归这里管（`spin`）：头像的 yaw 有两个写者（指针偏转与自转），
  * 谁都能写就必然互相拽，所以闸门、曲线与那条 rAF 全收在这一个模块里，`AckCard` 只负责按下去。
+ * 转完之后朝哪分两档（`aimPose`）：指针还在这张卡的命中区里就朝它**此刻**的偏转，已经出去就朝正前。
+ * 过程中那个"该朝哪"是每帧折算进行程的（终点被手牵着收，不是转完再跳一下）；
+ * 而"在不在卡内"这一档只在收尾那一笔判——过程中判会让指针离开那一帧的终点当场挪最多 15°。
  */
 import { forwardRef, useEffect, useImperativeHandle, useRef, useState, type ReactNode } from "react";
 import { loadSkin, type SkinImage } from "./skin";
@@ -57,9 +60,13 @@ function spinFrac(u: number): number {
 }
 
 export interface McHeadHandle {
-    /** 归一化的指针偏移（-0.5..0.5）；增益与静止朝向都收在 `voxel.ts` 里，调用方不必知道。
-     *  自转期间只记账不落笔（见 `spin` 那条「两个写者」） */
-    setTilt: (dx: number, dy: number) => void;
+    /** 归一化的指针偏移（-0.5..0.5）与**指针当前在不在这张卡的命中区里**；增益与静止朝向都收在
+     *  `voxel.ts` 里，调用方不必知道。自转期间只记账不落笔（见 `spin` 那条「两个写者」）。
+     *
+     * `inside` 不能省：**「指针在正中心」和「指针已经出去了」在偏移量上是同一个数 (0,0)**，
+     * 只记偏移就没法分出自转结束时该朝哪（朝指针 / 朝正前）。
+     */
+    setTilt: (dx: number, dy: number, inside: boolean) => void;
     /** 点这一下 ⇒ 这枚头水平自转 `SPIN.turns` 圈后缓慢停住。闸门在内部：还在转就再点＝没点
      *  （不与上一圈叠加、不重开）。这台机器转不了（没有 webgl2）或压根没有 3D 那一层（平面头像、
      *  首字块）就只有调用方那一下按下，与样片里「静态图档转不了」那一档同口径 */
@@ -83,6 +90,15 @@ export const McHead = forwardRef<McHeadHandle, { url: string; size: number; fall
         const spinRaf = useRef(0);
         /** 自转期间收到的最后一份指针偏转——只记账不落笔，转完照它回位 */
         const lastTilt = useRef({ x: 0, y: 0 });
+        /** 指针此刻在不在这张卡的命中区里（偏移量本身分不出「正中心」与「已离开」） */
+        const inside = useRef(false);
+
+        /**
+         * 自转结束时**该朝哪**（只用在收尾那一笔，过程中不走这里，见 `spin` 里那段为什么）：
+         * 指针还在卡内就朝它当前的偏转（哪怕转的过程中手挪过），已经移出就朝正前方（0,0）。
+         */
+        const aimPose = (): [number, number] =>
+            inside.current ? headPose(lastTilt.current.x, lastTilt.current.y) : [0, 0];
 
         // 这台机器没有 webgl2 就没必要去打 CDN：直接永远停在传进来的那一层
         const supported = voxelSupported();
@@ -138,8 +154,9 @@ export const McHead = forwardRef<McHeadHandle, { url: string; size: number; fall
         useImperativeHandle(
             ref,
             () => ({
-                setTilt(dx, dy) {
+                setTilt(dx, dy, isInside) {
                     lastTilt.current = { x: dx, y: dy };
+                    inside.current = isInside;
                     // 碰过才建真的那一份：第一次偏转与点击同样是「碰过」，只有这一次值得进 state
                     if (!liveRef.current && (dx !== 0 || dy !== 0)) {
                         liveRef.current = true;
@@ -158,26 +175,38 @@ export const McHead = forwardRef<McHeadHandle, { url: string; size: number; fall
                         setLive(true);
                     }
                     const [y0, p0] = headPose(lastTilt.current.x, lastTilt.current.y);
-                    // `snap=0`：停在「起点 + 整圈数」，不吸回整圈——起点那一格偏转是指针给的，
-                    // 留着它才读得出「从你点的那个朝向转出去」。pitch 全程不动（`pitch=hold`）：
-                    // 绕水平轴翻一圈会露下巴，"展示"就变成"摔跤"
-                    const deg = 360 * SPIN.turns;
+                    // 一圈的行程。起点那一格偏转是指针给的，留着它才读得出「从你点的那个朝向转出去」
+                    const base = 360 * SPIN.turns;
                     const t0 = performance.now();
                     spinning.current = true;
                     const tick = (now: number) => {
                         const u = (now - t0) / SPIN.totalMs;
+                        const f = spinFrac(u);
+                        /* 终点每帧重算：把「该朝哪」折算进行程里，收尾就不是硬回位。
+                         * `spinFrac(1)=1` ⇒ 最后一帧正好落在 `aim`（yaw 那 720° 是它的同角），
+                         * 刹车段的尾巴于是**一路被指针牵着走**：手在卡内挪了，它跟着改方向收。
+                         * 旧写法是转完照记到的偏再跳一下——指针不动才碰巧对，一动就差最多 30°
+                         *（满偏 FINE_GAIN 30 的一半）。pitch 同一条式子：指针不动时 `ap=p0`，
+                         * 仍是他定的那档「全程保持俯角」(`pitch=hold`)。
+                         *
+                         * 这里**只读缓冲过的那份偏转**（跟随器每帧指数逼近，进出都连续），不读
+                         * `inside` 硬切：指针在刹车末段离开时 `f` 已经接近 1，硬切就是终点当场挪
+                         * 最多 15° ⇒ 肉眼一下甩。分档判断只留在收尾那一笔。 */
+                        const [ay, ap] = headPose(lastTilt.current.x, lastTilt.current.y);
                         // 头还没建好（第一次进页、皮肤还在解）这几帧就是空的；建好那一帧接着当前
                         // 角度续上，所以不需要「攒一次待播」——真到了那一步也只是晚半圈
-                        head.current?.setPose(y0 + deg * spinFrac(u), p0);
+                        head.current?.setPose(y0 + (base + ay - y0) * f, p0 + (ap - p0) * f);
                         if (u < 1) {
                             spinRaf.current = requestAnimationFrame(tick);
                             return;
                         }
                         spinRaf.current = 0;
                         spinning.current = false;
-                        // 收尾照最后记下的那份偏转回位：转的过程中指针动过的话，不留「卡片歪着、
-                        // 头像还朝着中途」那一格——那是自转期间欠下的账，只有这里能还
-                        head.current?.setPose(...headPose(lastTilt.current.x, lastTilt.current.y));
+                        /* 收尾那一笔才分两档：指针还在这张卡的命中区里就朝它此刻的位置，
+                         * 已经出去就朝正前（0,0）——顺带把跟随器缓冲没走完的那零点几度收干净。
+                         * 落的是**原角**（不带那 720°）：slot 里存的数回到零区间，下一次自转的起点
+                         * 与跟随器的写值同尺度，不会一路攒成大角度数。 */
+                        head.current?.setPose(...aimPose());
                     };
                     spinRaf.current = requestAnimationFrame(tick);
                 },

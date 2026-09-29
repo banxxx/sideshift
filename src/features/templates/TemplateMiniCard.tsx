@@ -5,13 +5,17 @@
  * 于是模板不再和四张配置卡抢同一个视觉层级。规格上只把留白压一档（12/20 内边距、gap 10），
  * 圆角、描边、标题 13/600、控件 32 高全部照旧 ⇒ 仍是同族件。
  *
- * 卡头标题左边那颗 6px 点是唯一的档位读数：空心 = 未套用 · accent 实心 = 已套用 · gold 实心 = 漂移。
- * 空心那颗的描边用 `text-3` 打 65% 而不是 `stroke`——那档灰压在白卡上几乎化掉，档位一读不出等于没有；
- * 而且空心 vs 实心是**形状差**，不只靠颜色分。点位常驻（永远占 6px + 6px 间隙），换档只换画法，标题不跳位。
+ * 卡头只有一个标题 + 「管理」：曾经标题左边那颗 6px 档位点（空心/实心/gold）**已于 2026-09-30 撤掉**——
+ * 他要的是标题前不摆符号。档位读数改由下面那行说明说话：勾 = 已套用、金三角 = 套用后改过、
+ * 灰色 Info = 未套用；下拉里选中的那一条本来就是「套用的是谁」。
  *
  * 套用语义：只把模板里有的那几项写进转换页，未纳入的保持当前值（不是恢复默认）。
  * **没有「默认模板」这一档**——模板不会自动生效，每次转换都在这里点一次；
  * 代价是多一次点击，换来的是不会出现「我没点它怎么就改了」。
+ *
+ * 说明行与动作行各挂一枚 `Collapse`（`gap={10}` = 本卡的 `Panel gap`）：这两行的在场与否跟着
+ * 「读表中 / 零模板 / 未套用 / 已套用」四档换，原先是当场挂卸 ⇒ 卡高硬跳、下面那张摘要卡同帧重排。
+ * 全站同一条规矩见 @/components/ui/Collapse。
  */
 import { Info, TriangleAlert, Check } from "lucide-react";
 import { useEffect, useState } from "react";
@@ -28,6 +32,7 @@ import {
     type ConversionOptions,
 } from "@/lib/types";
 import {
+    Collapse,
     LinkBtn,
     NoteRow,
     Panel,
@@ -36,22 +41,6 @@ import {
     type SelectOption,
 } from "@/components/ui";
 import { useTemplateTable } from "./use-template-table";
-
-/** 档位：只画点，不整卡换底色（卡底换色会让一层的底色跟着选择跳，和「金色只跟随改判态」对不上） */
-function StateDot({ state }: { state: "idle" | "applied" | "drift" }) {
-    return (
-        <span
-            aria-hidden="true"
-            className={
-                state === "applied"
-                    ? "size-1.5 shrink-0 rounded-full bg-accent"
-                    : state === "drift"
-                      ? "size-1.5 shrink-0 rounded-full bg-gold"
-                      : "size-1.5 shrink-0 rounded-full border border-text-3/65"
-            }
-        />
-    );
-}
 
 export function TemplateMiniCard({
     options,
@@ -125,14 +114,17 @@ export function TemplateMiniCard({
         navigate("template", { seed: templateSeedOf(options) });
     };
 
+    /** 两行各自在场与否：四档之间换的就是这两行的组合，所以各挂一枚 Collapse */
+    const showNote = ready && (!!applied || templates.length > 0);
+    const showActions = ready && (!!applied || templates.length === 0);
+
     return (
         <Panel gap={10} padY={12}>
             <PanelHead
                 title={t("templates.mini-title", "配置模板")}
-                lead={<StateDot state={!ready || !applied ? "idle" : drift.length > 0 ? "drift" : "applied"} />}
                 right={
                     <LinkBtn size="sm" onClick={() => switchPrimary("templates")}>
-                        {t("templates.manage", "管理…")}
+                        {t("templates.manage", "管理")}
                     </LinkBtn>
                 }
             />
@@ -150,25 +142,25 @@ export function TemplateMiniCard({
                           : t("templates.not-applied", "未套用")
                 }
             />
-            {!ready ? null : templates.length === 0 ? (
-                <LinkBtn size="sm" className="self-start" onClick={saveAsNew}>
-                    {t("templates.new-template", "新建模板")}
-                </LinkBtn>
-            ) : applied ? (
-                <>
-                    <NoteRow
-                        icon={drift.length > 0 ? TriangleAlert : Check}
-                        tone={drift.length > 0 ? "gold" : "ok"}
-                    >
-                        {drift.length > 0
+            <Collapse when={showNote} gap={10}>
+                <NoteRow
+                    icon={drift.length > 0 ? TriangleAlert : applied ? Check : Info}
+                    tone={drift.length > 0 ? "gold" : applied ? "ok" : undefined}
+                >
+                    {applied
+                        ? drift.length > 0
                             ? t("templates.drift-note", "套用后改过 {{count}} 项 · {{names}}", {
                                   count: drift.length,
                                   names: driftNames,
                               })
-                            : t("templates.applied-note", "已套用 · 覆写 {{count}} 项，其余不动", { count })}
-                    </NoteRow>
-                    <div className="flex items-center gap-3.5">
-                        {drift.length > 0 ? (
+                            : t("templates.applied-note", "已套用 · 覆写 {{count}} 项，其余不动", { count })
+                        : t("templates.pick-hint", "只覆写模板内配置的选项")}
+                </NoteRow>
+            </Collapse>
+            <Collapse when={showActions} gap={10}>
+                <div className="flex items-center gap-3.5">
+                    {applied ? (
+                        drift.length > 0 ? (
                             <>
                                 <LinkBtn size="sm" onClick={() => patch(applied.values)}>
                                     {t("templates.restore", "还原到模板")}
@@ -180,7 +172,7 @@ export function TemplateMiniCard({
                         ) : (
                             <>
                                 <LinkBtn size="sm" onClick={saveAsNew}>
-                                    {t("templates.save-as", "存为模板…")}
+                                    {t("templates.save-as", "存为模板")}
                                 </LinkBtn>
                                 {/* 只摘掉「已套用」这层关系，屏幕上的值照旧——它们是当前配置，不是模板的附属品 */}
                                 <LinkBtn
@@ -191,14 +183,14 @@ export function TemplateMiniCard({
                                     {t("templates.clear-applied", "清除套用")}
                                 </LinkBtn>
                             </>
-                        )}
-                    </div>
-                </>
-            ) : (
-                <NoteRow icon={Info}>
-                    {t("templates.pick-hint", "每次转换在这里选一次 · 只覆写模板内那几项")}
-                </NoteRow>
-            )}
+                        )
+                    ) : (
+                        <LinkBtn size="sm" onClick={saveAsNew}>
+                            {t("templates.new-template", "新建模板")}
+                        </LinkBtn>
+                    )}
+                </div>
+            </Collapse>
         </Panel>
     );
 }
