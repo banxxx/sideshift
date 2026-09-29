@@ -51,7 +51,23 @@
  *
  * 写盘只有一条路：整张表交回后端，乐观更新与失败回滚都在 `use-template-table`（编辑页共用同一份口径）。
  */
-import { AlertTriangle, Copy, GripVertical, Info, LayoutTemplate, Pencil, Plus, Trash2 } from "lucide-react";
+/**
+ * 图标分工（2026-09-30 他点名要侧栏与卡片不要用同一枚）：
+ *  - `LayoutTemplate`＝**导航里的那一页**（只有 Sidebar 用它）；
+ *  - `SlidersHorizontal`＝**一张模板**（一排调好的旋钮，正是「存下常用的转换配置」的形状）⇒
+ *    卡片与空态共用它：空态缺的就是卡，画同一枚才认得出「缺的是这个东西」
+ *    （与 EmptyTasks 的分工同一族：导航 `ListChecks`、空态 `Inbox`）。
+ */
+import {
+    AlertTriangle,
+    Copy,
+    GripVertical,
+    Info,
+    Pencil,
+    Plus,
+    SlidersHorizontal,
+    Trash2,
+} from "lucide-react";
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { motion, useReducedMotion } from "motion/react";
@@ -61,7 +77,7 @@ import { useNavigation } from "@/lib/navigation";
 import { templateValueCount, uniqueTemplateName, type ConversionTemplate } from "@/lib/types";
 import { Btn, IconBtn, NoteRow, PageHeader, Swap } from "@/components/ui";
 import { DeleteTemplateModal } from "./DeleteTemplateModal";
-import { useTemplateTable } from "./use-template-table";
+import { guardTemplateCap, useTemplateTable } from "./use-template-table";
 import { cn } from "@/lib/utils";
 import {
     MAX_DT,
@@ -656,8 +672,9 @@ export function TemplatesPage() {
         };
     }, []);
 
-    /** 复制 = 在原位的下一格插一份「X 副本」：位置跟着源卡走，人才找得到它 */
+    /** 复制 = 在原位的下一格插一份「X 副本」：位置跟着源卡走，人才找得到它。也是「建一份新的」，吃同一道闸门 */
     const duplicate = (tpl: ConversionTemplate) => {
+        if (!guardTemplateCap(templates.length)) return;
         const at = templates.findIndex((x) => x.id === tpl.id);
         const want = `${tpl.name}${t("templates.copy-suffix", " 副本")}`;
         void commit([
@@ -688,7 +705,9 @@ export function TemplatesPage() {
                             size="sm"
                             icon={Plus}
                             className="font-semibold"
-                            onClick={() => navigate("template")}
+                            onClick={() => {
+                                if (guardTemplateCap(templates.length)) navigate("template");
+                            }}
                         >
                             {t("templates.new-template", "新建模板")}
                         </Btn>
@@ -859,14 +878,15 @@ function TemplateRow({
                 <GripVertical className="size-3.5" />
             </span>
             <span className="flex size-9 shrink-0 items-center justify-center rounded-[10px] bg-accent-dim text-accent">
-                <LayoutTemplate className="size-[17px]" />
+                <SlidersHorizontal className="size-[17px]" />
             </span>
             <span className="flex min-w-0 flex-1 flex-col gap-[3px]">
                 <span className="truncate font-mono text-[13px] leading-[20px] font-semibold text-text-1">
                     {template.name}
                 </span>
                 <span className="truncate font-mono text-[11px] leading-[16px] font-normal text-text-3">
-                    {template.note || t("templates.no-note", "未填备注")}
+                    {/* 没备注就是没有备注：一个短横足够，「未填备注」四个字会把这一行读成一句状态 */}
+                    {template.note || "-"}
                 </span>
             </span>
             {/* 两轨分界：左边「这张卡叫什么」，右边「它收了几档 + 能做什么」 */}
@@ -933,7 +953,7 @@ function EmptyTemplates() {
         <div className="flex h-[clamp(400px,70vh,640px)] flex-col items-center justify-center gap-4 rounded-[12px] bg-bg-app px-5 py-10">
             <div className="flex flex-col items-center gap-4">
                 <span className="flex size-14 items-center justify-center rounded-2xl bg-surface-2">
-                    <LayoutTemplate className="size-6 text-text-3" />
+                    <SlidersHorizontal className="size-6 text-text-3" />
                 </span>
                 <div className="flex flex-col items-center gap-1">
                     <span className="font-mono text-[16px] leading-[24px] font-semibold text-text-1">

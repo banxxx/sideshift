@@ -38,6 +38,8 @@ import {
     SERVER_PORT_RANGE,
     TEMPLATE_FIELD_COUNT,
     TEMPLATE_FIELD_KEYS,
+    TEMPLATE_NAME_MAX,
+    TEMPLATE_NOTE_MAX,
     pickTemplateValues,
     templateFields,
     templateValueCount,
@@ -71,7 +73,7 @@ import { cn } from "@/lib/utils";
 import { difficultyOptions, gamemodeOptions } from "../convert/constants";
 import { JAVA_AUTO, labelInstalls } from "../convert/OptionCards";
 import { DeleteTemplateModal } from "./DeleteTemplateModal";
-import { useTemplateTable } from "./use-template-table";
+import { guardTemplateCap, useTemplateTable } from "./use-template-table";
 
 /** 编辑器草稿：`values` 是屏上那些值（含未勾的），`ticked` 才是「进不进模板」的唯一判据 */
 interface EditDraft {
@@ -436,7 +438,7 @@ export function TemplateEditPage() {
 
     /** 另存为副本：把当前这份勾好的存成**新**模板，原模板不动 ⇒ 留在这一页，未保存标记照旧 */
     const saveCopy = async () => {
-        if (!canSave) return;
+        if (!canSave || !guardTemplateCap(templates.length)) return;
         const copy: ConversionTemplate = {
             id: api.newTemplateId(),
             name: uniqueTemplateName(
@@ -485,6 +487,7 @@ export function TemplateEditPage() {
                                 value={name}
                                 invalid={dupe}
                                 spellCheck={false}
+                                maxLength={TEMPLATE_NAME_MAX}
                                 placeholder={t("templates.name-ph", "如：生存服预设")}
                                 onChange={(e) => patchDraft({ name: e.target.value })}
                             />
@@ -497,12 +500,13 @@ export function TemplateEditPage() {
                         </div>
                         <div className="flex flex-col gap-1.5">
                             <span className="text-[11px] leading-[16px] font-medium text-text-2">
-                                {t("templates.note-label", "备注（选填 · 不进模板）")}
+                                {t("templates.note-label", "备注（选填）")}
                             </span>
                             <TextInput
                                 className="w-full"
                                 value={note}
                                 spellCheck={false}
+                                maxLength={TEMPLATE_NOTE_MAX}
                                 placeholder={t("templates.note-ph", "如：每周六开 · 结束后不停服")}
                                 onChange={(e) => patchDraft({ note: e.target.value })}
                             />
@@ -647,11 +651,9 @@ export function TemplateEditPage() {
                         )}
                         {!isNew && (
                             <div className="flex w-full justify-center">
-                                <LinkBtn
-                                    size="sm"
-                                    className="text-text-3 hover:text-text-1"
-                                    onClick={() => setPendingDelete(true)}
-                                >
+                                {/* 删除这一族全站都用 redstone 说话（列表卡那颗按钮、弹窗里那颗实心钮）：
+                                    这一枚从前压成三级灰，反而成了三处里最不显眼的一个 */}
+                                <LinkBtn size="sm" className="text-redstone" onClick={() => setPendingDelete(true)}>
                                     {t("templates.delete-title", "删除模板")}
                                 </LinkBtn>
                             </div>

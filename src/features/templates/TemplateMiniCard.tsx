@@ -40,7 +40,7 @@ import {
     SearchSelect,
     type SelectOption,
 } from "@/components/ui";
-import { useTemplateTable } from "./use-template-table";
+import { guardTemplateCap, useTemplateTable } from "./use-template-table";
 
 export function TemplateMiniCard({
     options,
@@ -72,11 +72,10 @@ export function TemplateMiniCard({
         return drift.map((k) => short.get(k) ?? k).join("、");
     })();
 
+    /** 下拉里只报名字（2026-09-30 他点名撤掉「· N 项」）：档位是列表页那一列的事，这一格要说的是「用哪一份」 */
     const choices: SelectOption[] = templates.map((x) => ({
         value: x.id,
-        label: `${x.name} · ${t("templates.n-items", "{{count}} 项", {
-            count: templateValueCount(x.values),
-        })}`,
+        label: x.name,
     }));
 
     const applyTemplate = (id: string) => {
@@ -108,9 +107,10 @@ export function TemplateMiniCard({
             notify(t("templates.updated-toast", "已更新模板 · {{name}}", { name: applied.name }), "success");
     };
 
-    /** 「存为模板…」与零模板那颗入口同一条路：带着屏幕上的值去新建页，勾哪行才算进模板 */
+    /** 「存为模板…」与零模板那颗入口同一条路：带着屏幕上的值去新建页，勾哪行才算进模板。
+     *  到档先拒再走，别让人填完整张表单才被告知建不了 */
     const saveAsNew = () => {
-        if (!options) return;
+        if (!options || !guardTemplateCap(templates.length)) return;
         navigate("template", { seed: templateSeedOf(options) });
     };
 
@@ -130,6 +130,7 @@ export function TemplateMiniCard({
             />
             <SearchSelect
                 className="w-full"
+                panelFit
                 value={applied?.id ?? ""}
                 options={choices}
                 onChange={applyTemplate}

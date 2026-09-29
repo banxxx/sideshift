@@ -45,8 +45,11 @@ export function CountRow({
     return (
         <div className="flex w-full items-center justify-between">
             <span className="text-[12px] leading-[18px] font-normal text-text-2">{label}</span>
-            {/* 定高裁剪窗：计数变化时旧数上滑退场、新数下方升入 */}
-            <span className="flex h-[20px] items-center overflow-hidden">
+            {/* 定高裁剪窗：计数变化时旧数上滑退场、新数下方升入。
+                `relative` 是必需的，不是装饰：popLayout 给退场那层写的是 `position:absolute !important`
+                + 按 `offsetParent` 量的 top/left。这一格原先不定位 ⇒ offsetParent 一路找到文档根，
+                页面向下滚过之后那个坐标就不再指着这一行——数字当场飘到右边别处（模板摘要/转换摘要同一条路径）。 */}
+            <span className="relative flex h-[20px] items-center overflow-hidden">
                 <AnimatePresence mode="popLayout" initial={false}>
                     <motion.span
                         key={count}

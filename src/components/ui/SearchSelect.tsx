@@ -53,6 +53,7 @@ export function SearchSelect({
     searchable,
     searchPlaceholder,
     placeholder,
+    panelFit,
     className,
     readOnly,
     onOpen,
@@ -69,6 +70,13 @@ export function SearchSelect({
     searchPlaceholder?: string;
     /** 值为空时的那格外显（裸 zip 认不出 MC 版本那一态）：不给就照旧留白，别处用法不受影响 */
     placeholder?: string;
+    /**
+     * 浮层与触发框等宽、长标签走省略号（默认是按最长选项撑开，封顶 320px）。
+     * 给「触发框本来就占满整栏，而候选文字长度由用户自己打」的那一处用：转换页配置模板的下拉住在
+     * 280px 右栏里，模板名最长 40 字，让它撑宽既顶穿窗口边、又和下面那张摘要卡对不齐——等宽 + 省略才稳。
+     * 别处不吃这一档：版本/构建号那一长串被等宽掐成省略号就等于没得选。
+     */
+    panelFit?: boolean;
     className?: string;
     /** 回看态：值照显示，chevron 与浮层一起收掉——留着箭头就是「能点却不能点」的假出口 */
     readOnly?: boolean;
@@ -158,7 +166,9 @@ export function SearchSelect({
             >
                 <span
                     className={cn(
-                        "truncate",
+                        // min-w-0 是 truncate 生效的前提：flex 子项默认 min-width:auto，
+                        // 长名（模板名最长 40 字）会把触发框里的值顶到 chevron 外面去，省略号根本不出现
+                        "min-w-0 truncate",
                         isChip
                             ? "text-[11px] leading-[16px] font-medium"
                             : plain
@@ -188,12 +198,14 @@ export function SearchSelect({
                     <motion.div
                         {...PANEL_MOTION}
                         className={cn(
-                            "absolute top-full z-30 mt-1 flex max-h-[248px] w-max max-w-[320px] origin-top flex-col gap-0.5",
+                            "absolute top-full z-30 mt-1 flex max-h-[248px] origin-top flex-col gap-0.5",
+                            // 宽度两档：默认按最长选项撑开（封顶 320px），`panelFit` 则与触发框等宽
+                            panelFit ? "w-full" : "w-max max-w-[320px]",
                             "overflow-hidden rounded-lg border border-stroke bg-surface p-1.5 shadow-lg",
-                            // 浮层按最长选项撑开（w-max，封顶 320px），不跟触发框等宽：
-                            // 行选中态还要留 20px 给 check，等宽会把长标签掐成省略号。
+                            // 浮层默认不跟触发框等宽（行选中态还要留 20px 给 check，等宽会把长标签掐成省略号），
+                            // 所以长列表那一档靠 w-max 撑开；只有用户自己打名的候选（模板）走 panelFit。
                             // 锚边按触发件位置定：行右端的 chip/plain 向左长，卡内整列的 field 向右长，
-                            // 反了会把滚动祖先顶出一道横向滚动条
+                            // 反了会把滚动祖先顶出一道横向滚动条。
                             isChip ? "right-0 min-w-[168px]" : plain ? "right-0 min-w-full" : "left-0 min-w-full"
                         )}
                     >

@@ -42,7 +42,7 @@ export interface ConversionTemplate {
     /** 稳定 id（不翻、不随改名变）；转换页的「已套用」认的是它 */
     id: string;
     name: string;
-    /** 备注：只在列表卡与下拉第二行露个脸，不参与套用 */
+    /** 备注：只在列表卡那一行露个脸（转换页那颗下拉只报名字），不参与套用 */
     note: string;
     values: TemplateValues;
     /** 最后保存的时刻（epoch 毫秒） */
@@ -234,20 +234,46 @@ export function pickTemplateValues(
 }
 
 /**
+ * 名称与备注的输入上限（字符数，中英文同计数）。
+ *
+ * 定这两个数是为了让「省略号」有可预测的位置：卡片名与备注、下拉那一条、删除弹窗的副标都是按宽度截断的，
+ * 不封顶的话长到几十上百字的名字会把这几处一律压成省略号，等于全都没名字。
+ * 40 够写「生存服 20 人 · Aikar · 大内存」这一档描述；80 给备注留两倍行程（它是整句，不是标签）。
+ */
+export const TEMPLATE_NAME_MAX = 40;
+export const TEMPLATE_NOTE_MAX = 80;
+
+/**
+ * 模板数量上限（2026-09-30 他点名设的 200）。
+ *
+ * 收在这一条而不是散进三个入口：新增模板的路径有**四条**（编辑页保存、另存为副本、列表页复制、
+ * 以及将来可能加的导入），闸门只有一条写盘路（`useTemplateTable.commit`）⇒ 挡在那里，
+ * 四条路一起生效，将来加第五条不用再想起来补。
+ * 上限按**整表**算：删除永远放行，只有让它变长的提交才拦。
+ */
+export const TEMPLATE_MAX = 200;
+
+/**
  * 让开同名位：名称是这一族界面认人的凭据（编辑页拿它拦重复），
  * 所以复制与另存为副本不能自己造出一枚同名 ⇒ 列表两行一样的名字、下拉两个一样的读数。
+ *
+ * 加「 副本」/「 2」这类后缀是**程序在写名字**，输入框上的 `maxLength` 管不到这里 ⇒ 上限在这一条里收：
+ * 尾部不够放后缀就从名字头上削，削完再排号，绝不吐出一条超限的名字。
  */
 export function uniqueTemplateName(want: string, taken: Iterable<string>): string {
     const used = new Set(taken);
-    if (!used.has(want)) return want;
-    let n = 2;
-    while (used.has(`${want} ${n}`)) n++;
-    return `${want} ${n}`;
+    const base = want.slice(0, TEMPLATE_NAME_MAX);
+    if (!used.has(base)) return base;
+    for (let n = 2; ; n++) {
+        const suffix = ` ${n}`;
+        const candidate = `${base.slice(0, TEMPLATE_NAME_MAX - suffix.length)}${suffix}`;
+        if (!used.has(candidate)) return candidate;
+    }
 }
 
 /**
  * 套用过之后又被改动的字段（漂移判据：模板里有这一档，而转换页现在的值和模板给的不一样）。
- * 空数组 = 没改过，小卡上那颗点是 accent 实心；非空则是 gold，读数要说"改过几项、哪几项"。
+ * 空数组 = 没改过，小卡那行说明走「已套用」那一句；非空则染金，读数要说"改过几项、哪几项"。
  */
 export function driftedKeys(
     values: TemplateValues,
