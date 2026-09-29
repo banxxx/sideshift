@@ -114,7 +114,9 @@ export function TaskDetailPage() {
     /** 列表主按钮带着落点来（已完成→结果，其余→概况） */
     const wanted = entry.params?.tab as TaskTab | undefined;
 
-    const [task, setTask] = useState<ConversionTask | null>(null);
+    const [task, setTask] = useState<ConversionTask | null>(
+        () => (taskId ? api.peekTask(taskId) ?? null : null)
+    );
     const [missing, setMissing] = useState(false);
     const [copied, setCopied] = useState(false);
     const [planCopied, setPlanCopied] = useState(false);
@@ -153,8 +155,13 @@ export function TaskDetailPage() {
         };
     }, [taskId]);
 
-    // 换任务先清屏，免得新 id 的骨架期还画着上一条的内容；重试（nonce）不清，避免整页闪一下
+    // 换任务先清屏，免得新 id 的骨架期还画着上一条的内容；重试（nonce）不清，避免整页闪一下。
+    // 首帧那一次跳过：task 的初值是列表/上一次读数给的种子，抹掉它就把「种子 → 骨架 → 真内容」
+    // 变成三拍，而后两拍之间要重跑整页的错峰入场——用户看到的「闪一下」就是那一换。
+    const clearedFor = useRef(taskId);
     useEffect(() => {
+        if (clearedFor.current === taskId) return;
+        clearedFor.current = taskId;
         setTask(null);
         setMissing(false);
         setReport(null);

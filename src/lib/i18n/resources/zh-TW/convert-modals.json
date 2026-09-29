@@ -20,6 +20,7 @@
   "convert-modals.choose-folders": "選擇保留內容 · {{count}} 個目錄",
   "convert-modals.client-required": "客戶端必需、伺服器端僅可選",
   "convert-modals.client-required-server": "客戶端必需、伺服器端沒聲明",
+  "convert-modals.copy-name": "複製名稱",
   "convert-modals.count-folder": "已勾 {{dirs}} 個目錄 · {{files}} 個檔案，將隨包保留",
   "convert-modals.differs-modpack": " · 與整合包聲明不一致",
   "convert-modals.disabled-server": "停用中 · 不進入伺服器端包，勾選即恢復",
@@ -42,6 +43,7 @@
   "convert-modals.mods-server": "不進伺服器端包的模組（含判不出兩端的待確認項）",
   "convert-modals.needs-review": " · 待人工確認",
   "convert-modals.next": "下一頁",
+  "convert-modals.no-zh": "這個模組還沒有中文譯文",
   "convert-modals.players-install": " · 玩家客戶端需同裝",
   "convert-modals.previous": "上一頁",
   "convert-modals.re-kept": "可逐項改回保留",
@@ -75,10 +77,9 @@
   "convert-modals.unselect": "取消全選",
   "convert-modals.version-load": "版本載入失敗 · {{error}}",
   "convert-modals.yielded-root": "已勾的 {{names}} 以包內那份為準 · 轉換設定裡對應的設定項這次不會寫進包",
-  "home.loader": "載入器",
-  "convert-modals.no-zh": "這個模組還沒有中文譯文",
   "convert-modals.zh-load": "中文譯文取得失敗 · {{error}}",
   "convert-modals.zh-loading": "翻譯中…",
   "convert-modals.zh-original": "原文",
-  "convert-modals.zh-translate": "翻譯"
+  "convert-modals.zh-translate": "翻譯",
+  "home.loader": "載入器"
 }

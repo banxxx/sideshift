@@ -146,6 +146,7 @@
   "convert-modals.choose-folders": "选择保留内容 · {{count}} 个目录",
   "convert-modals.client-required": "客户端必需、服务端仅可选",
   "convert-modals.client-required-server": "客户端必需、服务端没声明",
+  "convert-modals.copy-name": "复制名称",
   "convert-modals.count-folder": "已勾 {{dirs}} 个目录 · {{files}} 个文件，将随包保留",
   "convert-modals.curseforge-api": "CurseForge API Key 未配置",
   "convert-modals.curseforge-needs": "CurseForge · 需要 API Key",

@@ -21,6 +21,7 @@
   "convert-modals.choose-folders_other": "Choose what to keep · {{count}} folders",
   "convert-modals.client-required": "Client required, server only optional",
   "convert-modals.client-required-server": "Client required, server undeclared",
+  "convert-modals.copy-name": "Copy name",
   "convert-modals.curseforge-api": "CurseForge API Key not set",
   "convert-modals.curseforge-needs": "CurseForge · needs API Key",
   "convert-modals.differs-modpack": " · differs from modpack",

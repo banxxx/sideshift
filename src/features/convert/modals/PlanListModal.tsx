@@ -1,6 +1,6 @@
 /* ================= 处置清单弹窗（640 宽，PCRJi 剔除态；保留态共用同壳） ================= */
-import { MinusSquare, SquareCheck } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { Check, Copy, MinusSquare, SquareCheck } from "lucide-react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
     clientInstallNeeded,
     evidenceLabel,
@@ -10,6 +10,7 @@ import {
     type SideTag,
 } from "@/lib/format";
 import { t, useT } from "@/lib/i18n";
+import { notify } from "@/lib/notify";
 import type { ModDisposition, PlanMod } from "@/lib/types";
 import {
     Btn,
@@ -231,6 +232,9 @@ export function PlanListModal({
     const [tagFilter, setTagFilter] = useState<RowTag | "all">("all");
     /** 弹窗内暂存：勾选只改 draft，「应用」才回写页面 */
     const [draft, setDraft] = useState<Partial<Record<string, ModDisposition>>>({});
+    /** 刚复制过的那一行（图标换 Check 的绿色回执）；一次只记一行 */
+    const [copiedId, setCopiedId] = useState<string | null>(null);
+    const copyTimer = useRef(0);
 
     // 每次打开重建暂存、搜索与筛选（上次未应用的草稿不带入）
     useEffect(() => {
@@ -303,6 +307,20 @@ export function PlanListModal({
             filtered.forEach((m) => (next[m.id] = batchDone ? batchUndo : batchTarget));
             return next;
         });
+
+    /** 复制行名（只名称，不带版本）。反馈就地换图标、不发全局提示（与日志复制同一口径）；
+     *  只有剪贴板本身不可用这一种失败值得占提示区 */
+    const copyName = async (m: PlanMod) => {
+        try {
+            await navigator.clipboard.writeText(m.name);
+        } catch {
+            notify(t("common.copy-failed", "复制失败：剪贴板不可用"), "error");
+            return;
+        }
+        window.clearTimeout(copyTimer.current);
+        setCopiedId(m.id);
+        copyTimer.current = window.setTimeout(() => setCopiedId(null), 1800);
+    };
 
     const apply = () => {
         mods.forEach((m) => {
@@ -409,6 +427,8 @@ export function PlanListModal({
                             <ListRow
                                 key={m.id}
                                 className={cn(
+                                    // 具名悬停组：无名 group 会和行内其它悬停件串味（见 Tip 的注释）
+                                    "group/row",
                                     !readOnly && "cursor-pointer",
                                     pending && "bg-gold-dim"
                                 )}
@@ -430,6 +450,31 @@ export function PlanListModal({
                                         {pending ? copy.rowOff : rowOnSub(m, focus)}
                                     </span>
                                 </span>
+                                {/* 逐行复制：槽位常驻（24 + 行 gap 10），只有图标藏到悬停。
+                                    留白是为「正看着的那行文字不跳」，藏图标是为「三十行同屏不是一排灰按钮」。
+                                    不挂 Tip：气泡在 .list-scroll 这个 overflow-auto 盒里，贴底那行会被裁掉；
+                                    Copy 字形自解释，可读名交给 aria-label */}
+                                <button
+                                    aria-label={t("convert-modals.copy-name", "复制名称")}
+                                    onClick={(e) => {
+                                        // 整行是改判的点击靶区：不挡冒泡就成了一点两改（复制 + 把这行踢出服务端包）
+                                        e.stopPropagation();
+                                        void copyName(m);
+                                    }}
+                                    className={cn(
+                                        "size-6 shrink-0 rounded-md text-text-3",
+                                        "flex items-center justify-center",
+                                        "opacity-0 transition-[opacity,color,background-color] duration-150",
+                                        "hover:bg-surface-2 hover:text-accent",
+                                        "focus-visible:opacity-100 group-hover/row:opacity-100"
+                                    )}
+                                >
+                                    {copiedId === m.id ? (
+                                        <Check className="size-3 text-emerald" />
+                                    ) : (
+                                        <Copy className="size-3" />
+                                    )}
+                                </button>
                                 {pending ? (
                                     <TagChip square outline className="text-gold">
                                         {copy.offBadge}

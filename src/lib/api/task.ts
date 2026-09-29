@@ -44,6 +44,18 @@ export function peekTasks(): ConversionTask[] | null {
     return lastTaskList;
 }
 
+/**
+ * 按 id 的上一趟读数（同样只存成功那一路）。
+ * 详情页的「正在读取任务状态…」骨架与真内容是两棵树，换树会把页内的错峰入场整页重跑一次——
+ * 从首页轨道/任务列表点进来时那份数据本来就在手上（列表 1s 一轮，日志尾可能短几行，
+ * 但日志盒是定高内部滚动，看不出来），首帧直接用种子就没有那一拍。
+ */
+const lastTaskById = new Map<string, ConversionTask>();
+
+export function peekTask(id: string): ConversionTask | undefined {
+    return lastTaskById.get(id);
+}
+
 /** 任务列表（Rust: list_tasks） */
 export async function listTasks(): Promise<ConversionTask[]> {
     // 只在成功那一路写缓存：读失败留下上一次的值，页面顶一帧旧数据后由 1s 轮询换回来，
@@ -52,15 +64,19 @@ export async function listTasks(): Promise<ConversionTask[]> {
         ? await invokeOrMock<ConversionTask[]>("list_tasks", undefined, () => mock.mockListTasks())
         : await mock.mockListTasks();
     lastTaskList = list;
+    for (const t of list) lastTaskById.set(t.id, t);
     return list;
 }
 
 /** 单任务（Rust: get_task(id)） */
 export async function getTask(id: string): Promise<ConversionTask | undefined> {
-    if (!isTauri) return mock.mockGetTask(id);
-    return invokeOrMock("get_task", { id }, () =>
-        mock.mockGetTask(id)
-    ).then((t) => t ?? undefined);
+    const t = isTauri
+        ? await invokeOrMock<ConversionTask | undefined>("get_task", { id }, () =>
+              mock.mockGetTask(id)
+          )
+        : await mock.mockGetTask(id);
+    if (t) lastTaskById.set(id, t);
+    return t;
 }
 
 /** 取消任务（Rust: cancel_task(id)） */
