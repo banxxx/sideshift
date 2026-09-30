@@ -28,6 +28,11 @@ src-tauri/.probe-*.json
 .wrangler/
 .dev.vars
 
+# 名单的本地工作副本：`/submit` 拉下来改完再推的那一份，以及推之前的留档
+# （内容是贡献者昵称，且真源在线上 KV，没必要进仓库历史）
+deploy/ack/contributors.local.json
+deploy/ack/contributors.prev.json
+
 # Editor directories and files
 .vscode/*
 .idea

@@ -11,7 +11,7 @@ const LIST_KEY = "contributors.json";
 const MOJANG = "https://api.mojang.com/users/profiles/minecraft/";
 const SESSION = "https://sessionserver.mojang.com/session/minecraft/profile/";
 const TEXTURE_URL = "https://textures.minecraft.net/texture/abc123";
-const ID = "0b664383eb224f5188b9b0fc669f94f2";
+const ID = "deadbeefdeadbeefdeadbeefdeadbeef";
 
 /** 极简 KV 替身：只实现用得到的 get(text|json) / put，并暴露 store 供断言 */
 function fakeKV(seed = {}) {
@@ -37,7 +37,7 @@ const textureValue = (url = TEXTURE_URL) => btoa(JSON.stringify({ skins: { model
 
 /** 一条链都走得通的路由表；要测失败分支时按需覆盖其中一条 */
 const healthy = [
-    [MOJANG, () => ok({ id: ID, name: "Banxxx" })],
+    [MOJANG, () => ok({ id: ID, name: "Player0" })],
     [SESSION, () => ok({ id: ID, properties: [{ name: "textures", value: textureValue() }] })],
 ];
 
@@ -107,20 +107,20 @@ console.log("resolve");
 
 await withFetch(healthy, async (calls) => {
     const kv = fakeKV();
-    const out = await resolve("Banxxx", { ACK: kv }, null);
+    const out = await resolve("Player0", { ACK: kv }, null);
     assert.equal(out.uuid, ID);
     assert.equal(out.textures, TEXTURE_URL);
     assert.deepEqual(calls, ["api.mojang.com", "sessionserver.mojang.com"], "冷路径该正好两次外呼");
-    const row = JSON.parse(kv.store.get("skin:banxxx"));
+    const row = JSON.parse(kv.store.get("skin:player0"));
     assert.equal(row.u, ID);
-    assert.equal(row.n, "Banxxx");
+    assert.equal(row.n, "Player0");
     assert.ok(Math.abs(Date.now() - row.t) < 5000, "t 该是本次写入的时刻");
 });
 check("cold path resolves once and stores the row");
 
 await withFetch(healthy, async (calls) => {
-    const kv = fakeKV({ "skin:banxxx": JSON.stringify({ u: "cached", x: TEXTURE_URL, t: Date.now() }) });
-    const out = await resolve("Banxxx", { ACK: kv }, null);
+    const kv = fakeKV({ "skin:player0": JSON.stringify({ u: "cached", x: TEXTURE_URL, t: Date.now() }) });
+    const out = await resolve("Player0", { ACK: kv }, null);
     assert.equal(out.uuid, "cached");
     assert.equal(calls.length, 0, "命中缓存不该出网");
 });
@@ -128,16 +128,16 @@ check("warm path makes zero outbound calls");
 
 await withFetch(healthy, async (calls) => {
     const stale = Date.now() - 91 * 24 * 3600 * 1000;
-    const kv = fakeKV({ "skin:banxxx": JSON.stringify({ u: "old", t: stale }) });
-    const out = await resolve("Banxxx", { ACK: kv }, null);
+    const kv = fakeKV({ "skin:player0": JSON.stringify({ u: "old", t: stale }) });
+    const out = await resolve("Player0", { ACK: kv }, null);
     assert.equal(out.uuid, ID, "改名会把名字交给别人，过期必须重查");
     assert.equal(calls.length, 2);
 });
 check("stale row is re-resolved");
 
 await withFetch(healthy, async () => {
-    const broken = fakeKV({ "skin:banxxx": "{not json" });
-    const out = await resolve("Banxxx", { ACK: broken }, null);
+    const broken = fakeKV({ "skin:player0": "{not json" });
+    const out = await resolve("Player0", { ACK: broken }, null);
     assert.equal(out.uuid, ID, "坏档该当作未命中");
 });
 check("a corrupt row degrades to a miss");
@@ -172,12 +172,12 @@ check("illegal names never reach Mojang");
 
 await withFetch(
     [
-        [MOJANG, () => ok({ id: ID, name: "Banxxx" })],
+        [MOJANG, () => ok({ id: ID, name: "Player0" })],
         [SESSION, () => empty(500)],
     ],
     async () => {
         const kv = fakeKV();
-        const out = await resolve("Banxxx", { ACK: kv }, null);
+        const out = await resolve("Player0", { ACK: kv }, null);
         assert.equal(out.uuid, ID, "贴图那条腿挂了不该带走 uuid");
         assert.equal(out.textures, undefined);
     }
@@ -193,11 +193,11 @@ for (const [label, url, expect] of [
 ]) {
     await withFetch(
         [
-            [MOJANG, () => ok({ id: "uuid-t", name: "Banxxx" })],
+            [MOJANG, () => ok({ id: "uuid-t", name: "Player0" })],
             [SESSION, () => ok({ properties: [{ name: "textures", value: textureValue(url) }] })],
         ],
         async () => {
-            const out = await resolve("Banxxx", { ACK: fakeKV() }, null);
+            const out = await resolve("Player0", { ACK: fakeKV() }, null);
             assert.equal(out.uuid, "uuid-t", `${label}：uuid 该照常回`);
             assert.equal(out.textures, expect, label);
         }
@@ -207,11 +207,11 @@ check("texture url host gate");
 
 await withFetch(
     [
-        [MOJANG, () => ok({ id: "uuid-c", name: "Banxxx" })],
+        [MOJANG, () => ok({ id: "uuid-c", name: "Player0" })],
         [SESSION, () => ok({ properties: [{ name: "textures", value: btoa(JSON.stringify({ skins: { classic: { url: "https://textures.minecraft.net/texture/c" } } })) }] })],
     ],
     async () => {
-        const out = await resolve("Banxxx", { ACK: fakeKV() }, null);
+        const out = await resolve("Player0", { ACK: fakeKV() }, null);
         assert.equal(out.textures, "https://textures.minecraft.net/texture/c", "没有 model 档时回落 classic");
     }
 );
@@ -221,7 +221,7 @@ check("classic skin is the fallback");
 
 console.log("validateList");
 
-const GOOD = JSON.stringify({ version: "1", people: [{ name: "Banxxx", minecraftId: true }] });
+const GOOD = JSON.stringify({ version: "1", people: [{ name: "Player0", minecraftId: true }] });
 for (const raw of [
     GOOD,
     JSON.stringify({ version: "1", people: [] }), // 空名单是合法状态（他还没加人）
@@ -289,7 +289,7 @@ check("write path validates before touching KV");
 
 // 这一组必须跑在 withFetch 里：不桩掉 globalThis.fetch 的话，真网络一挂就只能测到"全错"
 await withFetch(healthy, async (calls) => {
-    const deduped = await skins(["Banxxx", "Banxxx", "Banxxx"]);
+    const deduped = await skins(["Player0", "Player0", "Player0"]);
     assert.equal(deduped.kv.store.size, 1, "去重失效会写出多份同名档");
     assert.equal(calls.length, 2, "同名三次该只打 Mojang + sessionserver 各一次");
 
@@ -300,7 +300,7 @@ await withFetch(healthy, async (calls) => {
 
     assert.equal((await skins([])).res.status, 400);
     assert.equal(
-        (await skins(["Banxxx"], deduped.kv)).res.headers.get("cache-control"),
+        (await skins(["Player0"], deduped.kv)).res.headers.get("cache-control"),
         "public, max-age=300",
         "0 等于关缓存，白烧额度"
     );

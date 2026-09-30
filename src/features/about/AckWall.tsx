@@ -262,40 +262,50 @@ function AckCard({
         []
     );
 
-    /** 最下面那一层：名字首字块。没有 MC 身份、又没有可用自带图的人都落这里 */
-    const initials = (
+    /** 头像浮起那一寸：谁当外层谁挂它，垫层与图叠两层不能各浮一次 */
+    const headFloat = "transition-transform duration-200 group-hover/ack:[transform:translateZ(16px)]";
+
+    /** 最下面那一层：名字首字块。没有 MC 身份、又没有可用自带图的人都落这里（`extra` 是给外层挂 hover 的） */
+    const initialsBox = (extra: string) => (
         <span
             aria-hidden
             className={cn(
                 "flex shrink-0 items-center justify-center rounded-[4px] bg-surface-2",
                 "font-mono text-[12px] font-semibold uppercase text-text-2",
-                "transition-transform duration-200 group-hover/ack:[transform:translateZ(16px)]"
+                extra
             )}
             style={{ width: S, height: S }}
         >
             {initialsOf(p.name)}
         </span>
     );
+    const initials = initialsBox(headFloat);
 
     /* 头像三层的落法，三条各自是被点过名的决定：
      *  - 有 `minecraftId`：正版皮肤 → 查完了却没有（离线 / 404 / 名字没查到）→ **3D Steve**。
      *    这一档整个不看 `avatar`：登记了 MC 身份的人以 MC 身份为准，两张皮并存等于各说一半。
-     *  - 没有 `minecraftId`：`avatar` 平面一张 → 取不到（404、离线、图被删）就**首字块**，
+     *  - 没有 `minecraftId`：`avatar` 平面一张，**垫在首字块上面**——图没解出来的那几帧（第一次进页、
+     *    离线）与永远解不出来的（404、图被删）都直接露出首字块，槽位不空一帧，也不用等 `onError` 换 DOM。
      *    不落默认头：那人根本不是 MC 玩家，给一张 Steve 是替 TA 宣告了一个 TA 没宣告过的身份。
      *  - `skinReady` 为假（这批地址还在查）不给 Steve —— 否则每个**有**皮肤的人都会先闪一张 Steve。
      */
     const headUrl = skin ?? (p.minecraftId && skinReady ? STEVE : undefined);
     const flat =
         !p.minecraftId && p.avatar && failedSrc !== p.avatar ? (
-            <img
-                src={p.avatar}
-                onError={() => setFailedSrc(p.avatar ?? null)}
-                alt=""
+            <span
                 aria-hidden
-                draggable={false}
-                className="shrink-0 rounded-[4px] object-cover transition-transform duration-200 group-hover/ack:[transform:translateZ(16px)]"
+                className={cn("relative shrink-0", headFloat)}
                 style={{ width: S, height: S }}
-            />
+            >
+                {initialsBox("")}
+                <img
+                    src={p.avatar}
+                    onError={() => setFailedSrc(p.avatar ?? null)}
+                    alt=""
+                    draggable={false}
+                    className="absolute inset-0 size-full rounded-[4px] object-cover"
+                />
+            </span>
         ) : (
             initials
         );
