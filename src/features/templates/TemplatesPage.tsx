@@ -660,7 +660,7 @@ export function TemplatesPage() {
                             <NoteRow icon={Info}>
                                 {t(
                                     "templates.drag-hint",
-                                    "拖动左侧把手排序 · 这里的顺序就是转换页那颗下拉的顺序 · 点铅笔进编辑"
+                                    "拖动排序 · 同步至转换配置页的排序"
                                 )}
                             </NoteRow>
                         </div>
@@ -711,7 +711,7 @@ export function TemplatesPage() {
                             <NoteRow icon={AlertTriangle}>
                                 {t(
                                     "templates.scope-hint",
-                                    "只收「换个包还要一样」的参数 · MC 版本、加载器版本、包内保留内容不进模板"
+                                    "MC 版本、加载器版本、包内保留内容不进模板"
                                 )}
                             </NoteRow>
                         </div>

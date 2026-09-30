@@ -214,7 +214,7 @@ export function TemplateEditPage() {
                 }
                 sub={
                     isNew
-                        ? t("templates.new-sub", "值取自当前转换页 · 勾哪行才写进模板")
+                        ? t("templates.new-sub", "选项取自当前转换页 · 勾选才写进模板")
                         : t("templates.edit-sub", "勾中的字段才会写入 · 未勾的保持当前值")
                 }
                 right={
@@ -651,8 +651,8 @@ export function TemplateEditPage() {
                         )}
                         <p className="w-full text-center font-mono text-[10px] leading-[14px] font-normal text-text-3">
                             {canSave
-                                ? t("templates.foot-edit", "只写参数 · 存本地配置目录 · 删模板不影响已建任务")
-                                : t("templates.foot-new", "勾至少一行、填个名字才能存")}
+                                ? t("templates.foot-edit", "删除模板不影响已建任务")
+                                : t("templates.foot-new", "至少勾选一项、补全名称才能保存模板")}
                         </p>
                     </Panel>
                 </aside>

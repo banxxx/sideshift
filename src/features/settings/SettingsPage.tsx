@@ -390,7 +390,7 @@ export function SettingsPage() {
                     </SettingRow>
                     <SettingRow
                         label={t("settings.strip-client", "剔除客户端专属资源")}
-                        desc={t("settings.auto-removes", "按端证据自动移除光影、小地图等客户端模组")}
+                        desc={t("settings.auto-removes", "按端证据自动移除光影、资源包等客户端资源")}
                     >
                         <Toggle
                             size="md"
@@ -541,7 +541,7 @@ export function SettingsPage() {
                     </SettingRow>
                     <SettingRow
                         label={t("settings.env-lookup-source", "端信息反查源")}
-                        desc={t("settings.env-lookup-source-desc", "联网那一轮只问选定的这一个源，不互相回落；麦块没有按文件哈希反查的接口，选它时精确到文件的结论拿不到")}
+                        desc={t("settings.env-lookup-source-desc", "联网查询模组端信息的来源")}
                     >
                         <SearchSelect
                             plain
@@ -633,7 +633,7 @@ export function SettingsPage() {
                         desc={
                             settings.updateChannel
                                 ? t("settings.pinned-choice", "已按你的选择固定，不再看本机版本号判档")
-                                : t("settings.pinned-follows", "未固定：跟随当前构建（现在收{{channel}}）", {
+                                : t("settings.pinned-follows", "当前构建版本（{{channel}}）", {
                                       channel: channelLabel(channelOf(settings)),
                                   })
                         }
