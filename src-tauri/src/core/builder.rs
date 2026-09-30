@@ -11,6 +11,13 @@ use zip::CompressionMethod;
 use crate::core::installer::Installed;
 use crate::core::mc_version;
 use crate::models::{ConversionOptions, LoaderKind};
+use run_script::{
+    jvm_args, one_line, one_line_escaped, props_must_escape, resolve_shape, RunShape,
+};
+use zip_writer::{collect, write_zip, Planned};
+
+mod run_script;
+mod zip_writer;
 
 #[derive(Error, Debug)]
 pub enum BuilderError {
@@ -75,19 +82,6 @@ pub enum BuildEvent {
     Group { label: String, files: usize, bytes: u64 },
 }
 
-/// 已是压缩格式的后缀：jar/zip 本体就是 deflate，png/ogg 是有损压缩，
-/// 再压一遍只烧 CPU 不省体积——单线程 Deflate 压几百 MB mod 就是「构建特别慢」的全部原因
-const STORED_EXTS: &[&str] = &[
-    "jar", "zip", "png", "jpg", "jpeg", "webp", "gif", "ogg", "mp3", "mp4", "webm", "7z", "gz",
-    "bz2", "xz", "zst", "woff", "woff2", "tga", "dds", "bundled",
-];
-
-fn stored_for(rel: &str) -> bool {
-    match rel.rsplit_once('.') {
-        Some((_, ext)) => STORED_EXTS.contains(&ext.to_ascii_lowercase().as_str()),
-        None => false,
-    }
-}
 
 /// 输出名落地：默认名空着就用它；被别的包占了就 `{stem}-server-2.zip` 递增；
 /// 递增到本任务自己上一份时回到那份（覆写，不留一堆重复包）
@@ -173,178 +167,7 @@ pub fn build(
     })
 }
 
-/// 逐条目写入：jar 这类已压缩内容走 Stored（ deflate 再压一遍不省体积只烧时间），
-/// 文本走 Deflated；每个顶层目录写完发一条 Group 事件
-fn write_zip(
-    zip: &mut zip::ZipWriter<BufWriter<File>>,
-    plan: &[Planned],
-    on_event: &mut dyn FnMut(&BuildEvent),
-) -> Result<(), BuilderError> {
-    let mut groups = group_totals(plan);
-    for p in plan {
-        let mut opts = SimpleFileOptions::default().compression_method(if stored_for(&p.rel) {
-            CompressionMethod::Stored
-        } else {
-            CompressionMethod::Deflated
-        });
-        // zip 默认不携带 unix 权限（解压后 644），shell 脚本需补执行位
-        if p.exec {
-            opts = opts.unix_permissions(0o755);
-        }
-        zip.start_file(&p.rel, opts)?;
-        let mut f = File::open(&p.path)?;
-        std::io::copy(&mut f, zip)?;
-        on_event(&BuildEvent::File { group: p.group.clone(), bytes: p.size });
-        let Some(g) = groups.iter_mut().find(|g| g.label == p.group) else {
-            continue;
-        };
-        g.done += 1;
-        if g.done == g.files && !g.flushed {
-            g.flushed = true;
-            on_event(&BuildEvent::Group {
-                label: g.label.clone(),
-                files: g.files,
-                bytes: g.bytes,
-            });
-        }
-    }
-    Ok(())
-}
 
-/// 待写入条目：绝对路径 + zip 内相对路径 + 大小 + 归属顶层分组
-struct Planned {
-    path: PathBuf,
-    rel: String,
-    size: u64,
-    group: String,
-    /// shell 脚本：zip 里要带 755 执行位
-    exec: bool,
-}
-
-#[derive(Clone)]
-struct GroupAcc {
-    label: String,
-    files: usize,
-    bytes: u64,
-    done: usize,
-    flushed: bool,
-}
-
-/// staging 第一层目录即一个分组（mods/ 说「模组」，包根散件说「根文件」）——
-/// 与取件阶段的分目录日志同一套口径
-fn group_of(rel: &str) -> String {
-    match rel.split_once('/') {
-        Some((head, _)) if head.eq_ignore_ascii_case("mods") => "模组".to_string(),
-        Some((head, _)) => head.to_string(),
-        None => "根文件".to_string(),
-    }
-}
-
-fn group_totals(plan: &[Planned]) -> Vec<GroupAcc> {
-    let mut out: Vec<GroupAcc> = Vec::new();
-    for p in plan {
-        match out.iter_mut().find(|g| g.label == p.group) {
-            Some(g) => {
-                g.files += 1;
-                g.bytes += p.size;
-            }
-            None => out.push(GroupAcc {
-                label: p.group.clone(),
-                files: 1,
-                bytes: p.size,
-                done: 0,
-                flushed: false,
-            }),
-        }
-    }
-    out
-}
-
-/// 递归收集待打包条目（排序保证目录顺序稳定，日志与产物可复现）
-fn collect(root: &Path, dir: &Path, out: &mut Vec<Planned>) -> Result<(), BuilderError> {
-    let mut entries: Vec<PathBuf> = std::fs::read_dir(dir)?.filter_map(|e| e.ok().map(|e| e.path())).collect();
-    entries.sort();
-    for path in entries {
-        let meta = std::fs::metadata(&path)?;
-        if meta.is_dir() {
-            collect(root, &path, out)?;
-            continue;
-        }
-        let rel = path
-            .strip_prefix(root)
-            .map_err(|e| BuilderError::Io(std::io::Error::other(e)))?
-            .to_string_lossy()
-            .replace('\\', "/");
-        out.push(Planned {
-            group: group_of(&rel),
-            exec: rel.to_lowercase().ends_with(".sh"),
-            size: meta.len(),
-            path,
-            rel,
-        });
-    }
-    Ok(())
-}
-
-/// Aikar's flags：官方推荐的 G1GC 调优参数组（4G+ 内存口径）
-const AIKAR_FLAGS: &str = "-XX:+UseG1GC -XX:+ParallelRefProcEnabled -XX:MaxGCPauseMillis=200 \
--XX:+UnlockExperimentalVMOptions -XX:+DisableExplicitGC -XX:+AlwaysPreTouch \
--XX:G1NewSizePercent=30 -XX:G1MaxNewSizePercent=40 -XX:G1HeapRegionSize=8M \
--XX:G1ReservePercent=20 -XX:G1HeapWastePercent=5 -XX:G1MixedGCCountTarget=4 \
--XX:InitiatingHeapOccupancyPercent=15 -XX:G1MixedGCLiveThresholdPercent=90 \
--XX:G1RSetUpdatingPauseTimePercent=5 -XX:SurvivorRatio=32 -XX:+PerfDisableSharedMem \
--XX:MaxTenuringThreshold=1";
-
-/// 内存 + Aikar + 用户附加参数 → 一行 JVM 参数（换行剔除，防注入第二行命令）
-fn jvm_args(options: &ConversionOptions) -> String {
-    let mut parts = vec![format!("-Xmx{}M", options.memory_mb)];
-    if options.use_aikar_flags {
-        parts.push(AIKAR_FLAGS.to_string());
-    }
-    let extra = options.extra_jvm_args.trim();
-    if !extra.is_empty() {
-        parts.push(extra.replace(['\r', '\n'], " "));
-    }
-    parts.join(" ")
-}
-
-/// 单行属性值清洗：换行→空格，反斜杠转义（server.properties 的 \n 语义）
-fn one_line(s: &str) -> String {
-    s.replace('\\', "\\\\").replace(['\r', '\n'], " ")
-}
-
-/// 同上，再把非 ASCII 一律换成 properties 原生的 `\uXXXX`。
-/// 星平面字符（emoji）按 UTF-16 拆成一对代理：`.properties` 只认得 `char` 那一层，
-/// 直接写 `\u1F9F1` 会被解成一个非法码点
-fn one_line_escaped(s: &str) -> String {
-    let mut out = String::new();
-    for c in one_line(s).chars() {
-        if c.is_ascii() {
-            out.push(c);
-        } else if (c as u32) > 0xFFFF {
-            for u in c.encode_utf16(&mut [0u16; 2]) {
-                out.push_str(&format!("\\u{u:04X}"));
-            }
-        } else {
-            out.push_str(&format!("\\u{:04X}", c as u32));
-        }
-    }
-    out
-}
-
-/// 这个 MC 版本的服务端读属性文件时会不会按 ISO-8859-1 解我们的 UTF-8 字节（会 ⇒ 要转义）。
-///
-/// 判据只有一条硬事实：**1.20 pre1 起**才是「UTF-8 优先、Latin-1 兜底」，更早一律 Latin-1，
-/// 于是一个中文在服务端那边变成三个怪字符。`\uXXXX` 两边都解得对，所以判不出来时选**转**
-/// （代价只是文件里那行不可读，反过来判错是真乱码）——快照串 `24w14a` 那一类就走这一格。
-/// 老 Beta/Alpha 不是「判不出」而是真读得出线（`b1.7.3` → 7 线），只是同样落在 1.20 之前。
-/// 版本线怎么从两套编号（`1.20.1` / `26.3`）里读出来在 `core::mc_version`，与 Java 需求线共用一把尺。
-fn props_must_escape(mc: &str) -> bool {
-    match mc_version::parse(mc) {
-        Some(l) => l.line < 20,
-        None => true,
-    }
-}
 
 /// 安装目录里不进交付包的东西（实测 Forge 1.20.1 / NeoForge 26.2 的新式布局与 1.16.5 的老式布局）：
 /// run 脚本与 JVM 参数模板由 builder 自己生成，`inst.sha1` 是安装器自留的记账
@@ -409,92 +232,6 @@ fn merge_installed(src: &Path, staging: &Path) -> Result<(), BuilderError> {
     Ok(())
 }
 
-/// 本机装出来的启动形态（三态，实测三种布局各占一态）
-enum RunShape {
-    /// 没本机安装：包里是 installer jar，start 脚本首次运行先跑 `--installServer`（今日行为）
-    FirstBootInstall,
-    /// 新式（实测 Forge 1.20.1、NeoForge 26.2）：安装器留下 run 脚本 + `libraries/<...>/{win,unix}_args.txt`。
-    /// 我们生成的脚本只引用那两份参数文件，不复用 run 脚本（它用裸 `java`、且 bat 末尾带 `pause`）
-    ArgsFiles { win: String, unix: String },
-    /// 老 Forge（实测 1.16.5）：没有 run 脚本与参数文件，顶层 universal jar 的 MANIFEST 自带
-    /// 相对 `Class-Path: libraries/...` 与 `ServerLaunchArgs` ⇒ 一句 `java -jar <jar> nogui` 就够
-    LegacyJar { jar: String },
-}
-
-/// 从 installer 自己写的 run 脚本里取参数文件路径。那句固定是
-/// `java @user_jvm_args.txt @libraries/net/minecraftforge/forge/1.20.1-47.4.10/win_args.txt %*`，
-/// 路径全用 POSIX 斜杠（Windows 侧也认）。不硬编码各家目录布局：Forge 与 NeoForge 的层级不同，
-/// 版本号一变又会错，而这两行脚本就是官方给的答案
-fn args_token(script: &str, file: &str) -> Option<String> {
-    script
-        .split_whitespace()
-        .map(|t| t.trim_matches(['"', ';']))
-        .find(|t| t.starts_with('@') && t.to_ascii_lowercase().ends_with(file))
-        // 脚本里的路径要进 zip 条目名与 sh 脚本，统一成正斜杠
-        .map(|t| t[1..].replace('\\', "/"))
-}
-
-/// 决定启动形态。认不出来的布局直接报错而不是退回首启自装：用户开了这一档要的是
-/// 「上传即跑」，悄悄给一份还得联网首装的包比失败更坏
-fn resolve_shape(installed: Option<&Installed>) -> Result<RunShape, BuilderError> {
-    let Some(installed) = installed else {
-        return Ok(RunShape::FirstBootInstall);
-    };
-    let dir = installed.dir.as_path();
-    if !installed.report.scripts.is_empty() {
-        let mut win: Option<String> = None;
-        let mut unix: Option<String> = None;
-        for name in ["run.bat", "run.sh"] {
-            let Ok(text) = std::fs::read_to_string(dir.join(name)) else {
-                continue;
-            };
-            if win.is_none() {
-                win = args_token(&text, "win_args.txt");
-            }
-            if unix.is_none() {
-                unix = args_token(&text, "unix_args.txt");
-            }
-        }
-        // 只认出一家时按同名换后缀推另一家：两份参数文件在同一目录（实测），推完还要落盘验一遍
-        let (w, u) = match (win, unix) {
-            (Some(w), Some(u)) => (w, u),
-            (Some(w), None) => {
-                let u = w.replace("win_args.txt", "unix_args.txt");
-                (w, u)
-            }
-            (None, Some(u)) => {
-                let w = u.replace("unix_args.txt", "win_args.txt");
-                (w, u)
-            }
-            (None, None) => {
-                return Err(BuilderError::Layout(format!(
-                    "{} 里的 run 脚本没有引用任何参数文件",
-                    dir.display()
-                )))
-            }
-        };
-        for p in [&w, &u] {
-            if !dir.join(p).is_file() {
-                return Err(BuilderError::Layout(format!(
-                    "run 脚本指向的 {p} 不在安装目录里"
-                )));
-            }
-        }
-        return Ok(RunShape::ArgsFiles { win: w, unix: u });
-    }
-    // 老式：顶层散 jar 里挑 universal 那枚（`minecraft_server.*.jar` 是官方本体不带启动入口，
-    // 安装器 jar 我们不打进包，指过去就是死链）
-    if let Some(jar) = installed.report.jars.iter().find(|j| {
-        let lower = j.to_ascii_lowercase();
-        !lower.starts_with("minecraft_server") && !lower.contains("installer")
-    }) {
-        return Ok(RunShape::LegacyJar { jar: jar.clone() });
-    }
-    Err(BuilderError::Layout(format!(
-        "{} 顶层既没有 run 脚本也没有可直启的 jar",
-        dir.display()
-    )))
-}
 
 /// 写一份包根交付文件。**包内已自带同名文件（用户在「客户端保留内容」里勾了它）就以包内那份为准**：
 /// 勾了就是要自己那份，再按配置写一遍等于把用户的决定覆盖掉。跳过的那枚记进 `reused`，
@@ -704,6 +441,7 @@ simulation-distance=10
 #[cfg(test)]
 mod tests {
     use super::*;
+    use super::zip_writer::{group_of, stored_for};
 
     fn opts() -> ConversionOptions {
         ConversionOptions {

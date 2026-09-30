@@ -13,7 +13,7 @@ import { TasksPage } from "@/features/tasks/TasksPage";
 import { AboutPage } from "@/features/about/AboutPage";
 import { SettingsPage } from "@/features/settings/SettingsPage";
 import { ConvertPage } from "@/features/convert/ConvertPage";
-import { TaskDetailPage } from "@/features/task/TaskDetailPage";
+import { TaskDetailPage } from "@/features/tasks/detail/TaskDetailPage";
 import { TemplatesPage } from "@/features/templates/TemplatesPage";
 import { TemplateEditPage } from "@/features/templates/TemplateEditPage";
 import { TrashBin } from "@/features/tasks/TrashBin";

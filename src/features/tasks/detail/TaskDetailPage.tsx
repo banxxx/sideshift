@@ -53,11 +53,11 @@ import {
 import { t, tSource, useT } from "@/lib/i18n";
 import { errOf } from "@/lib/errors";
 import type { ActivityInfo, ConversionReport, ConversionTask } from "@/lib/types";
-import { TaskErrorCard } from "@/features/task/TaskErrorCard";
-import { ActivitySubBar, activityMeasure, activityVerb } from "@/features/task/ActivityBar";
+import { TaskErrorCard } from "@/features/tasks/detail/TaskErrorCard";
+import { ActivitySubBar, activityMeasure, activityVerb } from "@/features/tasks/detail/ActivityBar";
 import { LogCopyButton } from "@/components/shared/LogCopyButton";
 import { PlanReviewView } from "@/features/convert/PlanReviewView";
-import { buildPlanSummary, ReportView } from "@/features/report/ReportView";
+import { buildPlanSummary, ReportView } from "@/features/tasks/detail/ReportView";
 import {
     Bar,
     Btn,

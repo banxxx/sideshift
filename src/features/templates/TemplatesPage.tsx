@@ -58,27 +58,19 @@
  *    卡片与空态共用它：空态缺的就是卡，画同一枚才认得出「缺的是这个东西」
  *    （与 EmptyTasks 的分工同一族：导航 `ListChecks`、空态 `Inbox`）。
  */
-import {
-    AlertTriangle,
-    Copy,
-    GripVertical,
-    Info,
-    Pencil,
-    Plus,
-    SlidersHorizontal,
-    Trash2,
-} from "lucide-react";
+import { AlertTriangle, Info, Plus } from "lucide-react";
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { motion, useReducedMotion } from "motion/react";
 import * as api from "@/lib/api";
 import { useT } from "@/lib/i18n";
 import { useNavigation } from "@/lib/navigation";
-import { templateValueCount, uniqueTemplateName, type ConversionTemplate } from "@/lib/types";
-import { Btn, IconBtn, NoteRow, PageHeader, Swap } from "@/components/ui";
+import { uniqueTemplateName, type ConversionTemplate } from "@/lib/types";
+import { Btn, NoteRow, PageHeader, Swap } from "@/components/ui";
 import { DeleteTemplateModal } from "./DeleteTemplateModal";
+import { EmptyTemplates, LoadingTemplates } from "./TemplatePlaceholders";
+import { TemplateRow } from "./TemplateRow";
 import { guardTemplateCap, useTemplateTable } from "./use-template-table";
-import { cn } from "@/lib/utils";
 import {
     MAX_DT,
     SORT,
@@ -101,12 +93,6 @@ import {
 /** 行距：单卡时步距量不到，用它兜底（除法才不会出 Infinity）——必须与列表那头的 `gap-2` 同源 */
 const FALLBACK_GAP = 8;
 
-/**
- * 抬起层那三枚按钮禁的是「键盘还能 Tab 进去」（那层已 `aria-hidden`，可聚焦的 child 站在隐形层上），
- * 不是「它们不能按」。所以把 `IconBtn` 自带的 `disabled:opacity-40` 压回原样——
- * 跟手那张必须和流内那张一模一样，他否决过任何让拖影看起来不同的做法。
- */
-const LIFT_INERT = "disabled:opacity-100";
 
 /** 抬起那一刻量到的列几何：卡高与竖向步距（家位一律由「顺序 × 步距」算，不逐帧读 DOM） */
 interface Column {
@@ -825,153 +811,3 @@ export function TemplatesPage() {
     );
 }
 
-/* ---------------- 单卡 ---------------- */
-
-/**
- * 一张模板卡。两处复用同一份 markup：列表里那张（可拖、有三枚动作）与抬起层那张（`overlay`，
- * 只多一层投影、不吃命中、动作按钮不再挂着），所以「跟手的是这张卡本体」这条读感才立得住。
- */
-function TemplateRow({
-    template,
-    lifted,
-    overlay,
-    onOpen,
-    onCopy,
-    onDelete,
-    onGripDown,
-}: {
-    template: ConversionTemplate;
-    /** 这张已经脱离显示序列、由抬起层代管：格子留着（容器高度恒定才不跳版），卡本身收起来 */
-    lifted?: boolean;
-    /** 抬起层：投影 + 不吃命中，动作件不再要交互 */
-    overlay?: boolean;
-    onOpen?: () => void;
-    onCopy?: () => void;
-    onDelete?: () => void;
-    onGripDown?: (e: React.PointerEvent<HTMLElement>) => void;
-}) {
-    const t = useT();
-    const count = templateValueCount(template.values);
-    return (
-        <section
-            className={cn(
-                // 卡身没有 hover 档：整卡不可点，hover 压深会把它读成一个假出口
-                "group flex items-center gap-3 rounded-[12px] border bg-surface p-5",
-                overlay ? "border-accent shadow-lg" : "border-stroke",
-                lifted && "invisible"
-            )}
-        >
-            {/* 拖动把手：命中区**吃满整卡高度**（`self-stretch`，实测 79px 而不是原来那 32px 小格）——
-                它是唯一的拖动入口，命中区太小就直接读成「拖不动」。`touch-none` 让指针不被系统滚动手势吃掉，
-                `draggable={false}` 挡掉「从图标起步拖出原生拖拽」那一路（它一发 `pointercancel` 手势就归它了）。
-                这一按之后**不再挂任何 move/up**：整趟监听都挂在 `window` 上，见 `onGripDown`。
-                整卡 draggable 那条已经删了——Tauri 的 OS 拖入拦截开着，dragstart 本来就不会来。 */}
-            <span
-                onPointerDown={onGripDown}
-                draggable={false}
-                className={cn(
-                    "flex w-5 shrink-0 self-stretch touch-none items-center justify-center rounded-lg text-text-3",
-                    "transition-colors group-hover:text-text-2",
-                    !overlay && "cursor-grab active:cursor-grabbing"
-                )}
-            >
-                <GripVertical className="size-3.5" />
-            </span>
-            <span className="flex size-9 shrink-0 items-center justify-center rounded-[10px] bg-accent-dim text-accent">
-                <SlidersHorizontal className="size-[17px]" />
-            </span>
-            <span className="flex min-w-0 flex-1 flex-col gap-[3px]">
-                <span className="truncate font-mono text-[13px] leading-[20px] font-semibold text-text-1">
-                    {template.name}
-                </span>
-                <span className="truncate font-mono text-[11px] leading-[16px] font-normal text-text-3">
-                    {/* 没备注就是没有备注：一个短横足够，「未填备注」四个字会把这一行读成一句状态 */}
-                    {template.note || "-"}
-                </span>
-            </span>
-            {/* 两轨分界：左边「这张卡叫什么」，右边「它收了几档 + 能做什么」 */}
-            <span className="h-7 w-px shrink-0 bg-stroke-soft" />
-            <span className="min-w-[34px] shrink-0 text-right font-mono text-[11px] leading-[16px] font-normal text-text-3">
-                {t("templates.n-items", "{{count}} 项", { count })}
-            </span>
-            <span className="flex shrink-0 items-center gap-2">
-                <IconBtn
-                    icon={Pencil}
-                    title={t("templates.edit", "编辑")}
-                    className={LIFT_INERT}
-                    disabled={overlay}
-                    onClick={onOpen}
-                />
-                <IconBtn
-                    icon={Copy}
-                    title={t("templates.duplicate", "复制")}
-                    className={LIFT_INERT}
-                    disabled={overlay}
-                    onClick={onCopy}
-                />
-                <IconBtn
-                    icon={Trash2}
-                    title={t("templates.delete", "删除")}
-                    className={cn("hover:bg-redstone-dim hover:text-redstone", LIFT_INERT)}
-                    disabled={overlay}
-                    onClick={onDelete}
-                />
-            </span>
-        </section>
-    );
-}
-
-/* ---------------- 首轮读数占位 / 零模板空态（屏 ④） ---------------- */
-
-/** 占位照真实卡排（同一套 p-5 / 36 图标盒 / 双行文字高度 / `gap-2` 行距）：读数到手时高度几乎不动 */
-function LoadingTemplates() {
-    return (
-        <div className="flex flex-col gap-2">
-            {Array.from({ length: 3 }, (_, i) => (
-                <div
-                    key={i}
-                    className="flex items-center gap-3 rounded-[12px] border border-stroke bg-surface p-5"
-                >
-                    <span className="size-9 shrink-0 animate-pulse rounded-[10px] bg-surface-2" />
-                    <span className="flex min-w-0 flex-1 flex-col gap-[3px]">
-                        <span className="h-[13px] w-36 animate-pulse rounded bg-stroke" />
-                        <span className="h-[10px] w-52 animate-pulse rounded bg-stroke-soft" />
-                    </span>
-                    <span className="h-[11px] w-9 shrink-0 animate-pulse rounded bg-stroke-soft" />
-                    <span className="h-8 w-24 shrink-0 animate-pulse rounded-lg bg-stroke" />
-                </div>
-            ))}
-        </div>
-    );
-}
-
-/** 空态解剖照搬 EmptyTasks（TasksPage.tsx:389-416），一处不改：图标盒 56 r20、标题等宽 16/24、CTA 同款覆盖 */
-function EmptyTemplates() {
-    const t = useT();
-    const { navigate } = useNavigation();
-    return (
-        <div className="flex h-[clamp(400px,70vh,640px)] flex-col items-center justify-center gap-4 rounded-[12px] bg-bg-app px-5 py-10">
-            <div className="flex flex-col items-center gap-4">
-                <span className="flex size-14 items-center justify-center rounded-2xl bg-surface-2">
-                    <SlidersHorizontal className="size-6 text-text-3" />
-                </span>
-                <div className="flex flex-col items-center gap-1">
-                    <span className="font-mono text-[16px] leading-[24px] font-semibold text-text-1">
-                        {t("templates.none-yet", "还没有模板")}
-                    </span>
-                    <span className="font-mono text-[12px] leading-[18px] font-normal text-text-3">
-                        {t("templates.empty-sub", "在转换页把参数调好，存一份下次直接套用")}
-                    </span>
-                </div>
-            </div>
-            <Btn
-                variant="primary"
-                icon={Plus}
-                className="border border-stroke text-[12px] font-medium"
-                onClick={() => navigate("template")}
-            >
-                {t("templates.new-template", "新建模板")}
-            </Btn>
-        </div>
-    );
-}
