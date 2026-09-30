@@ -9,6 +9,7 @@ import { useCallback, useEffect, useRef, useState, type ReactNode } from "react"
 import { motion } from "motion/react";
 import * as api from "@/lib/api";
 import { notify } from "@/lib/notify";
+import { errOf } from "@/lib/errors";
 import { useT } from "@/lib/i18n";
 import { useNavigation } from "@/lib/navigation";
 import { CARD_RISE, PAGE_RISE } from "@/lib/page-motion";
@@ -148,7 +149,18 @@ export function TemplateEditPage() {
     const javaPathValue = String(draft?.values.javaPath ?? "");
     const javaLive = isIn("javaPath");
     const probeJava = useCallback(() => {
-        void api.probeJava(null, javaPathValue).then(setJavaProbe);
+        void api
+            .probeJava(null, javaPathValue)
+            .then(setJavaProbe)
+            .catch((e: unknown) => {
+                // 探不到候选时下拉只剩「自动选择」，不出一句话用户只会觉得列表缩水了
+                notify(
+                    t("common.java-probe-failed", "本机 Java 探测失败 · {{reason}}", {
+                        reason: errOf(e),
+                    }),
+                    "error"
+                );
+            });
     }, [javaPathValue]);
     useEffect(() => {
         if (javaLive) probeJava();

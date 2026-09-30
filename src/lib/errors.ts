@@ -1,5 +1,5 @@
 /**
- * 失败信息怎么「说给人听」，全站只这一处：后端只出种类代码（如 `net:offline:host`），本文件把代码换成本地化的一句话；
+ * 失败信息怎么「说给人听」，全站只这一处：后端只出种类代码（`net:种类:主机` 或 `app:种类`），本文件把代码换成本地化的一句话；
  * URL、路径、状态码一律不上界面，要留着排查的原句走 `TaskError.detail`（「复制诊断信息」读它，不读代码）。
  * `errOf` 对认不出的字符串退回 `tSource`——后端写死的中文整句本就在 source-keys 表里，照常翻。
  */
@@ -67,11 +67,27 @@ export function netText(code: string): string | null {
     }
 }
 
+/** `app:种类` → 界面那句话。命令层兜底码（阻塞任务崩了、系统程序没打开那个路径），同样不带路径 */
+export function appText(code: string): string | null {
+    if (!code.startsWith("app:")) return null;
+    switch (code.slice(4)) {
+        case "panic":
+            return t("lib.app-panic", "本机处理没能完成，重试一次");
+        case "open":
+            return t("lib.app-open", "打不开那个位置，可能它已经被移动或删除");
+        case "reveal":
+            return t("lib.app-reveal", "没能定位到那个文件，可能它已经不在原来的位置");
+        default:
+            return t("lib.app-generic", "本机操作没能完成，稍后重试");
+    }
+}
+
 /** invoke reject 回来的可能是 Error，也可能是 Rust 的字符串消息。全站提示一律过这里。 */
 export function errOf(e: unknown): string {
     const raw = e instanceof Error ? e.message : String(e);
     return (
         netText(raw) ??
+        appText(raw) ??
         tSource(
             /*i18n:
                 有任务正在转换或排队中，清空缓存会删掉它在用的文件

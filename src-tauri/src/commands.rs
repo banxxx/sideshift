@@ -26,6 +26,14 @@ fn lock(state: &AppState) -> std::sync::MutexGuard<'_, task_engine::Inner> {
     state.inner.lock().unwrap()
 }
 
+/// 命令层兜底错误码（`app:种类`）：与 `net:种类:主机` 同一套路，后端只出种类，
+/// 给人看的那句话在前端 `src/lib/errors.ts` 里。
+/// `panic` = 阻塞任务整个崩了（JoinError，真正的 panic 内容由 Rust 打到 stderr）；
+/// `open` / `reveal` = 系统程序没能打开或定位那个路径。
+fn app_code(kind: &str) -> String {
+    format!("app:{kind}")
+}
+
 fn last_parsed(state: &S<'_>) -> Option<Arc<ParsedPack>> {
     let inner = lock(&state);
     last_parsed_of(&inner)

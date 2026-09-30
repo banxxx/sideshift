@@ -12,7 +12,7 @@ use super::*;
 pub async fn open_local_path(app: AppHandle, path: String) -> Result<(), String> {
     app.opener()
         .open_path(native_path(&path), None::<&str>)
-        .map_err(|e| e.to_string())
+        .map_err(|_| app_code("open"))
 }
 
 /// 在系统文件管理器中定位文件
@@ -20,6 +20,6 @@ pub async fn open_local_path(app: AppHandle, path: String) -> Result<(), String>
 pub async fn reveal_local_path(app: AppHandle, path: String) -> Result<(), String> {
     app.opener()
         .reveal_item_in_dir(native_path(&path))
-        .map_err(|e| e.to_string())
+        .map_err(|_| app_code("reveal"))
 }
 

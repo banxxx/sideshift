@@ -1,4 +1,8 @@
 {
+  "lib.app-generic": "本機操作沒能完成，稍後重試",
+  "lib.app-open": "打不開那個位置，可能它已經被移動或刪除",
+  "lib.app-panic": "本機處理沒能完成，重試一次",
+  "lib.app-reveal": "沒能定位到那個檔案，可能它已經不在原來的位置",
   "lib.basis": "無依據",
   "lib.build": "建置",
   "lib.build-complete": "建置完成",

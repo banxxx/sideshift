@@ -1,4 +1,8 @@
 {
+  "lib.app-generic": "Local operation couldn't finish. Try again later",
+  "lib.app-open": "Couldn't open that location. It may have been moved or deleted",
+  "lib.app-panic": "Local processing couldn't finish. Try again",
+  "lib.app-reveal": "Couldn't locate that file. It may no longer be in its original folder",
   "lib.basis": "No basis",
   "lib.build": "Build",
   "lib.build-complete": "Build complete",

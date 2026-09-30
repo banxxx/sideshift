@@ -16,6 +16,7 @@
   "common.count_other": "{{count}}",
   "common.dark": "Dark",
   "common.entry-2": "All",
+  "common.java-probe-failed": "Local Java probe failed · {{reason}}",
   "common.latest": "Latest",
   "common.loaders-version": "Loaders & version",
   "common.logs-yet": "No logs yet",

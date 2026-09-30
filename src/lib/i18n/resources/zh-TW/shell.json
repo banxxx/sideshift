@@ -19,11 +19,15 @@
   "common.view-task": "查看任務詳情",
   "shell.about": "關於",
   "shell.back": "返回上一頁",
+  "shell.crash-reload": "重新載入",
+  "shell.crash-sub": "重新載入即可繼續，已排隊的轉換不受影響",
+  "shell.crash-title": "介面出錯了",
   "shell.dismiss-notification": "關閉提示",
   "shell.following-system": "跟隨系統（當前{{shade}}）· 點擊鎖定為{{next}}",
   "shell.home": "首頁",
   "shell.restore": "還原",
   "shell.switch-shade": "切換到{{shade}}",
   "shell.tasks": "任務列表",
-  "shell.templates": "轉換模板"
+  "shell.templates": "轉換模板",
+  "shell.unexpected-error": "介面出了點問題，操作前請先重新載入"
 }

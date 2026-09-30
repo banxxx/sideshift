@@ -1,0 +1,3 @@
+{
+  "common.java-probe-failed": "本機 Java 探測失敗 · {{reason}}"
+}

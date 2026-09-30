@@ -89,7 +89,7 @@ pub async fn probe_java(
 ) -> Result<JavaProbe, String> {
     tauri::async_runtime::spawn_blocking(move || java::probe(&required_version, &java_path))
         .await
-        .map_err(|e| e.to_string())
+        .map_err(|_| app_code("panic"))
 }
 
 /// 某 MC 版本的 Java 需求线（Rust: `java_requirement`）。给转换页换版本时改写方案用：

@@ -11,8 +11,9 @@ import * as api from "@/lib/api";
 import { usePackStore, type PlanDraft } from "@/lib/pack-store";
 import { useNavigation } from "@/lib/navigation";
 import { notify } from "@/lib/notify";
+import { errOf } from "@/lib/errors";
 import { formatSize, loaderLabel, outputNameOf, reviewFirst, truncateMiddle } from "@/lib/format";
-import { useT } from "@/lib/i18n";
+import { t, useT } from "@/lib/i18n";
 import type {
     AppSettings,
     ConversionOptions,
@@ -45,6 +46,13 @@ import { ModPlanCard } from "./ModPlanCard";
 import { TemplateMiniCard } from "@/features/templates/TemplateMiniCard";
 import { CARD_RISE, PAGE_RISE } from "@/lib/page-motion";
 import { PREVIEW_ROWS, toOption } from "./constants";
+
+/** Java 探测失败那句话（两条腿共用）：定义在模块作用域，身份稳定，不必进 effect 依赖 */
+const javaProbeFailed = (e: unknown) =>
+    notify(
+        t("common.java-probe-failed", "本机 Java 探测失败 · {{reason}}", { reason: errOf(e) }),
+        "error"
+    );
 
 export function ConvertPage() {
     const t = useT();
@@ -172,7 +180,18 @@ export function ConvertPage() {
             }
         );
         if (!draft || draft.onlinePending) void runClassify(false);
-        void api.listMcVersions().then((l) => setMcOptions(l.map(toOption)));
+        void api
+            .listMcVersions()
+            .then((l) => setMcOptions(l.map(toOption)))
+            .catch((e: unknown) => {
+                // 列表空着不等于「这个包没有可选版本」，得说一句话把原因挂出来
+                notify(
+                    t("convert.mc-list-failed", "MC 版本列表没取到 · {{reason}}", {
+                        reason: errOf(e),
+                    }),
+                    "error"
+                );
+            });
         void api.getSettings().then(setSettings);
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [manifest]);
@@ -192,9 +211,14 @@ export function ConvertPage() {
         }
         // 每轮 effect 各持一个 alive：换档时上一轮的迟到回包会被丢掉，不会盖成新结论的假数据
         let alive = true;
-        void api.probeJava(options.javaVersion, options.javaPath).then((p) => {
-            if (alive) setJavaProbe(p);
-        });
+        void api
+            .probeJava(options.javaVersion, options.javaPath)
+            .then((p) => {
+                if (alive) setJavaProbe(p);
+            })
+            .catch((e: unknown) => {
+                if (alive) javaProbeFailed(e);
+            });
         return () => {
             alive = false;
         };
@@ -203,7 +227,10 @@ export function ConvertPage() {
     /** 点开下拉重探一次（卡片透传上来）：候选是本机实探出来的，装完 JDK 不改档位不会自己触发 */
     const reprobeJava = () => {
         if (!javaInstallOn || !options?.javaVersion) return;
-        void api.probeJava(options.javaVersion, options.javaPath).then(setJavaProbe);
+        void api
+            .probeJava(options.javaVersion, options.javaPath)
+            .then(setJavaProbe)
+            .catch(javaProbeFailed);
     };
 
     /**
@@ -307,12 +334,24 @@ export function ConvertPage() {
     useEffect(() => {
         if (!mcVersion) return;
         let alive = true;
-        void api.javaRequirement(mcVersion).then((line) => {
-            if (alive && line)
-                setOptions((o) =>
-                    o && o.javaVersion !== line ? { ...o, javaVersion: line } : o
-                );
-        });
+        void api
+            .javaRequirement(mcVersion)
+            .then((line) => {
+                if (alive && line)
+                    setOptions((o) =>
+                        o && o.javaVersion !== line ? { ...o, javaVersion: line } : o
+                    );
+            })
+            .catch((e: unknown) => {
+                // 需求线取不到就不再断言「本次需要 Java N」：方案里留的是源包那一档，探测会按它筛
+                if (alive)
+                    notify(
+                        t("convert.java-line-failed", "Java 需求线没取到 · {{reason}}", {
+                            reason: errOf(e),
+                        }),
+                        "error"
+                    );
+            });
         return () => {
             alive = false;
         };
@@ -567,22 +606,33 @@ export function ConvertPage() {
         setTab("add");
         // 端取证异步回填：行先落地（选完立刻看得见），阶梯跑完再补端标签与真实体积。
         // 行若在这期间被删掉，下面的 map 匹配不上即自然丢弃
-        void api.inspectAddedMod(path).then((side) =>
-            setExtras((e) =>
-                e.map((m) =>
-                    m.id === id
-                        ? {
-                              ...m,
-                              clientSide: side.clientSide,
-                              serverSide: side.serverSide,
-                              envSource: side.envSource,
-                              bytecodeHint: side.bytecodeHint,
-                              sizeBytes: side.sizeBytes ?? m.sizeBytes,
-                          }
-                        : m
+        void api
+            .inspectAddedMod(path)
+            .then((side) =>
+                setExtras((e) =>
+                    e.map((m) =>
+                        m.id === id
+                            ? {
+                                  ...m,
+                                  clientSide: side.clientSide,
+                                  serverSide: side.serverSide,
+                                  envSource: side.envSource,
+                                  bytecodeHint: side.bytecodeHint,
+                                  sizeBytes: side.sizeBytes ?? m.sizeBytes,
+                              }
+                            : m
+                    )
                 )
             )
-        );
+            .catch((e: unknown) => {
+                // 行已经落地，只是端标签与体积补不上：说清楚失败，别让那一格安静地空着
+                notify(
+                    t("convert.added-mod-failed", "本地模组取证失败 · {{reason}}", {
+                        reason: errOf(e),
+                    }),
+                    "error"
+                );
+            });
     };
 
     /** 在线添加：选中某个构建版本后回写新增列表；同模组再次添加 = 就地换版本（mods/ 不允许双版本并存） */

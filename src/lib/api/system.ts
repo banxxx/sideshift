@@ -36,7 +36,7 @@ function nativeSlashes(path: string): string {
 
 /** 在系统文件管理器中定位文件（浏览器 dev 下为空操作）。
  *  走后端而不是插件的 `revealItemInDir`：JS 侧那条命令受 capability scope 白名单约束，
- *  用户自选的目录枚举不完，见 commands.rs 的 `open_local_path`。 */
+ *  用户自选的目录枚举不完，见 `commands/system.rs` 的 `open_local_path`。 */
 export async function revealPath(path: string): Promise<void> {
     if (!isTauri) return;
     await invoke("reveal_local_path", { path: nativeSlashes(path) });
@@ -67,3 +67,10 @@ export async function openExternal(url: string): Promise<void> {
         );
     }
 }
+
+/**
+ * 项目仓库地址（设置页 GitHub 按钮）。
+ * 后端 `check_update` 打的 releases API 是同一个仓库的另一条地址（`commands/settings.rs` 的
+ * `UPDATE_URL`），仓库改名/迁移时两处要一起改。
+ */
+export const REPO_URL = "https://github.com/banxxx/sideshift";

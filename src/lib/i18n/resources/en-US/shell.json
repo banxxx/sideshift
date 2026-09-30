@@ -1,6 +1,9 @@
 {
   "shell.about": "About",
   "shell.back": "Back",
+  "shell.crash-reload": "Reload",
+  "shell.crash-sub": "Reload to continue; queued conversions are unaffected",
+  "shell.crash-title": "Something went wrong",
   "shell.dismiss-notification": "Dismiss notification",
   "shell.following-system": "Following the system (now {{shade}}) · Click to lock to {{next}}",
   "shell.home": "Home",
@@ -10,5 +13,6 @@
   "shell.restore": "Restore",
   "shell.switch-shade": "Switch to {{shade}}",
   "shell.tasks": "Tasks",
-  "shell.templates": "Templates"
+  "shell.templates": "Templates",
+  "shell.unexpected-error": "Something isn't right — reload before continuing"
 }

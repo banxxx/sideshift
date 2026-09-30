@@ -54,6 +54,7 @@ pub async fn check_update(app: AppHandle, state: S<'_>) -> Result<UpdateInfo, St
     let want_prerelease = picked.map(|c| c == UpdateChannel::Beta).unwrap_or(!cur.pre.is_empty());
 
     let dl = downloader_of(&state);
+    // 与前端 `api.REPO_URL` 同指一个仓库，迁移仓库时两处一起改
     const UPDATE_URL: &str = "https://api.github.com/repos/banxxx/sideshift/releases?per_page=30";
     let v = dl
         .client
@@ -125,7 +126,7 @@ pub async fn cache_usage(state: S<'_>) -> Result<CacheUsage, String> {
     let (dir, ids, busy) = cache_targets(&lock(&state));
     tauri::async_runtime::spawn_blocking(move || cleanup::usage(&dir, &ids, busy))
         .await
-        .map_err(|e| e.to_string())
+        .map_err(|_| app_code("panic"))
 }
 
 /// 清理无用文件：半截下载 + 孤儿暂存目录 + 空壳目录。下载缓存本体一个字节都不碰，
@@ -135,7 +136,7 @@ pub async fn clean_junk(state: S<'_>) -> Result<CleanReport, String> {
     let (dir, ids, busy) = cache_targets(&lock(&state));
     tauri::async_runtime::spawn_blocking(move || cleanup::clean_junk(&dir, &ids, busy))
         .await
-        .map_err(|e| e.to_string())
+        .map_err(|_| app_code("panic"))
 }
 
 /// 清理下载缓存。`mode` = `stale`（只删过期）或 `all`（清空）。
@@ -156,6 +157,6 @@ pub async fn clean_cache(state: S<'_>, mode: String) -> Result<CleanReport, Stri
     };
     tauri::async_runtime::spawn_blocking(move || cleanup::clean_cache(&dir, mode))
         .await
-        .map_err(|e| e.to_string())
+        .map_err(|_| app_code("panic"))
 }
 
