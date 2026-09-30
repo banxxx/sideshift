@@ -1,4 +1,4 @@
-import { Plus, SlidersHorizontal } from "lucide-react";
+import { FileSliders, Plus } from "lucide-react";
 import { useT } from "@/lib/i18n";
 import { useNavigation } from "@/lib/navigation";
 import { Btn } from "@/components/ui";
@@ -33,7 +33,7 @@ export function EmptyTemplates() {
         <div className="flex h-[clamp(400px,70vh,640px)] flex-col items-center justify-center gap-4 rounded-[12px] bg-bg-app px-5 py-10">
             <div className="flex flex-col items-center gap-4">
                 <span className="flex size-14 items-center justify-center rounded-2xl bg-surface-2">
-                    <SlidersHorizontal className="size-6 text-text-3" />
+                    <FileSliders className="size-6 text-text-3" />
                 </span>
                 <div className="flex flex-col items-center gap-1">
                     <span className="font-mono text-[16px] leading-[24px] font-semibold text-text-1">

@@ -25,15 +25,10 @@ import {
 } from "@/lib/trash-store";
 import type { ConversionTask, TaskStatus } from "@/lib/types";
 import { Bar, Btn, PageHeader, Panel, SegTabs, Swap, ToneChip } from "@/components/ui";
-import { cn } from "@/lib/utils";
+import { cn, prefersReducedMotion } from "@/lib/utils";
 import { REFLOW } from "@/lib/springs";
-import {
-    abortAllFlights,
-    prefersReducedMotion,
-    startFlight,
-    type Flight,
-} from "./delete-flight";
-import { entryStepMs, playEntry } from "./entry-curve";
+import { abortAllFlights, startFlight, type Flight } from "./delete-flight";
+import { entryStepMs, playEntry } from "@/lib/entry-curve";
 
 type Filter = "all" | "running" | "success" | "failed";
 
@@ -121,7 +116,7 @@ export function TasksPage() {
     }, []);
 
     /**
-     * 换筛选是一次换页，不是一次重排：在场每张卡片一律从下方升起（./entry-curve.ts 那条「送 + 弹」曲线，
+     * 换筛选是一次换页，不是一次重排：在场每张卡片一律从下方升起（@/lib/entry-curve.ts 那条「送 + 弹」曲线，
      * 逐卡错峰），谁都不回自己原来的格子。弹簧会老老实实把留下来的卡片送回旧格子，正好把换页语义打掉，
      * 而且过冲按行程等比（挪 900px 弹 30px、挪 20px 弹 0.7px），两种切换统一不了手感——所以这一拍里
      * 不能有活的投影节点，做法见下面列表容器上的 key={filter}。

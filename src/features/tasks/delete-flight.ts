@@ -3,6 +3,7 @@
  * 缓动全部在 JS 里烘焙进关键帧、WAAPI 一律 linear（options.easing 逐段生效，多关键帧配全局缓动会抖）。
  * 这里只管「飞」这一段 DOM（克隆、动画、追回）；列表补位由 TasksPage 的 layout 弹簧做，真删时机由调用方在 lead 回调决定。
  */
+import { prefersReducedMotion } from "@/lib/utils";
 
 export interface Pt {
     x: number;
@@ -25,11 +26,6 @@ export const FLIGHT = {
     rotDeg: -24,
     scaleTo: 0.24,
 } as const;
-
-/** reduced-motion：飞行收成一记淡出，位移/缩放/旋转全剥掉（列表补位由 MotionConfig 代管） */
-export function prefersReducedMotion(): boolean {
-    return window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-}
 
 function center(r: DOMRect): Pt {
     return { x: r.left + r.width / 2, y: r.top + r.height / 2 };

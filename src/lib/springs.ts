@@ -1,7 +1,7 @@
 /**
  * 全站 motion 弹簧唯一出处（11 条弹簧、16 个用点，数值是各处原值）。
  * 硬约束：这里的弹簧都偏硬（越线不到 1%），大位移（列表重排 / 换页 / 卡片）一律不走弹簧——
- * 要"弹"改用 `src/features/tasks/entry-curve.ts` 里峰值固定 px 的曲线。
+ * 要"弹"改用 `src/lib/entry-curve.ts` 里峰值固定 px 的曲线。
  * 手势甩出的续动只能写 stiffness/damping/mass——写成 visualDuration 或 duration 会把继承速度清零。
  * 不要只写 visualDuration 不写 bounce：motion 会静默忽略前者，回落成默认弹簧，手感变味。
  */

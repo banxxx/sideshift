@@ -3,7 +3,7 @@
  * 拖拽排序用 pointer 事件手写实现（Tauri 在窗口级拦截 OS 文件拖入，HTML5 draggable 的 dragstart 不触发）；判据与积分器在 drag-sort.ts，本文件只管 DOM。
  * 硬约束：跟随层必须 portal 到 `body`；拖动全程 DOM 不搬移节点（拖动项只 `visibility:hidden`）；落位索引每帧现算且只认指针原始输入；出界/被打断回原序不写盘；`paint` 减的家位必须用 `useLayoutEffect` 里 DOM 真搬完的顺序。
  * 卡身不做 hover 样式（动作三枚常显、整卡不可点）；写盘只走 `use-template-table` 的 `commit`（与编辑页同口径）。
- * 图标分工：`LayoutTemplate` 只给侧栏导航；`SlidersHorizontal` 代表一张模板（卡片与空态共用）。
+ * 图标分工：`LayoutTemplate` 只给侧栏导航；`FileSliders` 代表一张模板（卡片与空态共用）。
  */
 import { AlertTriangle, Info, Plus } from "lucide-react";
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
@@ -14,6 +14,7 @@ import { useT } from "@/lib/i18n";
 import { useNavigation } from "@/lib/navigation";
 import { uniqueTemplateName, type ConversionTemplate } from "@/lib/types";
 import { Btn, NoteRow, PageHeader, Swap } from "@/components/ui";
+import { ENTRY, entryStepMs, playEntry } from "@/lib/entry-curve";
 import { DeleteTemplateModal } from "./DeleteTemplateModal";
 import { EmptyTemplates, LoadingTemplates } from "./TemplatePlaceholders";
 import { TemplateRow } from "./TemplateRow";
@@ -500,6 +501,9 @@ export function TemplatesPage() {
         // 上一趟只按到一半没抬起（没建会话成功）就直接丢掉，别让它去走一遍落位
         if (dragRef.current?.active) finishLanding();
         else dragRef.current = null;
+        // 卡片还在演换页升起就当场掐掉：下面量的是 rect，那一趟位移会让抬起层的起点整个偏一截
+        entryUndos.current.forEach((stop) => stop());
+        entryUndos.current = [];
         const card = (e.currentTarget.closest("[data-card-id]") as HTMLElement | null)
             ?.getBoundingClientRect();
         if (!card) return;
@@ -592,6 +596,27 @@ export function TemplatesPage() {
         kick();
     }, [templates, loaded]);
 
+    /**
+     * 「骨架/空态 → 列表」那一拍：在场每张卡从下方升起、回弹一档（比任务页轻的 `softAmpPx`），逐卡错峰。
+     * 只认 `listShown` 这一个开关，不按 `templates` 走 ⇒ 新增/删除/落位不演（那一路有积分器的补位弹簧，两层一起挪会读成抖）。
+     * `useLayoutEffect` 是必需的：effect 晚了就是「先画出卡片、再把它抹到起点」，看着像闪一下。
+     * 撤销函数留一份在 ref：起拖前要当场掐掉（`onGripDown` 量的是 rect，吃不得这层的位移），这一页卸掉时也掐掉。
+     */
+    const listShown = loaded && templates.length > 0;
+    const entryUndos = useRef<(() => void)[]>([]);
+    useLayoutEffect(() => {
+        const nodes = listShown
+            ? Array.from(listRef.current?.querySelectorAll<HTMLElement>("[data-entry]") ?? [])
+            : [];
+        if (!nodes.length) return;
+        const step = reduced === true ? 0 : entryStepMs(nodes.length);
+        entryUndos.current = nodes.map((el, i) => playEntry(el, i * step, ENTRY.softAmpPx));
+        return () => {
+            entryUndos.current.forEach((stop) => stop());
+            entryUndos.current = [];
+        };
+    }, [listShown, reduced]);
+
     // 拖到一半被别处换走（这一页当场卸掉）⇒ pointerup 不会再来：撤监听、停循环，那根 grabbing 光标不能跟人跑到别的页
     useEffect(() => {
         return () => {
@@ -676,16 +701,19 @@ export function TemplatesPage() {
                                     animate={{ opacity: 1 }}
                                     transition={{ duration: 0.18, ease: "easeOut" }}
                                 >
-                                    {/* 行自己的一层：拖动与换位都只改这层的 transform，节点整趟不搬 */}
-                                    <div ref={(el) => registerRow(tpl.id, el)}>
-                                        <TemplateRow
-                                            template={tpl}
-                                            lifted={dragId === tpl.id}
-                                            onOpen={() => navigate("template", { templateId: tpl.id })}
-                                            onCopy={() => duplicate(tpl)}
-                                            onDelete={() => setPendingDelete(tpl)}
-                                            onGripDown={(e) => onGripDown(e, tpl.id)}
-                                        />
+                                    {/* 换页升起那一层：曲线只写这层的 transform/opacity，与内层积分器各写各的才不抢属性 */}
+                                    <div data-entry>
+                                        {/* 行自己的一层：拖动与换位都只改这层的 transform，节点整趟不搬 */}
+                                        <div ref={(el) => registerRow(tpl.id, el)}>
+                                            <TemplateRow
+                                                template={tpl}
+                                                lifted={dragId === tpl.id}
+                                                onOpen={() => navigate("template", { templateId: tpl.id })}
+                                                onCopy={() => duplicate(tpl)}
+                                                onDelete={() => setPendingDelete(tpl)}
+                                                onGripDown={(e) => onGripDown(e, tpl.id)}
+                                            />
+                                        </div>
                                     </div>
                                 </motion.div>
                             ))}

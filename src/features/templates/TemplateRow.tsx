@@ -1,4 +1,4 @@
-import { Copy, GripVertical, Pencil, SlidersHorizontal, Trash2 } from "lucide-react";
+import { Copy, FileSliders, GripVertical, Pencil, Trash2 } from "lucide-react";
 import { useT } from "@/lib/i18n";
 import { templateValueCount, type ConversionTemplate } from "@/lib/types";
 import { IconBtn } from "@/components/ui";
@@ -62,7 +62,7 @@ export function TemplateRow({
                 <GripVertical className="size-3.5" />
             </span>
             <span className="flex size-9 shrink-0 items-center justify-center rounded-[10px] bg-accent-dim text-accent">
-                <SlidersHorizontal className="size-[17px]" />
+                <FileSliders className="size-[17px]" />
             </span>
             <span className="flex min-w-0 flex-1 flex-col gap-[3px]">
                 <span className="truncate font-mono text-[13px] leading-[20px] font-semibold text-text-1">
