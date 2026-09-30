@@ -1,15 +1,7 @@
 /**
- * 设置页 Settings（SS.pen `F4na6`）
- *
- * 四个分组，每组 = 等宽小标题（11/600，字距 1.2）+ 一张无内边距卡片，
- * 行与行之间用 1px $stroke-soft 分隔（divide-y），行标尺 padding[14,20]。
- *  - 转换选项：服务端输出目录 / 剔除客户端专属资源 / 构建后自检 / 本机安装 Loader（含复用已装）
- *  - 存储与缓存：工作缓存目录 / 下载缓存 / 无用文件（占用数字来自后端真实扫描，一个目录一个进程只扫一次）
- *  - 网络：下载源 / CurseForge API Key / 联网反查端信息 / 并发下载数
- *  - 外观与关于：主题（三态分段）/ 更新渠道（正式版·Beta 两档，切 Beta 要确认）/ 版本（检查更新）
+ * 设置页：四个分组（转换选项 / 存储与缓存 / 网络 / 外观与关于），每组 = 等宽小标题 + 一张无内边距卡片，行用 divide-y 分隔。
  * 读写走 @/lib/api 门面；主题走 @/lib/theme 单一真源（侧栏按钮同步）。
- * 设置是「改一处即持久化」，所以写盘失败必须外显（否则界面显示已生效、重启又回退），
- * 失败后从后端重读一次，让界面与真正常量的那份一致。
+ * 设置是「改一处即持久化」：写盘失败必须外显并从后端重读，让界面与真正常量的那份一致。
  */
 import { ExternalLink, FlaskConical, Folder, Monitor, Moon, RefreshCw, Sun, Trash2 } from "lucide-react";
 import { useCallback, useEffect, useState, type ReactNode } from "react";

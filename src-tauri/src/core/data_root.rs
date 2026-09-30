@@ -1,13 +1,7 @@
 //! 数据根目录：缓存与产物按 GB 计，默认值不该压在系统盘上。
-//!
-//! 决策顺序（`suggested_root`，从高到低），两套发行物共用一条链：
-//! 1. **便携标记** —— exe 同级有 `portable.flag` ⇒ 数据全跟着 exe 走（`{exe}\data`）
-//! 2. **安装器指定** —— 自绘安装壳装完后写进配置目录的 `installer.json`
-//! 3. **非系统盘预选** —— 剩余空间最大且够用的固定盘（`{盘}\SideShift`）
-//! 4. 用户目录回落（`{home}\SideShift`）
-//!
-//! 系统盘不进预选候选：往 `C:\SideShift` 建目录要在盘根写，普通用户没这个权限；
-//! 真想放 C 盘的人走设置里的目录选择器，那是他的明确选择。
+//! `suggested_root` 决策顺序（高→低）：exe 同级 `portable.flag` ⇒ `{exe}\data` > 安装器写的 `installer.json` >
+//! 剩余空间最大且够用的非系统盘 `{盘}\SideShift` > 回落 `{home}\SideShift`。系统盘不进预选（盘根建目录没权限），
+//! 想放 C 盘走设置里的目录选择器。
 
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;

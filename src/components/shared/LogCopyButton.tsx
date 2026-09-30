@@ -1,8 +1,6 @@
 /**
  * 日志一键复制：图标态 Copy → Check（emerald），1.8s 后复位。
- *
- * 复制成功的反馈刻意留在按钮本体而不走全局提示区——日志复制是高频动作，
- * 与「删除行不发 toast」同一口径：动作结果就地可见。
+ * 复制成功的反馈刻意留在按钮本体而不走全局提示区——高频动作，结果就地可见。
  */
 import { useRef, useState } from "react";
 import { Check, Copy } from "lucide-react";

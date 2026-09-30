@@ -1,14 +1,8 @@
 /**
- * ConversionTask → ShiftRail 展示映射（Home 实况小窗 / Task 详情页共用）
- *
- * 设计口径（v20 修订）：轨道反映任务真实进度——已越过的站点 emerald、
- * 未完成的站点一律灰色（当前站只多一圈很淡的光环），"正在走"由轨道上的
- * accent 进行中腿表达（runFrac = 当前阶段在自身区间内的完成度）；
- * 失败站 redstone；成功=四站全绿；取消=停在原地（不标错）。
- * 金色不再出现在轨道上（芯片/进度条仍可带 gold）。
- *
- * 站点表恒为定稿四站（见 `railStation`）：「本机执行 installer」是下载站内部的一小段，
- * 不另起一站。
+ * ConversionTask → ShiftRail 展示映射（Home 实况小窗 / Task 详情页共用）。
+ * 站点表恒为定稿四站（见 `railStation`）；「本机执行 installer」是下载站内部一小段，不另起一站。
+ * 口径：已越过 emerald、未完成一律灰（当前站只多一圈淡光环）、失败 redstone、取消停在原地不标错；
+ * "正在走"由 accent 进行中腿表达，金色不出现在轨道上。
  */
 import { Check, RefreshCw, X, type LucideIcon } from "lucide-react";
 import type { ConversionTask, FetchTally, PipelineStage, TaskStatus } from "@/lib/types";

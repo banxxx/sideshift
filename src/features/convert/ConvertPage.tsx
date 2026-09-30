@@ -1,20 +1,8 @@
 /**
- * 转换配置页 Convert（SS.pen `dEsbp` 剔除态 / `pRF47` 新增态 / `sc3I9` 下拉展开态）
- *
- * checkout 式骨架：BodyRow gap20 = 左列（gap16，三张卡各 gap14）+ 右栏 280px 摘要卡。
- * 全局默认值来自设置页（api.defaultOptions），本页做的是“单包覆写”——只活在这一次选包里
- * （切页往返由 pack-store 的草稿接回，换包/改了影响判定的全局设置即作废）。
- *
- * 这一页只做一件事：**配置一次新的转换**。回看某个任务真正用过的方案是任务详情「方案」签的活
- * （见 PlanReviewView），它读的是任务存档；这里的装载链全部围着「刚选完的包」现算。
- *
- * 模组方案的处置编辑模型：
- *  - plan（后端/mock 给的原始方案）+ extras（本页新增的模组）为数据源
- *  - overrides 记录用户对 remove/keep 的改动；disabledIds 记录被停用的新增行（行保留、不构建）
- *  - 计数/摘要/下发后端的方案一律由 plan+extras+overrides+disabledIds 派生，保证口径不漂移
- *
- * 本文件只留「状态 → 派生 → 动作 → 右栏摘要」这条数据主干：四张设置卡见 OptionCards，
- * 模组方案卡见 ModPlanCard，方案行与徽章见 PlanModRow，静态选项见 constants。
+ * 转换配置页：只做「配置一次新的转换」（回看用过的方案是任务详情「方案」签的活，见 PlanReviewView）。
+ * checkout 式骨架：左列三张设置卡 + 右栏 280px 摘要卡；全局默认值来自设置页，本页是单包覆写——只活在这一次选包里（草稿由 pack-store 接回，换包/改影响判定的全局设置即作废）。
+ * 方案编辑模型：plan+extras 为数据源，overrides 记录 remove/keep 改动，disabledIds 记录停用的新增行；计数/摘要/下发后端的方案一律由这四者派生，保证口径不漂移。
+ * 本文件只留「状态 → 派生 → 动作 → 右栏摘要」数据主干：设置卡见 OptionCards，方案卡见 ModPlanCard，方案行见 PlanModRow，静态选项见 constants。
  */
 import { Archive, ChevronRight, Download, Folder, Layers, TriangleAlert } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";

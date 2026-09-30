@@ -1,17 +1,7 @@
-//! CurseForge 官方导出包的「按编号补取」层：`files[]` 只给 `{projectID, fileID}`，
-//! jar 字节、文件名、大小、校验值都不在包里 ⇒ 解析出来的行只剩编号，得联网向 CF 要回三件事。
-//!
-//! 三种包走三条不同的路，这里只管最后那一种：
-//! - **民间 CF/MCBBS 包**（清单 + `overrides/mods` 里的 jar）：字节在包里，解析层直接扫，本模块不参与
-//! - **`.mrpack`**：清单自带 URL/sha1/大小，走 downloader 的 Modrinth 那条腿
-//! - **官方导出的 CF 包**（只有编号）：本模块把编号换成「名字 + 大小 + sha1」，落到
-//!   `cache_dir/cf-files-index.json`；直链**不在这里取**（带时效，构建期现取，见 pipeline 3.1），
-//!   但「这一枚到底拿不拿得到字节」在这里探一次并落进同一张索引——构建前就得知道，
-//!   不能等构建到一半才炸（见 `CfLink`、`curseforge_probe_link`）
-//!
-//! 补到的元数据只改写 `file_name`/`size_bytes`/`sha1`，**`path` 保持解析层那枚编号锚点不变**：
-//! `detector` 的 `src_path`、以及任务存档里的方案行都按它回指包内条目。名字一改锚点就飘，
-//! 下次离线重解析（索引没命中）时那些行会一条都对不上，等于把用户的手动改判全冲掉。
+//! CurseForge 官方导出包的「按编号补取」层：`files[]` 只给 `{projectID, fileID}`，联网换回「名字 + 大小 + sha1」，落 `cache_dir/cf-files-index.json`。
+//! - 只管官方包这一种：民间 CF/MCBBS 包字节在包里（解析层直接扫），`.mrpack` 清单自带 URL/sha1（走 downloader）。
+//! - 直链不在这里取（带时效，构建期现取）；但「这一枚拿不拿得到字节」在这里探一次并落进同一张索引，构建前就得知道。
+//! - 补取只改写 `file_name`/`size_bytes`/`sha1`，**`path` 保持解析层的编号锚点不变**——detector 与任务存档都按它回指包内条目，名字一改锚点就飘。
 
 use std::collections::HashMap;
 use std::path::Path;

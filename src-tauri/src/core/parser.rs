@@ -1,8 +1,7 @@
-//! 整合包解析：**按内容分派**（zip 里有 `modrinth.index.json` 就走 mrpack 精确解析，
-//! 认不出清单才走裸包启发式扫 mods/），扩展名只决定「探不到清单时是报错还是降级」。
-//!
+//! 整合包解析：**按内容分派**（zip 里有 `modrinth.index.json` 就走 mrpack 精确解析，认不出清单才走裸包启发式扫 mods/），
+//! 扩展名只决定「探不到清单时是报错还是降级」。
 //! mrpack 规范口径：顶层 `game` 恒为游戏 ID（"minecraft"），MC 版本在 `dependencies.minecraft`；
-//! `files[]` 条目应全部物理内嵌于 zip——以 zip 条目实测判定 `in_pack`，缺字节的残缺条目才回落 URL 下载。
+//! `files[]` 以 zip 条目实测判定 `in_pack`，缺字节的残缺条目才回落 URL 下载。
 
 use std::collections::BTreeMap;
 use std::fs::File;

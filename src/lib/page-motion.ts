@@ -1,15 +1,7 @@
 /**
- * 换页节拍与「页内错峰」的唯一出处。
- *
- * 换页走**缓动**而不是弹簧：一来弹簧的时长由它自己算，配不出「进 260 / 出 140」这一对定长；
- * 二来过冲与行程成正比（见 springs.ts 第 1 条），整页那几百 px 的行程一旦软到看得见弹就是几十 px 越线。
- * 要「弹」的只有任务卡那种峰值固定 px 的曲线（src/features/tasks/entry-curve.ts），它和这里的节拍是两套语义，别混用。
- *
- * 时序：旧页退 140ms → 新页淡入并上浮 24px、260ms 落定（App.tsx 用 mode="wait" 串起来，
- * 全程只有一层页面在屏上，所以滚动容器不必拆分、吸顶页头也不会两层叠印）。
- * 页内错峰由容器把节奏传给各块（PAGE_RISE → CARD_RISE），块与块之间 60ms。
- * 页签换页（TAB_SWEEP）是这套节拍的「小一号」版本：同一对进/出配比，行程与时长都缩一档。
- * 局部换一批（SWAP，见 @/components/ui/Swap）再缩一档：6px、进 180 / 出 90，指尖还停在原地。
+ * 换页节拍与「页内错峰」唯一出处：换页走**缓动**不走弹簧（时长要能定长，且弹簧过冲与行程成正比，整页行程扛不住）。
+ * 时序：旧页退 140ms → 新页淡入上浮 24px / 260ms 落定（App.tsx mode="wait" 串联）；页内块间错峰 60ms（PAGE_RISE → CARD_RISE）。
+ * TAB_SWEEP 是这套节拍的小一号；SWAP（@/components/ui/Swap）再缩一档：6px、进 180 / 出 90。
  */
 import type { Transition, Variants } from "motion/react";
 import { RISE } from "./springs";

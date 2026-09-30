@@ -1,17 +1,7 @@
 /**
- * IPC 门面：前端唯一允许调用后端的地方。
- *
- * 设计意图（对齐"公共抽取"要求）：
- *  - 页面组件只 import 本模块的函数，绝不直接 invoke/listen —— 后端命令名、事件名、
- *    参数结构全部封装在此，Rust 落地时只改本目录，页面零改动。
- *  - 运行环境自动探测：在 Tauri 内走真实 #[tauri::command]；纯浏览器 dev 下回落到
- *    mock.ts，让 UI 可脱离后端独立开发与演示。
- *  - DEV 下的 Tauri 壳内，若命令尚未落地（invoke 报 command not found），
- *    同样回落 mock，保证 `pnpm tauri dev` 也能走通全部 UI 流程；PROD 不受影响。
- *  - 每个真实分支的 invoke 字符串（如 "parse_pack"）即 Rust 命令契约清单。
- *
- * 分文件按业务域切：client（环境探测/回落入口）/ pack / plan / mods / task / settings / templates / system。
- * 对外一律走本 barrel，import 路径仍是 "@/lib/api"。
+ * IPC 门面：前端唯一允许调用后端的地方，页面组件不许直接 invoke/listen。
+ * 命令名、事件名、参数结构全部封装在本目录域文件（client/pack/plan/mods/task/settings/templates/system），Rust 落地只改这里。
+ * 纯浏览器 dev 与 DEV 壳内命令缺失都回落 mock.ts，PROD 不受影响；真实分支的 invoke 字符串即 Rust 命令契约清单。
  */
 export { isTauri } from "./client";
 export * from "./pack";

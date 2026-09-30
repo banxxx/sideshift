@@ -1,62 +1,9 @@
 /**
- * 转换模板列表页（设计稿 `.scratch/templates-page-proto.html` 屏 ①（有模板）/ ④（零模板））
- *
- * 结构：页头（标题 + 副标 + 右侧「新建模板」）→ 说明行 → 卡列表（gap8，与 `FALLBACK_GAP` 同源）→ 收口说明行。
- * 单卡对齐任务卡家族（TasksPage.tsx:548-575 的解剖）：p-5、36×36 r10 图标盒装 17px、
- * 主名等宽 13/20 600、副行等宽 11/16 400 text-3、列间 gap-12。名称与备注都单行 truncate，
- * 所以卡的**高度恒定**——这一条是排序模型的地基，见下面第 6 条。
- *
- * 三枚动作常显（不玩「悬停才出现」），而且**动作只有这三枚**：整卡不再可点进编辑。
- * 卡是这一族数据的容器、不是按钮，卡片底色跟着 hover 压深会把它读成一个「点这里」的出口
- * （同「不可点必须灰化」那条口径）⇒ 卡身不换底色不换描边，只有把手与三枚按钮各自有悬停档。
- *
- * 排序用 **pointer 事件自己实现**，不用 HTML5 拖拽：本应用靠 Tauri 的 `onDragDropEvent` 收 OS 文件
- * 拖入（首页选包那条链，见 home-state.ts 的 useTauriFileDrop），而这份拦截默认开着 ⇒ WebView 里
- * `draggable` 的 dragstart 根本不触发。换 pointer 的好处是不必为了排序去翻窗口级配置、动到首页拖包。
- *
- * 拖动那一套是「脱离流 + 空槽 + 磁吸」模型（样片 `.scratch/templates-drag-magnet-proto.html`），
- * 判据与积分器都在 drag-sort.ts，这个文件只管 DOM。八条是地基，别再写回去。
- * 手感两档已定案（都只有一个旋钮，别再改回旧的写法）：**抬起层来回摆**（一条正弦 `swayAngle`，速度只喂
- * 幅度、不决定倒向 ⇒ 两个方向轮着来，捏着不动包络自己收到 0；旧的「静止带一档固定倾角」被他打回过，
- * 说那是固定倒向一边、不是动起来），**松手吸附不带弹簧**（走 `SORT.landMs` 的 u² 加速补间：起步慢、
- * 撞进格子最快，恒 ≤1 所以不可能反弹）。
- *  1. **跟手那层必须 portal 到 `body`**：页面挂在 `motion.main` 里，那块既有 `y` 动画（transform ⇒ 它成了
- *     fixed 后代的包含块，视口坐标当场算错）又带 `overflow-auto`（fixed 后代照样被裁）。同 App.tsx:110
- *     垃圾桶为什么留在 Shell 层——别赌「fixed 后代能不能穿过滚动容器」。
- *  2. **整趟拖动 DOM 一个节点都不搬**：拖动项只是 `visibility:hidden`（格子还占着，容器高度恒定 ⇒ 不跳版），
- *     其余行的位移一律写在自己的 `transform` 上。以前每换一次格就让 React 在那排兄弟里摘一次、插一次，
- *     而 `setPointerCapture` 与挂在行上的监听认的都是**节点**——节点一搬捕获当场掉，「还按着」被读成
- *     「已松手」，那就是他报的「往下拖到某个位置自己松了」。这一版从结构上没有了那一路。
- *  3. **落位索引每帧现算，而且只认原始输入**（指针算出来的顶，且**先夹进窗口**再喂判据：甩出上下沿那几帧
- *     位置与落点一起冻在边界，不会出现「卡不动、空槽还在挪」），不认磁吸混合后的位置。混合位置再喂回索引，
- *     吸附就会自己拖着索引连锁跳格。每帧只读一次列表盒的 `rect.top`（为了吃进滚动），行的边界不吃 rect——
- *     行正在弹簧上飞，读 rect 就读到半路那条线。
- *  4. **格线按「第几格」算**：`第几格 = (指针中心 + 半条行距) / 步距`，恒等式「克隆中心 ∈ 自己那一格」才立得住，
- *     上下两个方向共用同一条线，没有旧中线的半格偏置。再加进出各半带的滞回（`SORT.band`）压掉交界抖动。
- *  5. **会话期间的事件源挂 `window`，不挂把手那一行**；能结束会话的信号只有 `pointerup`——
- *     `lostpointercapture` 不算，`pointercancel`（系统抢手势/原生拖拽起步）只当噪音（触屏那档 cancel 之后
- *     没有 up，所以它必须收尾），真·既没 up 也没 cancel 的那一档用 `window` 的 `blur` 兜住。
- *     再把把手的 `draggable` 钉成 `false`，连图标起步原生拖拽这一路一起堵掉。
- *  6. **位置 = 弹簧顶 − 网格家位**，家位由「自己维护的显示顺序 × 步距」算死，不读 DOM。于是松手那一帧
- *     落点正好等于新家的位置：抬起层撤掉时下面那张卡就在同一像素上，不需要任何补间、也不会重排一次。
- *     这也是为什么不用 motion 的 `layout`：那条弹簧只在投影节点创建时读一次目标，演不出「每帧换一个落点」；
- *     而增删换位复用同一条积分器（数据一变，家位一变，行自己追过去），全站这一族只剩一个运动件。
- *  7. **提交只有一条路、且只在落位收敛之后**：出界（指针中心掉出列表）与被打断一律回原序、不写盘；
- *     只有顺序真的变了才 `commit`（半途写会把「拖完又拖回来」的中间态留在磁盘上）。
- *  8. **`paint` 减的家位必须是 DOM 真搬完的那份顺序**（`domOrderRef`，只在 `useLayoutEffect` 里更新），
- *     落点写的是逻辑顺序（`orderRef`）。松手那一帧两者故意差一格：transform = 新格顶 − 旧格顶 ≠ 0，
- *     卡就还停在新位置；等 React 把节点搬完、布局回调把 `domOrderRef` 换过来，transform 当场归 0——同一像素。
- *     早一步在收尾里写 `domOrderRef` 就会让所有卡在「旧节点序」上拿到 0 位移 ⇒ 整列闪回拖之前的样子
- *     （React 19 里 rAF 触发的更新经 MessageChannel 宏任务提交，常常排在**这一帧的绘制之后**，所以那一帧真看得见）。
- *
- * 写盘只有一条路：整张表交回后端，乐观更新与失败回滚都在 `use-template-table`（编辑页共用同一份口径）。
- */
-/**
- * 图标分工（2026-09-30 他点名要侧栏与卡片不要用同一枚）：
- *  - `LayoutTemplate`＝**导航里的那一页**（只有 Sidebar 用它）；
- *  - `SlidersHorizontal`＝**一张模板**（一排调好的旋钮，正是「存下常用的转换配置」的形状）⇒
- *    卡片与空态共用它：空态缺的就是卡，画同一枚才认得出「缺的是这个东西」
- *    （与 EmptyTasks 的分工同一族：导航 `ListChecks`、空态 `Inbox`）。
+ * 转换模板列表页：页头 + 模板卡列表 + 空态。单卡解剖对齐任务卡家族，名称/备注单行 truncate ⇒ 卡高恒定（排序模型的地基）。
+ * 拖拽排序用 pointer 事件手写实现（Tauri 在窗口级拦截 OS 文件拖入，HTML5 draggable 的 dragstart 不触发）；判据与积分器在 drag-sort.ts，本文件只管 DOM。
+ * 硬约束：跟随层必须 portal 到 `body`；拖动全程 DOM 不搬移节点（拖动项只 `visibility:hidden`）；落位索引每帧现算且只认指针原始输入；出界/被打断回原序不写盘；`paint` 减的家位必须用 `useLayoutEffect` 里 DOM 真搬完的顺序。
+ * 卡身不做 hover 样式（动作三枚常显、整卡不可点）；写盘只走 `use-template-table` 的 `commit`（与编辑页同口径）。
+ * 图标分工：`LayoutTemplate` 只给侧栏导航；`SlidersHorizontal` 代表一张模板（卡片与空态共用）。
  */
 import { AlertTriangle, Info, Plus } from "lucide-react";
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
@@ -181,7 +128,7 @@ export function TemplatesPage() {
      */
     const orderRef = useRef<string[]>(templates.map((x) => x.id));
     /**
-     * DOM 那份顺序：`paint` 减的家位用它（文件头第 8 条）。它**只**在 `useLayoutEffect` 里更新——
+     * DOM 那份顺序：`paint` 减的家位用它（见文件头硬约束）。它**只**在 `useLayoutEffect` 里更新——
      * 那里 React 已经把节点搬完了，布局也量得到，所以「节点序」与「这份表」保证同一刻成立。
      * 落位收尾那一刻故意让它比 `orderRef` 旧一格：卡片靠 transform 停在新位置，等 React 重排完
      * 再归 0。提前改它就是整列闪一下的根因。
@@ -342,7 +289,7 @@ export function TemplatesPage() {
         }
 
         // 2) 每行一条独立弹簧：拖动中追「让开空槽后的那一格」，空闲追**逻辑**家位（`orderRef`）。
-        //    落位提交后那几帧 DOM 还是旧序，家位差由 `paint` 减 `domOrderRef` 补回来（文件头第 8 条）
+        //    落位提交后那几帧 DOM 还是旧序，家位差由 `paint` 减 `domOrderRef` 补回来（见文件头硬约束）
         const order = orderRef.current;
         for (const id of order) {
             const s = springsRef.current.get(id);
@@ -541,7 +488,7 @@ export function TemplatesPage() {
     };
 
     /**
-     * 抬起那一按：先建会话，再把 move/up **挂到 `window`**——不挂把手那一行（文件头第 5 条）。
+     * 抬起那一按：先建会话，再把 move/up **挂到 `window`**——不挂把手那一行。
      * 上一趟还在落位（手指连点两下）就先把它的落点钉死再开新的一趟，别把两层抬起层留在屏上。
      */
     const onGripDown = (e: React.PointerEvent<HTMLElement>, id: string) => {
@@ -776,7 +723,7 @@ export function TemplatesPage() {
               跟手那层：同一张卡的重绘件（不是 DOM 克隆——pointer 路径下我们手里就有数据）。
               宽度钉死在按下那一刻量到的值，所以它在流外也不换行、不跟着右栏伸缩；
               `pointer-events-none` 让它不吃命中。位置由跟随弹簧逐帧写 transform（含磁吸的那一点回弹）。
-              **必须 portal 到 body**：见文件头第 1 条。
+              **必须 portal 到 body**：见文件头硬约束。
             */}
             {lift &&
                 liftTpl &&

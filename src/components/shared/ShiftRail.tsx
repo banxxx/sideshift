@@ -1,22 +1,9 @@
 /**
- * Shift Rail 转换轨道（SS.pen Home 帧 `AGkr7`，v11 定稿）
- *
- * 纯展示组件：四站（解析→检测→下载→构建）+ 轨道线 + 两端芯片 + 日志控制台。
- * 不感知业务数据来源——调用方把 TaskStatus/PipelineStage 映射成 stations/logs 传入，
- * 因此 Home 实况小窗、Task 详情页、任务列表都能复用同一份轨道。
- *
- * 站点三态（用户定稿：未完成一律灰，轨道上不用黄色）：
- * - done    $emerald-dim 底 + $emerald 描边/图标（图标固定 check）
- * - active  与 pending 同灰底灰图标，只加一圈很淡的品牌色光环 + 呼吸
- * - pending $surface-2 底 + $stroke 描边 + $text-3 图标
- * - error   $redstone-dim 底 + $redstone 描边/图标（x）
- * 轨道三段：底轨 $rail-track，已完成段 $emerald（按"上一站中心→当前站中心"逐段推进），
- * **进行中腿** $accent——按当前阶段的真实完成度填充，上面跑一条高光带（rail-flow）
- * 并在前沿放一颗带光晕的亮点，解决「只有图标在变、线不动」。
- *
- * 纵向几何很紧（默认 1200×800 下首页不能再高）：rail-body 106 = 站点顶留位 26 + 盒 38
- * + 10 + 名称 16 + 2 + 副标题 14，日志盒 80 = padding 20 + 3×16 行 + 2×6 间距。
- * 所有 11/10px 小字都显式写 leading——html 的 line-height:24px 会白撑高每一行。
+ * Shift Rail 转换轨道：四站（解析→检测→下载→构建）+ 轨道线 + 两端芯片 + 日志控制台，纯展示组件——
+ * 调用方把 TaskStatus/PipelineStage 映射成 stations/logs 传入，Home 实况小窗 / Task 详情 / 任务列表复用同一份。
+ * 站点三态：done 绿底绿描边（图标固定 check）、error 红底（x）；active 与 pending 同灰底，active 只加一圈很淡的品牌色光环 + 呼吸（轨道上不用黄色）。
+ * 轨道已完成段 $emerald 逐段推进；**进行中腿** $accent 按当前阶段真实完成度填充，上跑高光带（rail-flow）、前沿放带光晕的亮点。
+ * 纵向几何很紧（默认 1200×800 下首页不能再高）：rail-body 106、日志盒 80；所有 11/10px 小字显式写 leading——html 的 line-height:24px 会白撑高每一行。
  */
 import { useRef } from "react";
 import {

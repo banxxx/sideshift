@@ -1,10 +1,6 @@
 /**
- * 页面骨架：页头 + 卡片容器 + 卡头 + 分隔线
- *
- * 标尺（数值取自 SS.pen 各帧 dump，见 .design-ref/dump/*.txt）：
- *  - 卡片：$surface + $stroke 1px + r12 + padding 20；纵向 gap 按帧不同（Convert/Report 结果 14、
- *    Task 进度与日志 12、任务信息 10、弹窗 12）→ 用 Panel 的 gap 属性传入。
- *  - 卡内标题：13/600 $text-1。
+ * 页面骨架：页头 + 卡片容器 + 卡头 + 分隔线。数值取自 SS.pen 各帧 dump（见 .design-ref/dump/*.txt）。
+ * 卡片：$surface + $stroke 1px + r12 + padding 20；纵向 gap 按帧不同 → 用 Panel 的 gap 属性传入；卡内标题 13/600 $text-1。
  */
 import { type ReactNode } from "react";
 import { cn } from "@/lib/utils";

@@ -1,29 +1,10 @@
 /**
- * Collapse —— 「卡内整块条件挂卸」的公共折叠件。
- *
- * 用它的地方：一行提示、一颗开关下面的第二行、整张自检卡——凡是 `{cond && <块/>}` 且这块会带着一张
- * 卡的高度一起变的，都走这里，不要再自己写 `height` 或不写。参数只有一个出处：`COLLAPSE`
- * （@/lib/page-motion），那是从 `.scratch/collapse-proto.html` 里挑定的，别在调用点散着覆盖。
- *
- * 三条规矩都是量出来的，改壳之前先读完：
- *  1. **壳必须是空壳**：不带 padding、不带 border。`box-sizing:border-box` 下带 14px 上下内边距的壳
- *     `height:0` 也只能收到 28px（再加 1px 分隔线是 28.67px），末段没得演、演完当场掉那 28px，
- *     读出来就是「卡顿一下」。所以内边距与线一律画在壳内的行上。横向（`axis="x"`）同一条：壳不带上
- *     下 padding 之外也不带左右 padding 与边框，否则 `width:0` 收不到零。
- *  2. **`gap` 要传父级的格距**：父级是 flex 列时，元素在场=占一格 gap、卸载=少一格，只演 `height`
- *     会在收尾那一帧硬跳 gap 像素（14px 的卡就是 14px）。这里同步演 `marginTop: 0 ↔ −gap` 把自己那格收掉，
- *     与首/中/末位无关。父级不是 flex 列（网格、`gap={0}` 的 divide-y 卡）传 0。`axis="x"` 是同一件事
- *     的横版：演 `marginRight: 0 ↔ −gap`。
- *  3. **`overflow` 只在演的时候挂**：常驻 `overflow:hidden` 会把浮在内容之上的 `Tip` 气泡裁掉
- *     （运行环境卡那行 Java 全路径就是 Tip）。冷启动那一帧本来就是展开态的不演动画（`AnimatePresence initial={false}`
- *     压掉的正是它），那一态也不能裁 ⇒ 裁剪位用「本实例首帧之后才有的开合」来置位，演完撤。
- *     **置位的判据必须是「`when` 与上一次不同」，不能是「 effect 是第几次跑」**：StrictMode 在开发期把挂载期
- *     的 effect 连跑两遍，数帧那份第二遍就把「一直在场」误判成「后来开的」，而这一态没有动画 ⇒
- *     `onAnimationComplete` 永不来 ⇒ 裁剪永久挂着，Tip 直接消失（实测踩过）。
- *     横向那一格尤其要这条：壳里的控件必须 `shrink-0`，否则宽度收窄时先被 flex 压扁而不是被裁掉。
- *
- * 管不到的一处，用之前先想清楚：挂载之后**内容自己变高**（提示行从「正在检测…」换成完整一句、或折行多一行）
- * 仍然硬跳——终态是 `height:auto`，之后再长不经过这里。要管得挂 ResizeObserver，另立一轮。
+ * Collapse —— 「卡内整块条件挂卸」的公共折叠件：一行提示、开关下面的第二行、整张自检卡都走这里，别自己写 `height`。
+ * 参数单一出处 `COLLAPSE`（@/lib/page-motion），别在调用点散着覆盖。三条硬规矩：
+ *  1. **壳必须是空壳**（无 padding/border，否则 `height:0` 收不到零、末段当场掉高度）；内边距与线一律画在壳内的行上。
+ *  2. **`gap` 要传父级的格距**：同步演 `marginTop: 0 ↔ −gap` 把自己那格收掉，否则收尾硬跳 gap 像素；父级不是 flex 列传 0（`axis="x"` 演 marginRight）。
+ *  3. **`overflow` 只在演的时候挂、演完撤**（常驻会裁掉浮在内容上的 Tip 气泡）；置位判据必须是「`when` 与上一次不同」，不能数 effect 跑了几遍（StrictMode 双跑）。
+ * `axis="x"` 时壳里的控件必须 `shrink-0`；挂载后内容自己变高不经此处（终态 `height:auto`）。
  */
 import { AnimatePresence, motion } from "motion/react";
 import { useLayoutEffect, useRef, useState, type ReactNode } from "react";

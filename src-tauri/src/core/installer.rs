@@ -1,26 +1,9 @@
 //! 本机执行 loader 官方安装器：把 Forge / NeoForge 装成一个「上传即开服」的目录。
-//!
-//! 四条口径都来自真机实测（探针见 `.scratch/installer-probe`，2026-09-25；
-//! Forge 1.20.1-47.4.10、Forge 1.16.5-36.2.39、NeoForge 26.2.0.88 各跑一趟），不是从安装器的演进推的：
-//! - 三条命令形状完全一样（`java -jar <installer>.jar --installServer`，工作目录即目标目录），
-//!   老 Forge 也不例外 ⇒ 这里不按 loader 分叉，产物布局的差异留给打包侧（第 6 步）。
-//! - 成功判据用退出码，报因用日志尾巴：成功尾行三家都是 `The server installed successfully`，
-//!   断网时退出码 1 + 一段 Java 异常栈（首行 `Failed to establish connection to <url>`）。
-//! - 光 stdout 就有 **22,343 行**（1.20.1，绝大多数是逐类的 `Patching …`）。任务表日志环只有 600 条
-//!   （`task_engine/events.rs::MAX_LOG_LINES`），逐行转发会把取件、打包的历史全挤掉 ⇒ 只放行少量里程碑行，
-//!   其余行只进一个有界尾巴备查。
-//! - 满速网络下从已缓存的 installer jar 装完 1.20.1 用了 **2m53s**（含 150MB 依赖库现场下载）。
-//!   所以硬超时只能当「卡死兜底」，不能当预算：给 30 分钟，慢镜像也不误杀。
-//!
-//! 子进程规矩（项目到这里才第一次真的起外部进程）：
-//! - 参数一律 `args([...])` 数组，不进 shell——`mc_version` / `loader_version` 是用户可控字符串。
-//! - Windows 带 `CREATE_NO_WINDOW`，否则每装一次闪一个黑框。
-//! - `current_dir(dest)`：安装器拿工作目录当安装位置（它自己那行日志就是 `Target Directory: .`）。
-//! - 取消/超时 ⇒ `kill()`；半成品目录**只有本次调用建出来的**才删，绝不碰用户已有的目录。
-//! - 退出码 0 但没装出 `libraries/` 仍算失败：安装器是外部程序、版本一堆、行为会变，末态自己再验一遍。
-//!
-//! `install()` 会阻塞，跟打包一样由流水线丢进 `spawn_blocking`。`ensure()` 在它上面加一层
-//! 「装到哪里、要不要复用」；怎么并进 staging（第 6 步）不在这里。
+//! - 三家命令形状完全一样（`java -jar <installer>.jar --installServer`，工作目录即目标目录），不按 loader 分叉。
+//! - 成功判据用退出码，报因用日志尾巴；退出码 0 但没装出 `libraries/` 仍算失败（安装器是外部程序，末态自己再验一遍）。
+//! - stdout 可达数万行，会挤爆任务日志环 ⇒ 只放行少量里程碑行，其余行进一个有界尾巴备查。
+//! - 子进程规矩：参数一律 `args([...])` 不进 shell，Windows 带 `CREATE_NO_WINDOW`，`current_dir(dest)`；
+//!   取消/超时 ⇒ `kill()`，半成品目录只有本次调用建出来的才删。30 分钟硬超时只是卡死兜底，不是预算。
 
 use std::collections::VecDeque;
 use std::io::{BufRead, BufReader, Read};

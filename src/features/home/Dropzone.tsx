@@ -1,20 +1,7 @@
 /**
- * 整合包拖放卡（SS.pen Home·Idle `k0nEJ` / Home `pqC6C`）
- *
- * Idle 大卡（760×360，含帮助说明行）与选包后紧凑卡共用本组件。紧凑卡随窗口流体：
- * 宽度挂在 4px 悬停壳上（壳是行内 flex 项，百分比才有确定包含块），卡片 w-full 铺满，
- * 1200 窗口下即设计稿的 540。
- * 动画全部由 motion 驱动（App.css 只保留 --dz-glow 主题色与 .dz-ants-rect 尺寸）：
- * - 常态：$surface 底 + $stroke 描边；
- * - 激活（悬停或拖拽同一套效果）：描边透明、SVG 蚂蚁线圆角跑动边框接管四边，
- *   弹簧上浮 + accent 柔光投影 + 淡底蒙层 + 涟漪脉冲 + 图标反色浮动；
- *   悬停时另有一层跟随光标的径向光斑；仅主文案区分（拖拽→"松开，交给 SideShift"，
- *   文案切换用 AnimatePresence 做上下滑退场/入场）。
- * 拖放通道说明：
- * - Tauri 下 OS 文件拖入不走 DOM drag 事件，悬停高亮由 useTauriFileDrop 的
- *   enter/over/leave 标志经 fileDragging prop 传入，真实路径也由它下发；
- *   浏览器 dev 下 dragover/dragleave 生效，drop 退化为读取文件名交给 mock 解析。
- * - 点击整卡 = 打开系统文件选择框（onPick）。
+ * 整合包拖放卡：Idle 大卡（760×360，含帮助说明行）与选包后紧凑卡共用本组件（紧凑卡随窗口流体，宽度挂在 4px 悬停壳上）。
+ * 悬停与拖拽共用激活态（SVG 蚂蚁线跑动边框 + 弹簧上浮 + 光斑/涟漪），仅主文案区分；动画全部由 motion 驱动。
+ * Tauri 下 OS 文件拖入不走 DOM drag 事件：悬停高亮与真实路径由 useTauriFileDrop 经 fileDragging prop 传入，浏览器 dev 下退化为 drop 读文件名交给 mock。点击整卡 = 系统文件选择框（onPick）。
  */
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { AnimatePresence, motion } from "motion/react";

@@ -1,9 +1,6 @@
 /**
- * 窗口控制共享封装（Tauri 无边框窗口用）
- *
- * 抽为公共模块的原因：TitleBar 与快捷键、页面内"关闭窗口"等多处都要用到同一套
- * minimize/maximize/close 逻辑；且在纯浏览器 dev（非 Tauri 环境）下必须安全降级为
- * no-op，否则 getCurrentWindow() 会在调用时抛错。
+ * 窗口控制共享封装（Tauri 无边框窗口的 minimize/maximize/close），TitleBar、快捷键、页面内按钮共用。
+ * 非 Tauri 环境（纯浏览器 dev）必须安全降级为 no-op。
  */
 import { useCallback, useEffect, useState } from "react";
 import { getCurrentWindow, type Window } from "@tauri-apps/api/window";

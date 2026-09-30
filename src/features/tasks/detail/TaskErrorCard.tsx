@@ -1,15 +1,7 @@
 /**
- * 任务错误卡（SS.pen Errors 族 `PXu3R`/`phjvm`，行5「错误状态族」规范）
- *
- * 设计原则：每个错误都必须带可操作出口，不能只报错。
- * 统一形态 = $surface 卡 + $stroke 1px + r12 + padding16 + 纵向 gap8（构建失败 gap10），
- * 头行「图标14 + 标题13/600 + 上下文（文件名/芯片/退出码）+ h28 内联按钮」，正文 12 $text-2。
- * 四类错误按出错阶段映射：
- *  - parser     解析失败    redstone X + 文件名 + 重新选择 / 查看解析日志
- *  - detector   依赖冲突    gold refresh-cw + 警告芯片 + 查看处置建议
- *  - downloader 下载失败    redstone download + 已重试 N 次 + 重试（accent）
- *  - installer  本机安装失败 redstone package-open + 重试（安装器没有退出码块，原因全在 detail 里）
- *  - builder    构建失败    redstone X + exit code + 日志尾块 + 复制诊断信息 / 重试构建
+ * 任务错误卡：每个错误都必须带可操作出口，不能只报错。
+ * 统一形态 = $surface 卡 + r12 + padding16，头行「图标 + 标题 + 上下文（文件名/芯片/退出码）+ 内联按钮」+ 正文。
+ * 按出错阶段映射五类：parser（重新选择/查看解析日志）、detector（查看处置建议）、downloader / installer / builder（重试出口，builder 带日志尾块与诊断复制）。
  */
 import { Download, PackageOpen, RefreshCw, X, type LucideIcon } from "lucide-react";
 import type { TaskError } from "@/lib/types";

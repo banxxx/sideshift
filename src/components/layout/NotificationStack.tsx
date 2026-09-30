@@ -1,11 +1,7 @@
 /**
  * 侧栏底部提示区（浮在版本号/主题行之上）：全局 notify() 提示的唯一渲染出口。
- *
- * 位置钉死在侧栏底部、向上生长，但**不占侧栏的布局**（absolute，见下方容器注释）：
- * 新提示贴最近底缘入场（自下淡入+微缩放），旧提示被顶上去时靠 layout 动画平滑位移；
- * 移除用 popLayout 让其余即时补位。
- * 卡片走「静态悬停壳」口径：surface 底 + stroke 描边，kind 决定图标与语义色，
- * 悬停露出 × 可提前关闭（错误类停留更久，给用户确认余地）。
+ * absolute 不占侧栏布局：新提示贴最近底缘入场，旧提示被顶上去时靠 layout 动画平滑位移，移除用 popLayout 即时补位。
+ * 卡片走静态悬停壳口径（surface 底 + stroke 描边），kind 决定图标与语义色；悬停露出 × 可提前关闭，错误类停留更久。
  */
 import { AnimatePresence, motion } from "motion/react";
 import { AlertTriangle, CircleCheck, CircleX, Info, X } from "lucide-react";

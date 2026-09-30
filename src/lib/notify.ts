@@ -1,9 +1,6 @@
 /**
- * 全局提示条数据源：侧栏底部（版本号/主题行上方的预留提示区）的唯一写入口。
- *
- * 轻量、无需交互的结果反馈统一走 notify()（如「已更换模组构建版本」），
- * 后续其他类型提示（更新可用、后台任务完成等）也从这里挂载，不再各造局部 toast。
- * 消费方为 Sidebar 内嵌的 <NotificationStack/>，按 kind 映射图标与语义色。
+ * 全局提示条数据源：侧栏底部提示区的唯一写入口，消费方为 Sidebar 内嵌的 <NotificationStack/>。
+ * 轻量、无需交互的结果反馈统一走 `notify()`（更新可用、后台任务完成等也从这里挂），不再各造局部 toast。
  */
 import { useSyncExternalStore } from "react";
 

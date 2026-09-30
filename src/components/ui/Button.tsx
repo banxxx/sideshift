@@ -1,12 +1,6 @@
 /**
- * 按钮族
- *
- * md：h36 padding[0,16] 13（primary 700 / outline 500）
- * sm：h32 padding[0,12] 12（primary 700 / outline 500）
- * xs：h28 padding[0,12] 11（Errors 卡内联按钮）
- *
- * title 一律不落到 DOM 上（系统灰泡不受样式管）：Btn/IconBtn 拿到它就补 aria-label、
- * 挂触发类，气泡由 Tip 画。所以调用方照旧写 title="复制全部日志" 即可。
+ * 按钮族。md：h36 padding[0,16] 13；sm：h32 padding[0,12] 12；xs：h28 padding[0,12] 11（primary 700 / outline 500）。
+ * title 一律不落到 DOM（系统灰泡不受样式管）：Btn/IconBtn 拿到它就补 aria-label、挂触发类，气泡由 Tip 画——调用方照旧写 title 即可。
  */
 import { ChevronRight, type LucideIcon } from "lucide-react";
 import { cn } from "@/lib/utils";

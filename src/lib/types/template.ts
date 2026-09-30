@@ -1,17 +1,7 @@
 /**
- * 转换模板：`ConversionOptions` 里「换个包还要一样」那 16 档的一份快照。
- *
- * 字段范围（对着 `ConversionOptions` 逐档过，19 档收 16）：
- *  - 收：运行环境 4（本机装 Loader / 生成启动脚本 / 本地 Java / 输出目录覆写）·
- *    启动参数 5（内存 / nogui / eula / Aikar / 附加 JVM）· 服务端设置 7（模式 / 难度 / 端口 / 人数 / MOTD / 种子 / 正版验证）
- *  - 不收 3 档的理由各不相同：`mcVersion`/`loaderVersion` 属于**这个包**（换包必然不同，进了模板就是拿旧包的答案
- *    去覆盖新包的检测结论）；`javaVersion` 是 MC 版本推出来的需求线，不是"要装哪版"，存进模板等于冻结一次已过期的推导；
- *    `keepDirs`/`keepFiles` 是包内相对路径，换包后指的东西根本不存在，而且勾了包根同名文件会让设置项让位（`emit_root`），
- *    模板带它就是在播报可能没进产物的配置。方案（哪些模组剔除/保留）与 `allowMissingMods` 同理不进——
- *    前者是这一包的清单，后者是对这一次缺件的知情同意，都不该跨包复用。
- *
- * `TemplateValues` 用 `Partial`（字段**缺席 = 这档不在模板里**）而不是并列一份"勾了哪些"的数组：
- * 套用就是逐键抄写这里有的那些，转换页其余字段保持原值，两个真源不会分叉。
+ * 转换模板：`ConversionOptions` 19 档中「换个包还要一样」的 16 档的一份快照。
+ * 不进模板：`mcVersion`/`loaderVersion`/`javaVersion`/`keepDirs`/`keepFiles`、方案与 `allowMissingMods`——随包或随这一次转换，不许跨包复用。
+ * `TemplateValues` 用 Partial：字段缺席 = 这档不在模板里；套用就是逐键抄写已有键，不开第二真源。
  */
 import { t } from "@/lib/i18n";
 import type { ConversionOptions } from "./options";

@@ -1,12 +1,5 @@
 /**
- * 首页（SS.pen Home 三帧：Idle `p4rbP` / Ready·完整版 `Em5yO` / Home·Ready `i1k2jT`）
- *
- * 视图状态机（v11 "渐进式披露" + "轨道=当前任务实况小窗" 定稿）：
- * - idle       未选包且无任务：760×360 拖放卡 + 帮助三卡，无轨道
- * - parsing    解析瞬间：紧凑拖放卡 + 骨架详情卡 + 轨道第 1 站金色激活
- * - ready      已选包未开始：拖放卡 + 详情卡 + 轨道全灰起点、日志"等待开始转换"
- * - converting 有活跃/最近任务：同布局，轨道反映任务实况，右下"查看任务详情"
- *
+ * 首页：视图状态机 idle / parsing / ready / converting（拖放卡 + 详情卡 + 轨道=当前任务实况小窗，渐进式披露）。
  * 数据来源全部走 @/lib/api 门面（浏览器 dev 自动落 mock），页面零 invoke。
  */
 import { useNavigation } from "@/lib/navigation";

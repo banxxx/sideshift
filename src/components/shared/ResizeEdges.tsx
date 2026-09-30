@@ -1,20 +1,7 @@
 /**
- * 透明留白里的窗口缩放把手
- *
- * 无边框窗口的「拖边改尺寸」不归网页：tauri 在客户区上挂了一个原生子窗口
- * （tauri-runtime-wry `undecorated_resizing.rs`），它铺满整块 client 再抠掉中间，
- * 只留最外圈一条环，环宽 = `SM_CXFRAME/SM_CYFRAME`（随 DPI 同比放大，折成 CSS px 恒约 4px）。
- * 窗口透明 + 卡片内缩 `--win-inset`（12px）之后，那条环仍钉在**窗口**外沿 ⇒
- * 与卡片边缘之间留出 ~8px 死区，看得见摸不着，非得拖阴影外沿才反应。
- * 这里把整条留白接管：按下即 `startResizeDragging`，tao 侧是
- * `ReleaseCapture` + `PostMessage(WM_NCLBUTTONDOWN, HTLEFT…)`，与标题栏
- * `data-tauri-drag-region` 同一条路。环占的最外几 px 事件被原生子窗口吃掉，
- * 但行为与此处一致，两段拼成完整一条。
- *
- * 尺寸/光标全在 App.css 的 `.win-edge` 里：命中带向外到窗口边（`--win-inset`）、
- * 向内跨过卡片边（`--win-edge-inside`），卡片边落在带子中间才读得出「按在边框上」。
- * 两者在最大化时一起收成 0，这九个 div 自动缩成零宽（原生环那时也已被 tao 撤掉），
- * 所以这里不需要读最大化状态。
+ * 透明留白里的窗口缩放把手：原生无边框缩放环只占窗口最外 ~4px，与卡片边缘之间有摸不着的死区；
+ * 这里把整条留白接管，按下即 `startResizeDragging`，与原生环两段拼成完整一条。
+ * 尺寸/光标全在 App.css 的 `.win-edge`（改这里先看那边）；最大化时带子收成 0、原生环也已被 tao 撤掉，所以不需要读最大化状态。
  */
 import { getCurrentWindow, type Window } from "@tauri-apps/api/window";
 import type { MouseEvent } from "react";

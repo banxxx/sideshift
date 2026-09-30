@@ -1,9 +1,6 @@
 /**
- * 弹窗壳：$surface + $stroke 1px r12 padding20 gap12
- * 头：标题 14/600 + 副标 11 $text-3（gap3），可选 40×40 图标盒（Mod Detail），右侧 28×28 返回/关闭
- * 脚：1px $stroke 分隔 + 左摘要文本 11 $text-3 + 右按钮组（gap8）
- * 尺寸是流体的：width/height = 设计稿最小尺寸（窗口再小也不缩），随视口放大到 1.35× 封顶。
- * 四个弹窗共用同一系数，所以「搜索 ↔ 详情」两屏永远同尺寸，跳转不会跳大跳小。
+ * 弹窗壳：$surface + $stroke 1px r12 padding20 gap12；头＝标题 14/600 + 副标 11 $text-3，脚＝分隔线 + 左摘要 + 右按钮组。
+ * 尺寸是流体的：width/height = 设计稿最小尺寸，随视口放大到 1.35× 封顶；四个弹窗共用同一系数，跳转两屏永远同尺寸。
  */
 import { Dialog as DialogPrimitive } from "@base-ui/react/dialog";
 import { ArrowLeft, X, type LucideIcon } from "lucide-react";

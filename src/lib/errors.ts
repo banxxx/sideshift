@@ -1,17 +1,7 @@
 /**
- * 失败信息怎么「说给人听」——全站只这一处。
- *
- * 病根：`DownloadError` 的 Display 长这样 `网络请求失败：{url}（HTTP {status}）`，它一路
- * `e.to_string()` 过 IPC，前端再插进「版本加载失败 · {{error}}」那类模板 ⇒ 界面上出现
- * 「无法连接 https://api.modrinth.com/v2/project/cloth-config/version（HTTP 0）」。两句废话
- * 拼一起，而且这句是**动态串**，进不了 zh→键 那张表（表里只有整句字面量）⇒ 三档语言永远露中文。
- *
- * 分工：后端只出**种类代码**（`net:offline:api.modrinth.com`，见 `core/downloader/types.rs`），
- * 本文件把代码换成本地化的一句话；URL、路径、状态码一律不上界面。要留着排查的原句走
- * `TaskError.detail`（任务详情那张卡的「复制诊断信息」读它，不读代码）。
- *
- * `errOf` 对认不出的字符串退回 `tSource`——后端还有一批写死的中文整句（闸门、存档失败…），
- * 那些本来就在表里，照常翻。
+ * 失败信息怎么「说给人听」，全站只这一处：后端只出种类代码（如 `net:offline:host`），本文件把代码换成本地化的一句话；
+ * URL、路径、状态码一律不上界面，要留着排查的原句走 `TaskError.detail`（「复制诊断信息」读它，不读代码）。
+ * `errOf` 对认不出的字符串退回 `tSource`——后端写死的中文整句本就在 source-keys 表里，照常翻。
  */
 import { t, tSource } from "./i18n";
 

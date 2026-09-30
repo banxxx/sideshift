@@ -1,12 +1,6 @@
 /**
- * Home 页状态机 hooks（对应 SS.pen Home 三态：Idle / Parsing·Ready / 转换中实况）
- *
- * - useTauriFileDrop：Tauri 下 OS 文件拖入走 webview 的 onDragDropEvent
- *   （HTML5 drop 拿不到真实路径），这里统一订阅并把 {paths} 合成事件交给页面；
- *   浏览器 dev 下该订阅是 no-op，由 Dropzone 自带兜底。
- *   选包/解析状态本身已提升到 App 级 @/lib/pack-store（切标签不丢）。
- * - useActiveTask：当前活跃/最近完成任务。事件驱动（onProgress）+ 1s 轮询兜底
- *   （mock 引擎与完成态切换都靠它；无后端时全部走 mock 数据）。
+ * Home 页状态 hooks：useTauriFileDrop（Tauri 下 OS 文件拖入走 webview 的 onDragDropEvent，HTML5 drop 拿不到真实路径；浏览器 dev 为 no-op）；
+ * useActiveTask（事件驱动 + 1s 轮询兜底）。选包/解析状态已提升到 App 级 @/lib/pack-store（切标签不丢）。
  */
 import { useCallback, useEffect, useRef, useState } from "react";
 import { getCurrentWebview } from "@tauri-apps/api/webview";

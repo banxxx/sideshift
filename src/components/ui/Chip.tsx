@@ -1,9 +1,6 @@
 /**
- * 状态芯片与色调令牌：全站唯一的 tone 词表
- *
- * md：padding[4,10] gap5 r99 11/600（Home 徽章、Tasks 卡芯片）
- * sm：padding[3,8] r99 10/600（Convert 模组徽章）
- * xs：padding[2,8] r99 10/600（Errors 卡、Report 文件体积）
+ * 状态芯片与色调令牌：全站唯一的 tone 词表。
+ * md：padding[4,10] gap5 r99 11/600；sm：padding[3,8] r99 10/600；xs：padding[2,8] r99 10/600。
  */
 import { type ReactNode } from "react";
 import { type LucideIcon } from "lucide-react";

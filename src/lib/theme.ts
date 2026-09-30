@@ -1,12 +1,7 @@
 /**
- * 主题存储：light / dark / system 三态，唯一真源。
- *
- * 侧栏底部按钮与设置页「主题」分段都消费这里，避免两处各写一份 localStorage 导致状态不同步。
- * key 沿用 "theme"，与 index.html 首帧内联脚本约定一致（防深色模式闪白）。
- * 未设置过的一律落在 "system"：两处默认值必须同步，否则首帧与挂载后不是同一个主题。
- *
- * 深浅的判断读**存储态**（`isDark()`），不读 DOM 的 `.dark` 类：类只是存储态的镜像，
- * 而切换动画刻意向后延迟落类（见 `switchTheme`），读类会让触发件上的图标慢半拍。
+ * 主题存储（light/dark/system）唯一真源：侧栏底部按钮与设置页分段都消费这里，防两处各写一份 localStorage。
+ * key 用 "theme"，与 index.html 首帧内联脚本约定一致（防深色闪白）；未设置落 "system"，两处默认值必须同步。
+ * 深浅判断读**存储态** `isDark()` 而非 DOM 的 `.dark` 类——类只是向后延迟落地的镜像。
  */
 import { useSyncExternalStore } from "react";
 

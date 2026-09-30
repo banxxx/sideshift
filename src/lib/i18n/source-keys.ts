@@ -1,11 +1,6 @@
 /**
- * 中文原文 → 语义键。由 `node scripts/i18n.mjs sync` 生成，**不要手改**（手改会被下次 sync 抹掉）。
- *
- * 只收录**动态句**：后端发来的整句、store 里的原文、下拉的 option.label —— 那些调用点拿不到字面量、
- * 没法把中文当 `defaultValue` 传的地方。静态调用点的原文就在代码里，不进这张表。
- *
- * 表里没有的句子按原样返回中文（行为与未接入目录一致），不是错误；要让某句能翻，
- * 在显示处加一行块注释 `i18n:键=那句中文`（写法见 scripts/i18n.mjs 文件头），再跑 sync。
+ * 中文原文 → 语义键，只收录**动态句**（后端整句 / store 原文 / 下拉 label；静态调用点不进表）。
+ * 由 `node scripts/i18n.mjs sync` 生成，**不要手改**（会被下次 sync 抹掉）；表里没有的句子原样返回中文，不是错误。
  */
 export const SOURCE_KEYS: Readonly<Record<string, string>> = {
     "暂不支持 .7z 格式，请先解压为 zip 或改用 .mrpack": "backend.7z-supported",

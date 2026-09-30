@@ -1,16 +1,9 @@
 /**
- * 全站 motion 弹簧的唯一出处：16 个用点、11 条弹簧，数值是各处原本就在用的原值。
- *
- * 改之前先读这三条，它们都是踩出来的：
- *  1. 过冲 = 行程 × 这条弹簧的固定比例。下面这些常量都偏硬（ζ≈0.65–0.95，越线不到 1%，只读得出"快"读不出"弹"）；
- *     一旦把阻尼软到看得见弹，几百 px 的行程就是几十 px 越线。所以列表重排、换页、卡片大位移一律不走这里的弹簧，
- *     要"弹"改用 src/features/tasks/entry-curve.ts 里峰值固定 px 的「送+弹」曲线。
- *  2. 手势甩出去的续动只能用 stiffness/damping/mass。写成 visualDuration 或 duration 的
- *     话，motion 会把继承速度强行清零，甩动直接没有反应。
- *  3. 不要只写 visualDuration 而不写 bounce —— motion 会静默忽略前者，
- *     回落成 stiffness 100 / damping 10 的默认弹簧，手感完全变味。
- *
- * 需要错峰的地方自己补 delay（见 PLAN_LAND、REFLOW 的用法）。
+ * 全站 motion 弹簧唯一出处（11 条弹簧、16 个用点，数值是各处原值）。
+ * 硬约束：这里的弹簧都偏硬（越线不到 1%），大位移（列表重排 / 换页 / 卡片）一律不走弹簧——
+ * 要"弹"改用 `src/features/tasks/entry-curve.ts` 里峰值固定 px 的曲线。
+ * 手势甩出的续动只能写 stiffness/damping/mass——写成 visualDuration 或 duration 会把继承速度清零。
+ * 不要只写 visualDuration 不写 bounce：motion 会静默忽略前者，回落成默认弹簧，手感变味。
  */
 import type { Transition } from "motion/react";
 

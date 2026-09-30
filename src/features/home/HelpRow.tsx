@@ -1,9 +1,6 @@
 /**
- * Idle 帮助说明三卡（SS.pen Home·Idle `SjdZR` help-row，v6.1 定稿）
- *
- * 用户否决过"最近转换列表"方案，此处只做静态说明，勿加交互功能。
- * 动画走 variants 层级：idle 分支挂载时由父级 delayChildren 触发，
- * 三卡自左向右错峰上浮入场；退场逆序下沉，与整体淡出同步收尾。
+ * Idle 帮助说明三卡：只做静态说明，不加交互功能。
+ * 动画走 variants 层级：idle 分支挂载时由父级 delayChildren 触发，三卡自左向右错峰上浮入场、逆序下沉退场。
  */
 import { motion, type Variants } from "motion/react";
 import { Archive, Folder, Server, type LucideIcon } from "lucide-react";

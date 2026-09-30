@@ -1,9 +1,6 @@
 /**
- * 已选整合包信息卡（SS.pen Home `OFbnE` PackCard）
- *
- * 展示解析结果（加载器/MC 版本/模组数/体积），右上角芯片随状态切换：
- * parsing=金色"解析中" / ready=绿色"已检测" / converting=金色"转换中" / error=红色"解析失败"。
- * 解析失败时错误文案显示在 meta-head 下方（Errors 设计稿的"重新选择"出口即本卡主按钮）。
+ * 已选整合包信息卡：展示解析结果（加载器/MC 版本/模组数/体积）。
+ * 右上角芯片随状态切换（parsing 金 / ready 绿 / converting 金 / error 红）；解析失败时错误文案显示在 meta-head 下方，出口即本卡主按钮。
  */
 import { Archive, Check, ChevronRight, RefreshCw, X } from "lucide-react";
 import type { PackManifest } from "@/lib/types";

@@ -1,42 +1,9 @@
 /**
- * i18n 装配（全站唯一入口）。
- *
- * ## 键 = 语义名，中文原文留在调用点
- *
- * `t("settings.interface-language", "界面语言")`、`t("lib.listed-n-items", "未列出 {{n}} 项", { n })`：
- * 第一参是稳定标识，第二参是**简体中文原文**，i18next 拿它当 `defaultValue`。这么定的理由：
- *
- *  1. **zh-CN 不需要目录文件**：中文档查不到键 ⇒ 返回内联原文，并且**照样把 `{{}}` 插进去**
- *     （实测：`t(key, "未列出 {{n}} 项", { n: 3 })` 在无目录时得到「未列出 3 项」）。
- *     ⇒ 简体中文那一档在构造上不可能翻错、不可能漏翻，改造前后的中文界面必须逐字一致。
- *  2. 键与文案脱钩 ⇒ 改中文不必重命名键；同一句中文要两种译法（「复用」= Reuse / Reused）
- *     给两个键就行，不必像原文即键那样去改文案本身绕开撞名。
- *  3. **缺译的表现是掉回中文，不是 `[[missing key]]`**。这一条比裸键方案的两个开源先例都好
- *     （PCL-CE 缺键露 `!key!`，Axolotl 缺键露英文）。
- *
- * 代价，用的时候要记得：**改了内联中文，英文/繁体的那一条不会自动跟着变**。
- * 兜这个的是 `resources/source-lock.json`（键 → 上次对应的中文），`node scripts/i18n.mjs check`
- * 拿它对账，不符就报 `STALE`。改完文案不跑一次 `pnpm i18n:lock`（= `sync`）等于没改完。
- *
- * ## 动态句
- *
- * 后端发来的整句、store 里的原文、下拉的 label —— 调用点拿不到字面量，走
- * `tSource(raw)` / `backendText(raw, template, args)`：先按原文查 `source-keys.ts`
- * 那张「中文 → 键」表（脚本生成，别手改），查不到就原样返回中文。
- * 新加一句可翻的动态句：在显示处写 `/*i18n:键=那句中文*\/`，再跑 `node scripts/i18n.mjs sync`。
- *
- * ## 规矩
- *  - 组件里一律 `useT()`（= useTranslation），切语言才会重渲染；纯函数模块（`lib/rail-view.ts`、
- *    `lib/format.ts` 那类）用这里的 `t`，但**不许在模块顶层求值**（顶层求出来的字符串会冻在
- *    第一次加载的语言上）。漏订的组件由 `LocaleGate` 换 key 重挂兜住。
- *  - 可数数量一律用 `count` 这个槽名：i18next 靠它选单复数（`… _one` / `… _other`）。
- *    中文没有单复数，所以 `count` 的槽只在 en-US 目录里需要 `_one`；漏了表现为「5 mod」这种错，
- *    `node scripts/i18n.mjs check` 会点出来。
- *  - 数字/日期/相对时间走 `Intl`（见 `intlLocale()`），语言切了格式跟着切。
- *  - 键名不许自己顺手改：键是译文的身份证，改了名 = 那条译文成孤儿，另一条凭空缺译。
- *    要换名就同时挪目录里那一条，并跑 check。
- *  - 不翻的：应用名 SideShift、目录路径、文件名、IPC 命令名、后端枚举档位值、
- *    以及语言的自称（简体中文 / 繁體中文 / English）。
+ * i18n 装配（全站唯一入口）：`t(键, 简体中文原文)` —— 第二参是内联原文、当 defaultValue；
+ * zh-CN 因此没有目录文件，缺译一律掉回中文而不是漏键。动态句走 `tSource`/`backendText`
+ * 查 `source-keys.ts` 的「中文 → 键」表（`scripts/i18n.mjs sync` 生成，别手改），查不到原样返回中文。
+ * 硬约束：改了内联中文必须跑 `pnpm i18n:lock`，否则 check 报 STALE；键不许随手改名。
+ * 组件里一律 `useT()`，纯函数模块用 `t` 但禁止模块顶层求值；可数数量用 `count` 槽；数字/日期走 `Intl`。
  */
 import i18next from "i18next";
 import { initReactI18next, useTranslation } from "react-i18next";

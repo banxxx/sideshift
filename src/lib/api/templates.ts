@@ -1,12 +1,6 @@
 /**
  * 转换模板的读写（Rust: list_templates / set_templates / template_defaults）。
- *
- * 两处口径值得先说清：
- *  - **整表写**：模板是一个有序列表（顺序就是转换页那颗下拉的顺序），拖一次排序 = 换一次顺序。
- *    逐条增删改会做出「排序落了一半」的中间态，所以出口只有一个：把整张表交回后端。
- *  - **默认值不在这儿写**：新建模板时那 16 档的初值取自 `template_defaults`（Rust 侧
- *    `ConversionOptions::default()` + 设置里那颗「本机安装 Loader」），前端再抄一份字面量的话，
- *    改默认就得出两处。
+ * 模板是有序列表（顺序即下拉顺序），一律**整表写回**，不做逐条增删改；新建模板的默认值只取 `template_defaults`，前端不抄第二份字面量。
  */
 import type { ConversionTemplate, TemplateValues } from "@/lib/types";
 import * as mock from "@/lib/mock";

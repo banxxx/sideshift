@@ -1,14 +1,7 @@
 /**
- * 当前选包状态（App 级会话 store）
- *
- * 原先是 HomePage 的组件局部 hook，切侧栏标签即卸载丢失——检测完成但
- * 未开始转换的包会被重置回 idle，而转换中的包却能记住（useActiveTask 从
- * 任务存储恢复），行为不一致。提升到 App 级后，侧栏切换不再打断工作流。
- *
- * 刻意只存内存：应用重启回到全新 idle（上次磁盘上的包可能已被移动/删除）。
- *
- * 同一套选包还捎带存一份「转换页草稿」（planDraft）：ConvertPage 只挂栈顶，切回首页即卸载，
- * 方案与手改会跟着清零 ⇒ 重进就得整套重跑自动分类。草稿让这一趟往返回到离开时的样子。
+ * 当前选包状态（App 级会话 store）：侧栏切换不再打断「已检测未开始」的工作流。
+ * 刻意只存内存：应用重启回到全新 idle（磁盘上的包可能已被移动/删除）。
+ * 捎带存一份转换页草稿 planDraft：ConvertPage 只挂栈顶，卸载重进靠它回到离开时的方案与手改。
  */
 import { createContext, useCallback, useContext, useRef, useState, type ReactNode } from "react";
 import * as api from "@/lib/api";

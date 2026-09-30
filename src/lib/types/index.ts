@@ -1,12 +1,7 @@
 /**
- * SideShift 领域类型 + IPC 契约（前端 ↔ Rust 的唯一数据接口定义）
- *
- * 约定：
- *  - 所有跨进程载荷集中在此目录，Rust 侧 serde 序列化的字段名必须与之对齐（camelCase）。
- *  - 这些类型对应 SS.pen 各屏所需数据；Rust command 以其为契约。
- *  - 金额/体积单位统一：字节用 number（bytes），时长用秒（number），进度用 0-100 整数。
- *
- * 按域分文件；调用方一律 `import type { … } from "@/lib/types"`，不必知道类型住在哪个文件。
+ * SideShift 领域类型 + IPC 契约（前端 ↔ Rust 唯一数据接口定义），按域分文件。
+ * 硬约束：跨进程载荷字段名必须与 Rust serde 序列化的 camelCase 对齐；字节用 number、时长用秒、进度用 0-100 整数。
+ * 调用方一律 `import type { … } from "@/lib/types"`，不必知道类型住在哪个文件。
  */
 export * from "./pack";
 export * from "./evidence";

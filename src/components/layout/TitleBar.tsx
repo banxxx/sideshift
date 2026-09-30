@@ -1,11 +1,6 @@
 /**
- * 自定义窗口标题栏（Tauri decorations:false，对应 SS.pen 各帧 TitleBar）
- *
- * 布局（设计稿 TitleBar）：h40 / $bg-panel / 下描边 $stroke-soft / padding 左右 16 / gap 10
- * 内容：Logo（public/logo.svg，16×16，全应用同一份图形源）| 拖拽区（双击最大化） | 窗口控件
- * 窗口控件规格（v17 定稿）：gap 2、34×26、圆角 6、ghost 无底色、图标 13px $text-2；
- * 处于二级页面时（canGoBack），最小化左侧出现 undo-2 返回按钮，
- * 并用 1×14 短竖线（$stroke）与最小化隔开。窗口控制逻辑见 @/lib/window-controls。
+ * 自定义窗口标题栏（Tauri decorations:false）：h40，Logo | 拖拽区（双击最大化）| 窗口控件（34×26、ghost 无底色、图标 13px）。
+ * 二级页时（canGoBack）最小化左侧出现返回按钮，用 1×14 短竖线与最小化隔开；窗口控制逻辑见 @/lib/window-controls。
  */
 import { Minus, Square, X, Copy, Undo2 } from "lucide-react";
 import { Collapse, Tip, HOVER_PRESS, Logo } from "@/components/ui";

@@ -1,15 +1,7 @@
 //! 下载源：官方与 BMCLAPI 国内镜像之间的 URL 重写 + 回落候选。
-//!
-//! **镜像的覆盖边界（2026-09-21 逐条 curl 实测，别照着这张表之外的想法加功能）**：
-//! - 有镜像：piston-meta 的 MC 版本表、Fabric 的两张版本表（`fabric-meta/v2`）、
-//!   Forge 的 `promotions_slim` / `maven-metadata` 与 installer jar、NeoForge installer jar。
-//! - **没有镜像**：Fabric 的 `/server/jar` 组合端点（镜像 404）、`maven.neoforged.net/api/*`
-//!   版本列表接口、以及**整个 Modrinth**（搜索、构建端声明、模组文件下载主体字节都在这里）。
-//!
-//! 所以每条请求都留一条「镜像 → 官方」的回落：既兜住上面两类没镜像的 URL，
-//! 也兜住 BMCLAPI 对刚发布构建的同步滞后（新 jar 先 404，过一会儿才有）。
-//! 伴生的 `<jar>.sha1` 校验值一律走官方（见 `client::attach_side_sha1`）：
-//! 让镜像自证清白没有意义，校验锚点必须是权威源。
+//! 镜像只覆盖部分路径（MC 版本表、Fabric 两张版本表、Forge promotions/maven 与 installer、NeoForge installer jar）；
+//! Fabric `/server/jar`、`maven.neoforged.net/api/*` 与整个 Modrinth 均无镜像——所以每条请求都留「镜像 → 官方」回落。
+//! 伴生 `<jar>.sha1` 校验值一律走官方（见 `client::attach_side_sha1`）：校验锚点必须是权威源。
 
 use crate::models::DownloadSource;
 

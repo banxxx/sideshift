@@ -1,22 +1,8 @@
 //! CurseForge 侧：Core API v1 的搜索 / 构建列表 / 类别 / 临时下载链四类查询。
-//!
-//! **与 Modrinth 的三处口径差异**（都体现在返回字段里，不在这里解释第二遍）：
-//! 1. 每条请求都要 `x-api-key`（用户自己在 CurseForge 官方表单申请，存 settings.json）；
-//!    唯一例外是 `/categories`——实测带 `classId` 参数会被拒（403），
-//!    不带则**免 Key 200**，所以类别下拉一次 Key 也不消耗。
-//! 2. **没有端声明**：CF 的 file 对象里没有任何 client/server 字段，
-//!    所以搜索与构建列表的 `client_side`/`server_side` 一律 None，
-//!    端判定只能等 jar 到手走离线取证层。宁缺毋滥，不从 `gameVersions` 的标签猜。
-//! 3. **下载链是临时的**：`latestFiles[].downloadUrl` 可空且带时效，所以这里给出去的
-//!    `url` 恒为空串，构建时再按 (mod id, file id) 现取一条（见 `curseforge_download_url`）。
-//!    个别项目**根本不发放 API 链**（实测 495 行里 6 行整项目 403），所以构建期取链走
-//!    `curseforge_build_url`：官方链优先、被拒时退到内容分发站的推导链。
-//!    「这一枚到底拿不拿得到字节」清单里没有字段预告、**只能问出来**，所以自动分类那一轮
-//!    逐枚探一次（`curseforge_probe_link`，不取字节），结论进 `cf-files-index.json`
-//!
-//! 枚举值口径抄自官方 OpenAPI（`/v1/mods/search` 的 `modLoaderType`、file 的 `hashes[].algo`）；
-//! 但 `algo` 的 1/2 在各语言实现里公认对不上（文档写 1=Sha1、2=Md5，多个第三方库相反），
-//! 所以校验值按**长度认**（40=sha1、32=md5），不信那个枚举号。
+//! 除 `/categories`（免 Key 200，带 classId 反而 403）外，每条请求都要 `x-api-key`（用户自己申请，存 settings.json）。
+//! CF 没有端声明：`client_side`/`server_side` 一律 None，端判定只能走离线取证层，不从 `gameVersions` 标签猜。
+//! 下载链临时且可能缺：这里给出的 `url` 恒为空串，构建期按 (mod id, file id) 现取（`curseforge_build_url`：官方链优先、被拒退内容分发站推导链；`curseforge_probe_link` 逐枚探链入清单）。
+//! 校验值按长度认（40=sha1、32=md5），不信 `algo` 枚举号（各语言实现公认对不上）。
 
 use serde_json::Value;
 
