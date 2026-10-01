@@ -614,6 +614,8 @@
   "settings.mcmod-lookup": "百科补全",
   "settings.mcmod-lookup-desc": "平台各腿全答不上时查 MC百科词条的「运行环境」（非官方接口，默认关）",
   "settings.mod-files": "还没有下载过模组文件",
+  "settings.modrinth-mirror": "Modrinth 镜像",
+  "settings.modrinth-mirror-desc": "Modrinth 的查询优先走 mcimirror 镜像、官方自动兜底；CurseForge 数据始终经 mcimirror 获取（无需 API Key）",
   "settings.name-count": "已清理{{name}} {{count}} 项 · {{size}}",
   "settings.network": "网络",
   "settings.new-version": "发现新版本 v{{latest}}（当前 v{{current}}）",

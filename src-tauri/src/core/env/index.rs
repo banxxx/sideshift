@@ -648,7 +648,6 @@ const FP_BATCH: usize = 100;
 /// 现有证据**不优于** CF 构建标签的行才进场（镜像 / 百科 / mrpack / 名称层都算）——
 /// jar 自证与 Modrinth 哈希/项目答过的行再问一轮只会得到更差的结论，白花请求。
 ///
-/// 没配 Key：整腿跳过，一行请求都不发（与 cfpack 的取链探测同口径）。
 /// **失败不改调用方的 `ok`**：CF 是独立平台，这一腿没答上不该把 Modrinth 那侧
 /// 演成「联网反查未全部完成」；没答上的行留在待查列，下一轮再试
 async fn resolve_via_fingerprints(
@@ -659,9 +658,6 @@ async fn resolve_via_fingerprints(
     pending: &[usize],
     out: &mut EvidenceMap,
 ) {
-    if !dl.has_curseforge_key() {
-        return;
-    }
     let rows: Vec<usize> = pending
         .iter()
         .copied()

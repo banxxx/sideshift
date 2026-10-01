@@ -59,9 +59,9 @@ pub struct Downloader {
     transfer: Option<Arc<OnTransfer>>,
     /// 下载源档位：只影响「哪些 URL 先试镜像」，不改校验锚点（见 `source` 模块头）
     source: DownloadSource,
-    /// CurseForge 的 `x-api-key`（来自设置）。`None` = 用户没配：那一侧的查询当场报「去配置」，
-    /// 不发请求。它只是被搬运到请求头里，任何日志与错误文案都不许带上它的值
-    cf_key: Option<String>,
+    /// Modrinth 查询 API 是否优先走 mcimirror 镜像（CurseForge 无条件走，见 `source` 模块头）。
+    /// 未调用即关（直连官方），命令层按设置传入
+    mod_mirror: bool,
 }
 
 impl Downloader {
@@ -77,7 +77,7 @@ impl Downloader {
             concurrency: concurrency.clamp(1, 16),
             transfer: None,
             source: DownloadSource::Official,
-            cf_key: None,
+            mod_mirror: false,
         }
     }
 
@@ -98,17 +98,10 @@ impl Downloader {
         self
     }
 
-    /// 挂上设置里的 CurseForge Key：空串按「没配」处理（与 `AppSettings::normalized` 同一口径，
-    /// 两处都判一次，免得有人绕过设置直接构造）
-    pub fn with_curseforge_key(mut self, key: Option<String>) -> Self {
-        self.cf_key = key.map(|k| k.trim().to_string()).filter(|k| !k.is_empty());
+    /// 挂上设置里的 Modrinth 镜像开关（CurseForge 经 mcimirror 是无条件的，不经这里）
+    pub fn with_modrinth_mirror(mut self, on: bool) -> Self {
+        self.mod_mirror = on;
         self
-    }
-
-    /// 配了 CurseForge Key 吗。补取那一档在发第一发请求之前问的就是这个：
-    /// 没 Key 时逐行都只会撞回同一句拒绝，敲几百次门既没有新信息也只会被限流
-    pub fn has_curseforge_key(&self) -> bool {
-        self.cf_key.is_some()
     }
 
     /// 缓存路径；`None` = 该项不落缓存。URL 项按 sha1（缺省按 URL 哈希，Modrinth 坐标与内容一一对应）
@@ -328,7 +321,7 @@ impl Downloader {
         url: &str,
         cache: Option<&Path>,
     ) -> Result<(u64, u32), DownloadError> {
-        let candidates = source::candidates(url, self.source);
+        let candidates = source::candidates(url, self.source, self.mod_mirror);
         let mut last_cause = String::from("unknown");
         let mut fails: u32 = 0;
         for (i, cand) in candidates.iter().enumerate() {
@@ -478,7 +471,7 @@ impl Downloader {
         if let Some(s) = hit {
             return Some(s);
         }
-        for cand in source::candidates(url, self.source) {
+        for cand in source::candidates(url, self.source, self.mod_mirror) {
             let len = self
                 .client
                 .head(&cand)
@@ -559,7 +552,7 @@ impl Downloader {
     /// 解析失败也换源——镜像未同步时常给 200 + 错误页，只有官方那次的结果才算数。
     pub(crate) async fn get_json(&self, url: &str) -> Result<Value, DownloadError> {
         let mut last_err = DownloadError::NotFound(url.to_string());
-        for cand in source::candidates(url, self.source) {
+        for cand in source::candidates(url, self.source, self.mod_mirror) {
             match self.fetch_bytes(&cand).await.and_then(|b| {
                 serde_json::from_slice(&b).map_err(DownloadError::from)
             }) {
@@ -570,86 +563,49 @@ impl Downloader {
         Err(last_err)
     }
 
-    /// 读一个 JSON 值（POST 版本：`get_json` 只能取）
+    /// 读一个 JSON 值（POST 版本：`get_json` 只能取）。与 `get_json` 同一条候选链——
+    /// Modrinth 的 sha1 批量反查、CF 的指纹/批量取工程都是 POST，镜像优先在这里生效
     pub(crate) async fn post_json(&self, url: &str, body: &Value) -> Result<Value, DownloadError> {
-        let resp = self
-            .client
-            .post(url)
-            .timeout(METADATA_TIMEOUT)
-            .json(body)
-            .send()
-            .await
-            .map_err(|e| DownloadError::Http {
-                url: url.to_string(),
-                status: e.status().map(|s| s.as_u16()).unwrap_or(0),
-            })?;
-        let status = resp.status();
-        if !status.is_success() {
-            return Err(DownloadError::Http {
-                url: url.to_string(),
-                status: status.as_u16(),
-            });
+        let mut last_err = DownloadError::NotFound(url.to_string());
+        for cand in source::candidates(url, self.source, self.mod_mirror) {
+            let resp = self
+                .client
+                .post(&cand)
+                .timeout(METADATA_TIMEOUT)
+                .json(body)
+                .send()
+                .await;
+            let resp = match resp {
+                Ok(r) => r,
+                Err(e) => {
+                    last_err = DownloadError::Http {
+                        url: cand,
+                        status: e.status().map(|s| s.as_u16()).unwrap_or(0),
+                    };
+                    continue;
+                }
+            };
+            let status = resp.status();
+            let bytes = resp.bytes().await;
+            let bytes = match bytes {
+                Ok(b) => b,
+                Err(e) => {
+                    last_err = DownloadError::Http {
+                        url: cand,
+                        status: e.status().map(|s| s.as_u16()).unwrap_or(0),
+                    };
+                    continue;
+                }
+            };
+            match serde_json::from_slice::<Value>(&bytes) {
+                Ok(v) => return Ok(v),
+                Err(e) => {
+                    last_err = DownloadError::from(e);
+                }
+            }
+            let _ = status; // 非 2xx 的响应体通常不是 JSON，解析失败自然落进上一格
         }
-        let bytes = resp
-            .bytes()
-            .await
-            .map_err(|e| DownloadError::Http {
-                url: url.to_string(),
-                status: e.status().map(|s| s.as_u16()).unwrap_or(0),
-            })?;
-        Ok(serde_json::from_slice(&bytes)?)
-    }
-
-    /// CurseForge 专用 JSON POST（`curseforge_fingerprints` 的指纹批量反查走这里）：
-    /// 挂 `x-api-key`，与 `cf_get_json` 同一套错误语义——401/403 演成可读的 `Refused`，
-    /// 其余状态码原样进 `Http`。Key 本身不进任何错误文案
-    pub(crate) async fn cf_post_json(
-        &self,
-        url: &str,
-        body: &Value,
-    ) -> Result<Value, DownloadError> {
-        let Some(key) = self.cf_key.as_deref() else {
-            return Err(DownloadError::Refused(
-                "还没有配置 CurseForge API Key：在「设置 · 网络 · CurseForge API Key」填一把，\
-                 或在 CurseForge 官方表单免费申请"
-                    .into(),
-            ));
-        };
-        let resp = self
-            .client
-            .post(url)
-            .timeout(METADATA_TIMEOUT)
-            .header("x-api-key", key)
-            .json(body)
-            .send()
-            .await
-            .map_err(|e| DownloadError::Http {
-                url: url.to_string(),
-                status: e.status().map(|s| s.as_u16()).unwrap_or(0),
-            })?;
-        let status = resp.status();
-        if status == reqwest::StatusCode::UNAUTHORIZED
-            || status == reqwest::StatusCode::FORBIDDEN
-        {
-            return Err(DownloadError::Refused(format!(
-                "CurseForge 拒绝了这次请求（HTTP {}）：Key 已过期，或这个接口没有授权",
-                status.as_u16()
-            )));
-        }
-        if !status.is_success() {
-            return Err(DownloadError::Http {
-                url: url.to_string(),
-                status: status.as_u16(),
-            });
-        }
-        let bytes = resp
-            .bytes()
-            .await
-            .map_err(|e| DownloadError::Http {
-                url: url.to_string(),
-                status: e.status().map(|s| s.as_u16()).unwrap_or(0),
-            })?;
-        Ok(serde_json::from_slice(&bytes)?)
+        Err(last_err)
     }
 
     /// CurseForge 取链探测专用的一次 HEAD：**只问「这个地址给不给字节」，一个字节都不取**。
@@ -665,60 +621,6 @@ impl Downloader {
         }
     }
 
-    /// CurseForge 专用 JSON GET：挂 `x-api-key` 头，**不走镜像候选链**（`source` 模块表里 CF 没有镜像）。
-    /// 缺 Key 与 Key 被拒都归 `Refused`：这两句是要原样显示给用户看的，前者要给「去配置」出口、
-    /// 后者要说清是 Key 的问题而不是网络的问题。错误文案里绝不出现 Key 本身
-    pub(crate) async fn cf_get_json(&self, url: &str) -> Result<Value, DownloadError> {
-        let Some(key) = self.cf_key.as_deref() else {
-            return Err(DownloadError::Refused(
-                "还没有配置 CurseForge API Key：在「设置 · 网络 · CurseForge API Key」填一把，\
-                 或在 CurseForge 官方表单免费申请"
-                    .into(),
-            ));
-        };
-        let resp = self
-            .client
-            .get(url)
-            .timeout(METADATA_TIMEOUT)
-            .header("x-api-key", key)
-            .send()
-            .await
-            .map_err(|e| DownloadError::Http {
-                url: url.to_string(),
-                status: e.status().map(|s| s.as_u16()).unwrap_or(0),
-            })?;
-        let status = resp.status();
-        // 401 与 403 是两回事，不能合成一句：实测（495 行的官方导出包）403 里绝大多数
-        // **与 Key 无关**——那些项目压根不通过 API 发放下载链（同项目的每一枚构建都拒，
-        // 而元数据接口照回 200）。把它们说成「Key 无效」会把人支去设置页重粘一把好 Key
-        if status == reqwest::StatusCode::UNAUTHORIZED {
-            return Err(DownloadError::Refused(
-                "CurseForge 不接受这把 API Key（HTTP 401）：Key 已过期或被撤销，请到设置里重新填写"
-                    .into(),
-            ));
-        }
-        if status == reqwest::StatusCode::FORBIDDEN {
-            return Err(DownloadError::Refused(
-                "CurseForge 拒绝了这次请求（HTTP 403）：这把 Key 没有该接口的权限，\
-                 或者这个模组不通过接口发放下载链"
-                    .into(),
-            ));
-        }
-        if !status.is_success() {
-            return Err(DownloadError::Http {
-                url: url.to_string(),
-                status: status.as_u16(),
-            });
-        }
-        let bytes = resp
-            .bytes()
-            .await
-            .map_err(|e| DownloadError::Http {
-                url: url.to_string(),
-                status: e.status().map(|s| s.as_u16()).unwrap_or(0),
-            })?;
-        Ok(serde_json::from_slice(&bytes)?)
-    }
 }
 
 #[cfg(test)]

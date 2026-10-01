@@ -43,7 +43,7 @@ fn downloader_of(state: &S<'_>) -> Downloader {
     let s = lock(&state).settings.clone();
     Downloader::new(PathBuf::from(&s.cache_dir), s.concurrency as usize)
         .with_source(s.download_source.normalized())
-        .with_curseforge_key(s.curseforge_api_key.clone())
+        .with_modrinth_mirror(s.modrinth_mirror)
 }
 
 fn last_parsed_of(inner: &task_engine::Inner) -> Option<Arc<ParsedPack>> {

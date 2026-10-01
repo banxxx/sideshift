@@ -3,7 +3,7 @@
  * 读写走 @/lib/api 门面；主题走 @/lib/theme 单一真源（侧栏按钮同步）。
  * 设置是「改一处即持久化」：写盘失败必须外显并从后端重读，让界面与真正常量的那份一致。
  */
-import { ExternalLink, FlaskConical, Folder, Monitor, Moon, RefreshCw, Sun, Trash2 } from "lucide-react";
+import { FlaskConical, Folder, Monitor, Moon, RefreshCw, Sun, Trash2 } from "lucide-react";
 import { useCallback, useEffect, useState, type ReactNode } from "react";
 import { motion } from "motion/react";
 import * as api from "@/lib/api";
@@ -179,11 +179,6 @@ export function SettingsPage() {
     const [update, setUpdate] = useState<UpdateState>("idle");
     /** 切到 Beta 的二次确认：改动的是"以后会装上什么包"，点一下就换太轻率 */
     const [confirmBeta, setConfirmBeta] = useState(false);
-    /**
-     * CurseForge Key 的本地草稿：设置是「改一处即持久化」的，但 Key 是手打的字符串，
-     * 逐键写盘会把用户的输入中途存成半截。失焦（或回车）才落一次盘。
-     */
-    const [cfKey, setCfKey] = useState("");
 
     useEffect(() => {
         void api
@@ -267,21 +262,6 @@ export function SettingsPage() {
             await patch(key === "cacheDir" ? { cacheDir: dir } : { outputDir: dir });
         } catch (e) {
             notify(t("settings.couldn-open", "打开目录选择器失败：{{reason}}", { reason: errOf(e) }), "error");
-        }
-    };
-
-    // Key 的显示值跟着后端那一份走：保存失败时 patch 会重读设置，草稿也要跟着回位，
-    // 否则输入框留着没生效的半截串，界面与常量又不一致了
-    useEffect(() => {
-        setCfKey(settings?.curseforgeApiKey ?? "");
-    }, [settings?.curseforgeApiKey]);
-
-    /** 失焦/回车时落盘：与已存的那份一样就什么都不做（不写盘、也不报「已保存」） */
-    const commitCfKey = async () => {
-        const v = cfKey.trim();
-        if (v === (settings?.curseforgeApiKey ?? "").trim()) return;
-        if (await patch({ curseforgeApiKey: v || null })) {
-            notify(t("settings.curseforge-api", "已保存 CurseForge API Key"), "success");
         }
     };
 
@@ -569,34 +549,17 @@ export function SettingsPage() {
                         />
                     </SettingRow>
                     <SettingRow
-                        label="CurseForge API Key"
-                        desc={
-                            settings.curseforgeApiKey
-                                ? t("settings.set-curseforge", "已配置：网络添加里的 CurseForge 搜索与构建列表、端信息指纹反查可用")
-                                : t("settings.set-use", "未配置：CurseForge API Key，点「获取」填表申请")
-                        }
+                        label={t("settings.modrinth-mirror", "Modrinth 镜像")}
+                        desc={t(
+                            "settings.modrinth-mirror-desc",
+                            "Modrinth 的查询优先走 mcimirror 镜像、官方自动兜底；CurseForge 数据始终经 mcimirror 获取（无需 API Key）"
+                        )}
                     >
-                        <TextInput
-                            plain
-                            value={cfKey}
-                            placeholder={t("settings.paste-api", "粘贴 API Key")}
-                            spellCheck={false}
-                            autoComplete="off"
-                            className="w-[220px]"
-                            onChange={(e) => setCfKey(e.target.value)}
-                            onBlur={() => void commitCfKey()}
-                            onKeyDown={(e) => {
-                                // 回车算「输完了」：借用失焦走同一条落盘路径，不用另加一个保存按钮
-                                if (e.key === "Enter") (e.target as HTMLInputElement).blur();
-                            }}
+                        <Toggle
+                            size="md"
+                            checked={settings.modrinthMirror}
+                            onChange={(v) => void patch({ modrinthMirror: v })}
                         />
-                        <Btn
-                            size="sm"
-                            icon={ExternalLink}
-                            onClick={() => void api.openExternal(api.CURSEFORGE_APPLY_FORM)}
-                        >
-                            {t("settings.get", "获取")}
-                        </Btn>
                     </SettingRow>
                     <SettingRow
                         label={t("settings.online-side", "联网反查端信息")}

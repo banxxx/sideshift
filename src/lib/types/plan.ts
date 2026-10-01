@@ -71,7 +71,4 @@ export interface PlanClassification {
     /** 这一包里按编号声明的 CF 行数（官方导出的 CF 包才有；带 jar 字节的民间包恒为 0）。
      *  包的属性、不是某一轮的补取结果 ⇒ 名字已被磁盘索引补过时它照旧是全部 */
     cfRows: number;
-    /** 有那些行、又没配 CurseForge API Key = true。补名字能靠缓存免 Key，**取 jar 字节不能**
-     *  （构建每行都要现取一条直链）⇒ 热索引的包也一样要提示，否则人要到点转换才撞拒绝 */
-    cfNeedsKey: boolean;
 }

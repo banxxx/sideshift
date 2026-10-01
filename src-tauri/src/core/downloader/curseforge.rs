@@ -1,5 +1,6 @@
 //! CurseForge 侧：Core API v1 的搜索 / 构建列表 / 类别 / 指纹反查 / 临时下载链五类查询。
-//! 除 `/categories`（免 Key 200，带 classId 反而 403）外，每条请求都要 `x-api-key`（用户自己申请，存 settings.json）。
+//! 所有请求经 mcimirror（`mod.mcimirror.top/curseforge`）免 Key 获取——那是无 Key 世界里唯一能应答
+//! 的源（官方 API 除 `/categories` 外全 401），所以候选链里 CF API 只有镜像一条（`source::candidates`）。
 //! CF 的端声明在**构建级**：file 对象 `gameVersions` 里的 `Client`/`Server` 标签是作者上传时
 //! 勾的官方声明（实测 JEI 两侧齐勾、Oculus 等纯客户端只勾 Client）——按文件精确，但没有
 //! optional 这一档，且老构建普遍没勾 ⇒ 没标签不算「服务端不支持」，只算这一层没答上（`cf_sides`）。
@@ -89,7 +90,7 @@ pub struct CfFileMeta {
     #[serde(default)]
     pub env: Option<Option<(SideFlag, SideFlag)>>,
     /// 索引顺带记的**取链许可态**（不属于 API 那三件事，是本地探出来的）。
-    /// `None` = 还没探过（老索引条目、以及没配 Key 的那些轮）；探过的行下次进同一个包零请求。
+    /// `None` = 还没探过（老索引条目、网络抖动没答上的那些轮）；探过的行下次进同一个包零请求。
     /// 存的是「能不能拿到链」这个结论，**不是链本身**——直链带时效，存下来就是埋雷
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub link: Option<CfLink>,
@@ -330,7 +331,7 @@ impl Downloader {
                 url.push_str(&format!("&categoryIds={id}"));
             }
         }
-        let v = self.cf_get_json(&url).await?;
+        let v = self.get_json(&url).await?;
         let mut results = Vec::new();
         if let Some(arr) = v["data"].as_array() {
             for m in arr {
@@ -382,7 +383,7 @@ impl Downloader {
         if !mc_version.is_empty() {
             url.push_str(&format!("&gameVersion={}", urlencoding(mc_version)));
         }
-        let v = self.cf_get_json(&url).await?;
+        let v = self.get_json(&url).await?;
         let mut entries: Vec<ModVersionEntry> = v["data"]
             .as_array()
             .map(|a| a.iter().filter_map(|f| file_entry(f, mc_version)).collect())
@@ -429,7 +430,7 @@ impl Downloader {
             return out;
         }
         if let Ok(v) = self
-            .cf_post_json(
+            .post_json(
                 &format!("{CURSEFORGE_API}/mods"),
                 &serde_json::json!({ "modIds": nums }),
             )
@@ -462,7 +463,7 @@ impl Downloader {
         mod_id: &str,
     ) -> Result<ModSearchResult, DownloadError> {
         let url = format!("{CURSEFORGE_API}/mods/{}", urlencoding(mod_id.trim()));
-        let v = self.cf_get_json(&url).await?;
+        let v = self.get_json(&url).await?;
         let m = &v["data"];
         let id = ident(&m["id"]);
         if id.is_empty() {
@@ -498,18 +499,24 @@ impl Downloader {
     ///
     /// CF 的 `files[]` 只给 `projectID`/`fileID`，方案行因此连名字都是编号；这一档把名字补回来，
     /// 顺带给取件档（`curseforge_download_url`）一条能校验的 sha1。
-    /// **一次一个构建**：`POST /v1/mods/files` 那条批量口我们没 Key 验不了响应形状，
-    /// 不照文档写推测代码（同「宁缺毋滥」那条口径）
+    /// 走 `POST /v1/mods/files`（传单元素数组）：**单文件 GET 端点经 mcimirror 502**（2026-10 实测），
+    /// 批量 POST 两侧都可用、响应是同一份 file 对象——原来「没 Key 验不了批量口」的顾虑随
+    /// Key 一起退役了。以后要省请求量，这里天然可以扩成真正的批量
     pub async fn curseforge_file_meta(
         &self,
         mod_id: &str,
         file_id: &str,
     ) -> Result<CfFileMeta, DownloadError> {
-        let url = format!("{CURSEFORGE_API}/mods/{mod_id}/files/{file_id}");
-        let v = self.cf_get_json(&url).await?;
-        let f = &v["data"];
+        let url = format!("{CURSEFORGE_API}/mods/files");
+        let v = self
+            .post_json(
+                &url,
+                &serde_json::json!({ "fileIds": [file_id.trim().parse::<u64>().unwrap_or(0)] }),
+            )
+            .await?;
+        let f = &v["data"][0];
         // 没 id 就等于没认出来：CF 的 404/空 data 都会落在这上面，不能让一行空行进方案
-        if ident(&f["id"]).is_empty() {
+        if ident(&f["id"]).is_empty() || ident(&f["modId"]) != mod_id {
             return Err(DownloadError::NotFound(format!(
                 "CurseForge 构建 {mod_id}/{file_id} 的元数据"
             )));
@@ -534,7 +541,7 @@ impl Downloader {
         file_id: &str,
     ) -> Result<String, DownloadError> {
         let url = format!("{CURSEFORGE_API}/mods/{mod_id}/files/{file_id}/download-url");
-        let v = self.cf_get_json(&url).await?;
+        let v = self.get_json(&url).await?;
         let link = v["data"]
             .as_str()
             .map(String::from)
@@ -549,8 +556,8 @@ impl Downloader {
     /// 一条构建编号 → **拿得到字节**的 URL：官方直链优先，项目不放行时才退到内容分发站的推导链。
     ///
     /// 为什么不直接退：官方那条是唯一有文档背书的。为什么可以退：实测过（见 `cf_cdn_url`）。
-    /// 两道闸门——**配了 Key**（没配时真病因是缺 Key，去撞 CDN 只会换一个更难读的 404）、
-    /// **手里有 sha1**（推导链按文件名定位，文件名错了它不报错，只给你另一枚 jar）
+    /// 闸门只剩一道——**手里有 sha1**（推导链按文件名定位，文件名错了它不报错，只给你另一枚 jar）。
+    /// 「配了 Key」那道随 Key 一起退役：CDN 推导链免 Key 可达，元数据经镜像也必能补到 sha1
     pub async fn curseforge_build_url(
         &self,
         mod_id: &str,
@@ -562,11 +569,7 @@ impl Downloader {
             Ok(link) => Ok(link),
             Err(e) => {
                 let anchored = sha1.map(|s| !s.trim().is_empty()).unwrap_or(false);
-                let cdn = if anchored && self.has_curseforge_key() {
-                    cf_cdn_url(file_id, file_name)
-                } else {
-                    None
-                };
+                let cdn = if anchored { cf_cdn_url(file_id, file_name) } else { None };
                 match cdn {
                     Some(u) => Ok(u),
                     None => Err(e),
@@ -585,21 +588,20 @@ impl Downloader {
     ///
     /// 为什么不离线判定：CF 的 file 对象里没有任何「允许不允许 API 发放下载链」的字段——
     /// 实测 495 行的官方导出包，被整项目 403 拒掉的那 6 行 `isAvailable=true`、`fileStatus=4`、
-    /// `externalLink=""`，与正常行一模一样（见 `CfLink`）
+    /// `externalLink=""`，与正常行一模一样（见 `CfLink`）。403 会从镜像原样透传回来，
+    /// 所以「项目不放行」这一档在免 Key 世界里依然存在、依然要走 CDN 回落
     pub async fn curseforge_probe_link(
         &self,
         mod_id: &str,
         file_id: &str,
         file_name: &str,
     ) -> Option<CfLink> {
-        // 没 Key 就不探：每一发都会撞回「去配置 Key」，而那句不是这枚模组的属性
-        if !self.has_curseforge_key() {
-            return None;
-        }
         match self.curseforge_download_url(mod_id, file_id).await {
             Ok(_) => Some(CfLink::Official),
-            // 只有「平台答了、答的是不给」才值得去看回落链；`Http`（429/5xx/断连）没有结论
-            Err(DownloadError::Refused(_)) | Err(DownloadError::NotFound(_)) => {
+            // 只有「平台答了、答的是不给」才值得去看回落链；`Http`（429/5xx/断连）没有结论。
+            // 403 是「项目不放行」的透传（经镜像与带 Key 直连同形），归这一档
+            Err(DownloadError::Http { status: 403, .. })
+            | Err(DownloadError::NotFound(_)) => {
                 let url = cf_cdn_url(file_id, file_name)?;
                 match self.cf_head_answer(&url).await {
                     Some(true) => Some(CfLink::Derived),
@@ -616,8 +618,8 @@ impl Downloader {
     /// 清单又不给编号，murmur2 指纹（`env::jar::cf_fingerprint`）是把「这枚 jar」
     /// 对回 CF 官方文件对象的唯一身份钥匙；匹配上的行带完整 file 对象——端标签（`cf_sides`）
     /// 与 sha1（`cf_sha1`）都从那里来。没匹配上的指纹直接缺席，不算故障。
-    /// 返回 `Err(Refused)` = 缺 Key / Key 被拒（调用方按「整腿跳过」处理，与 cfpack 同口径）；
-    /// 其余 `Err` = 网络故障，由调用方计进「这一轮没跑完」。
+    /// `Err` = 镜像不可达等网络故障，由调用方计进「这一轮没跑完」（无 Key 世界里没有
+    /// 「缺凭据被拒」这一档了）。
     /// 官方接口单批上限 128，这里取 100 留余量
     pub async fn curseforge_fingerprints(
         &self,
@@ -629,7 +631,7 @@ impl Downloader {
         }
         let url = format!("{CURSEFORGE_API}/fingerprints/{MC_GAME_ID}");
         let v = self
-            .cf_post_json(&url, &serde_json::json!({ "fingerprints": fingerprints }))
+            .post_json(&url, &serde_json::json!({ "fingerprints": fingerprints }))
             .await?;
         if let Some(arr) = v["data"]["exactMatches"].as_array() {
             for m in arr {
@@ -719,7 +721,7 @@ mod tests {
             .contains("/files/12345/678/"));
     }
 
-    /// 名字还没补到（没配 Key、或那一轮没查完）就不给链：这条链按**文件名**定位文件，
+    /// 名字还没补到（那一轮没查完）就不给链：这条链按**文件名**定位文件，
     /// 名字错了它不报错，只给你另一枚 jar
     #[test]
     fn derived_cdn_url_requires_a_name_and_a_numeric_id() {
@@ -734,27 +736,6 @@ mod tests {
         assert!(cf_cdn_url("5591286", "Structory 26.2 v1.3.7.jar")
             .unwrap()
             .ends_with("/Structory%2026.2%20v1.3.7.jar"));
-    }
-
-    /// 没配 Key 时**不许**退到推导链：那一句「去配置 Key」是真病因，换成 CDN 的 404 会把人带偏。
-    /// 这一条不发网络请求（`cf_get_json` 在门口就把 Keyless 挡下了），所以能当单测跑
-    #[tokio::test]
-    async fn keyless_build_url_keeps_the_key_prompt() {
-        let dir = std::env::temp_dir().join(format!("sideshift-cf-keyless-{}", uuid::Uuid::new_v4()));
-        std::fs::create_dir_all(&dir).unwrap();
-        let dl = Downloader::new(dir.clone(), 1);
-        let err = dl
-            .curseforge_build_url(
-                "636540",
-                "8396883",
-                "Structory_26.2_v1.3.7.jar",
-                Some("8a9a1a1b3f74398310420b6fbe2c26ef142bed42"),
-            )
-            .await
-            .unwrap_err();
-        assert!(matches!(err, DownloadError::Refused(_)), "{err}");
-        assert!(err.to_string().contains("还没有配置 CurseForge API Key"), "{err}");
-        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// 一条真形状的 CF 搜索结果（字段取自官方 OpenAPI 的 `Mod`/`File`），用来钉死映射口径

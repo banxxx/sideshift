@@ -174,8 +174,7 @@ impl Downloader {
     }
 
     pub async fn search_mods(&self, q: &ModSearchQuery) -> Result<ModSearchPage, DownloadError> {
-        // 两家平台唯一的分发点在这里（命令层不再各判一次）：CurseForge 要用户自己的 API Key，
-        // 缺 Key / Key 被拒都由那一侧报可读的 `Refused`
+        // 两家平台唯一的分发点在这里（命令层不再各判一次）；CurseForge 经 mcimirror 免 Key 获取
         if q.source == ModSource::Curseforge {
             return self.search_curseforge(q).await;
         }

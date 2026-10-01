@@ -125,17 +125,6 @@ export function ConvertPage() {
             setReclassifying(false);
             setPlan(res.plan);
             setClassifying(res.onlinePending);
-            // CF 官方导出的包只声明编号，jar 字节全在网上。名字可能早就被磁盘索引补好了（那之后
-            // 补取零请求、屏上看着什么都不缺），但**取字节每一次都要现取直链**、没 Key 就是拒绝 ⇒
-            // 闸门只看「这包有编号行 + 没配 Key」，热索引不许把缺 Key 藏到点转换才炸
-            if (res.cfNeedsKey) {
-                notify(
-                    t("convert.cf-needs-key", "{{count}} 个模组的 jar 不在包里 · 构建要从 CurseForge 取，需要在设置里填 CurseForge API Key", {
-                        count: res.cfRows,
-                    }),
-                    "warn"
-                );
-            }
             if (manual) {
                 const remove = res.plan.filter((m) => m.disposition === "remove").length;
                 // 联网还没跑完时不报数：那一批发出去会把「剔除 N 项」当成结论，可方案还没落定

@@ -28,7 +28,6 @@
   "settings.count-still_one": "; {{count}} still in use",
   "settings.count-still_other": "; {{count}} more still in use",
   "settings.counting-usage": "Counting usage…",
-  "settings.curseforge-api": "CurseForge API Key saved",
   "settings.date": "Up to date",
   "settings.defaults-system": "Defaults to System; pin Light or Dark",
   "settings.download-cache": "Download cache",
@@ -42,7 +41,6 @@
   "settings.failed-read-cache": "Failed to read cache usage: {{reason}}",
   "settings.failed-read-settings": "Failed to read settings: {{reason}}",
   "settings.follows-system": "Follows the system language (currently {{name}})",
-  "settings.get": "Get",
   "settings.install-loader": "Install loader locally",
   "settings.junk-files": "Junk files",
   "settings.language": "Language",
@@ -57,7 +55,6 @@
   "settings.online-side": "Online side lookup",
   "settings.parallel-downloads": "Parallel downloads",
   "settings.parts-partial": "{{parts}} partial · {{orphan}} leftover · {{empty}} empty dirs",
-  "settings.paste-api": "Paste API key",
   "settings.pinned-choice": "Pinned to your choice; no longer decided by build version",
   "settings.pinned-choice-longer": "Pinned to your choice; it no longer follows the system language",
   "settings.pinned-follows": "Current build version ({{channel}})",
@@ -68,8 +65,6 @@
   "settings.reuse-installed": "Reuse installed loader",
   "settings.runs-forge": "Runs the Forge/NeoForge installer locally; needs local Java",
   "settings.server-output": "Server output folder",
-  "settings.set-curseforge": "Set: CurseForge search, build lists & side fingerprints work when adding online",
-  "settings.set-use": "Not set: use Get to request a CurseForge API key",
   "settings.source-minekuai": "MineKuai API",
   "settings.stable": "Stable",
   "settings.storage-cache": "Storage & cache",
@@ -90,5 +85,7 @@
   "settings.version": "Version",
   "settings.where-finished": "Where finished server packs are saved",
   "settings.mcmod-lookup": "Wiki fallback",
-  "settings.mcmod-lookup-desc": "When all platform legs come up empty, look up the MC Wiki entry's runtime-environment line (unofficial, off by default)"
+  "settings.mcmod-lookup-desc": "When all platform legs come up empty, look up the MC Wiki entry's runtime-environment line (unofficial, off by default)",
+  "settings.modrinth-mirror": "Modrinth mirror",
+  "settings.modrinth-mirror-desc": "Modrinth queries prefer the mcimirror proxy with official fallback; CurseForge data always comes via mcimirror (no API key needed)"
 }

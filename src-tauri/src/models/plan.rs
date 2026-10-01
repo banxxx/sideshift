@@ -161,12 +161,9 @@ pub struct PlanClassification {
     pub plan: Vec<PlanMod>,
     pub online_pending: bool,
     /// 这一包里**按编号声明**的 CF 行数（官方导出的 CF 包才有；带 jar 字节的民间包恒为 0）。
-    /// 它是包的属性、不是某一轮的补取结果：名字可能早就被磁盘索引答过了，但取字节每一步都要
-    /// `/download-url` ⇒ 界面那句「要去 CurseForge 取 N 个模组」按这个数说
+    /// 它是包的属性、不是某一轮的补取结果：名字可能早就被磁盘索引答过了。
+    /// 界面那句「要从 CurseForge 取 N 个模组」按这个数说
     pub cf_rows: usize,
-    /// 上面那些行存在、又没配 CurseForge API Key ⇒ **true**。不看补取成功与否：补名字能靠缓存免
-    /// Key，取 jar 字节不能，所以热索引的包也一样要说这句（否则人要到点转换才撞拒绝）
-    pub cf_needs_key: bool,
 }
 
 /// 取件构成（阶段 3 计划确定后写入）：网络 / 包内 / 本地 / 缓存命中四类来源的诚实汇总。

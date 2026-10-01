@@ -15,7 +15,6 @@
   "convert.await-loader-version": "待選擇",
   "convert.back-home": "返回首頁",
   "convert.cancel-anytime": "轉換過程可隨時取消，已下載依賴自動快取複用",
-  "convert.cf-needs-key": "{{count}} 個模組的 jar 不在包裡 · 建置要從 CurseForge 取，需要在設定裡填 CurseForge API Key",
   "convert.change-folder": "更換本次目錄…",
   "convert.client-mods": "剔除客戶端模組",
   "convert.confirm-clear": "確認清空 {{count}} 項",

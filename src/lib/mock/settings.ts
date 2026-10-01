@@ -30,8 +30,8 @@ export const mockDefaultSettings: AppSettings = {
     concurrency: 6,
     // null = 跟随这一枚包的版本号，与 Rust 的默认一致（dev 下版本串由 api 层带上）
     updateChannel: null,
-    // dev 里默认没配 Key：这样「切到 CurseForge 给出去申请的出口」这条路径在浏览器里也能演
-    curseforgeApiKey: null,
+    // 与 Rust 一致：Modrinth 查询优先走 mcimirror、官方兜底
+    modrinthMirror: true,
     // 本机装 Loader 默认开（与 Rust 一致）：开着才出 JDK 判定那一行
     installLoaderLocally: true,
     reuseLoaderInstalls: true,

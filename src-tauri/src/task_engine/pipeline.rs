@@ -112,13 +112,13 @@ async fn run_pipeline(app: AppHandle, state: Arc<AppState>, id: String) {
     };
     // CF 那一档（官方导出的包只给编号、jar 字节不在包里）：名字/大小/sha1 得向 CF 补。
     // 自动分类那一轮通常已补完并落进 `cf-files-index.json`，这里只把索引贴回行上；索引冷的档
-    // （排队到重启后重跑、或分类那轮超时/没配 Key）才真发请求——构建期每行反正还要现取一条直链，
+    // （排队到重启后重跑、或分类那轮超时没查完）才真发请求——构建期每行反正还要现取一条直链，
     // 多这一发换来的是 sha1 能校验，值得
     let parsed: Arc<ParsedPack> = if cfpack::cf_row_count(&parsed) > 0 {
         let s = state.inner.lock().unwrap().settings.clone();
         let cache_dir = PathBuf::from(&s.cache_dir);
         let dl = Downloader::new(cache_dir.clone(), s.concurrency as usize)
-            .with_curseforge_key(s.curseforge_api_key.clone());
+            .with_modrinth_mirror(s.modrinth_mirror);
         let out = cfpack::ensure(&dl, &cache_dir, &parsed, false).await;
         if out.unresolved > 0 {
             push_log(
@@ -128,7 +128,7 @@ async fn run_pipeline(app: AppHandle, state: Arc<AppState>, id: String) {
                 PipelineStage::Parser,
                 LogLevel::Warn,
                 &format!(
-                    "CurseForge 编号补取：{} 行仍只有编号（没配 API Key 或本轮没查完），落位名按编号走",
+                    "CurseForge 编号补取：{} 行仍只有编号（本轮没查完），落位名按编号走",
                     out.unresolved
                 ),
             );
@@ -274,7 +274,7 @@ async fn run_pipeline(app: AppHandle, state: Arc<AppState>, id: String) {
         settings.concurrency as usize,
     )
     .with_source(settings.download_source.normalized())
-    .with_curseforge_key(settings.curseforge_api_key.clone());
+    .with_modrinth_mirror(settings.modrinth_mirror);
     let source_path = parsed
         .manifest
         .source_path

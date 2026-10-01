@@ -61,13 +61,18 @@ mod tests {
         assert_eq!(s.normalized().update_channel, Some(UpdateChannel::Stable));
     }
 
-    /// 老设置里没有这个字段：必须能加载（缺 Key = CurseForge 侧整块不可用，不是错误）
+    /// 老设置里没有镜像这一档：必须能加载（缺字段 = 默认开，见字段注释）
     #[test]
-    fn settings_without_curseforge_key_still_load() {
+    fn settings_without_modrinth_mirror_still_load() {
         let legacy = r#"{"outputDir":"o","cacheDir":"c","stripClientOnly":true,"verifyAfterBuild":false,
             "downloadSource":"official","concurrency":6,"autoClassifyOnline":true}"#;
         let s: AppSettings = serde_json::from_str(legacy).expect("旧设置应能加载");
-        assert_eq!(s.curseforge_api_key, None);
+        assert!(s.modrinth_mirror, "缺字段补默认开");
+        // 老 settings.json 里残留的 curseforge_api_key 字段（已退役）不该拖垮反序列化
+        let legacy_key = r#"{"outputDir":"o","cacheDir":"c","stripClientOnly":true,"verifyAfterBuild":false,
+            "downloadSource":"official","concurrency":6,"curseforgeApiKey":"legacy"}"#;
+        let s: AppSettings = serde_json::from_str(legacy_key).expect("残留 Key 字段应被忽略");
+        assert!(s.modrinth_mirror);
     }
 
     /// 旧 settings.json / 旧任务存档都没有装 Loader 那三颗开关：必须加载成功，且默认值不能反过来——
@@ -110,27 +115,6 @@ mod tests {
             "downloadSource":"official","concurrency":6,"locale":"zh_CN"}"#;
         let s: AppSettings = serde_json::from_str(broken).expect("无效语言值不该拖垮整份设置");
         assert_eq!(s.normalized().locale, AppLocale::Auto);
-    }
-
-    /// 粘贴进来的 Key 常带空白：带着空格发出去只会收到一条读不懂的 403，所以读写两端都归位；
-    /// 全空串等于「没配」，界面才不会再显示一个空输入框当成已配置
-    #[test]
-    fn curseforge_key_trims_and_blank_becomes_none() {
-        let s = AppSettings {
-            curseforge_api_key: Some("  $23-abc:def  ".into()),
-            ..Default::default()
-        }
-        .normalized();
-        assert_eq!(s.curseforge_api_key.as_deref(), Some("$23-abc:def"));
-
-        for blank in ["", "   ", "\t\n"] {
-            let s = AppSettings {
-                curseforge_api_key: Some(blank.into()),
-                ..Default::default()
-            }
-            .normalized();
-            assert_eq!(s.curseforge_api_key, None, "{blank:?} 应归位为未配置");
-        }
     }
 
     /// 一次性迁移只能命中「我们自己写进去的旧默认」：用户挑过/手打的路径差一个字符都不能动，

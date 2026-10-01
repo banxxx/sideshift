@@ -13,13 +13,13 @@ use std::time::Duration;
 use futures::stream::{self, StreamExt};
 use serde::Deserialize;
 
-use super::downloader::{CfFileMeta, DownloadError, Downloader};
+use super::downloader::{CfFileMeta, Downloader};
 use super::parser::{CfRef, ParsedPack};
 use crate::models::CfLink;
 
 const INDEX_FILE: &str = "cf-files-index.json";
 
-/// 一次在线轮里同时发几发。CF 门口有 Key 级限流，并发拉高只是把 429 提前；
+/// 一次在线轮里同时发几发。CF 门口有限流（经镜像同样存在），并发拉高只是把 429 提前；
 /// 与 env 那侧的联网轮同一个手感（4）。实测 495 行连发（并发 6）**零 429**，所以这一档有余量
 const CONCURRENCY: usize = 4;
 
@@ -72,7 +72,7 @@ impl CfIndex {
         self.map.insert(key_of(r), m);
     }
 
-    /// 这一枚编号探过取链许可了吗。`None` = 没探过（老条目、没 Key 的那些轮、探的时候网络抖了）
+    /// 这一枚编号探过取链许可了吗。`None` = 没探过（老索引条目、探的时候网络抖了）
     pub fn link_of(&self, r: &CfRef) -> Option<CfLink> {
         self.get(r).and_then(|m| m.link)
     }
@@ -95,8 +95,8 @@ impl CfIndex {
 }
 
 /// 这包里「按编号声明」的行数（= 是不是官方导出的 CF 包，以及构建时要联网取多少枚 jar）。
-/// 名字可能早就被索引答过了、这一数照旧是全部 ⇒ 它是**包的属性**，不是某一轮的补取结果：
-/// 补名字可以靠缓存免 Key，取字节每一次都要 Key，所以缺 Key 的闸门只认这个数
+/// 名字可能早就被索引答过了、这一数照旧是全部 ⇒ 它是**包的属性**，不是某一轮的补取结果。
+/// （历史上它还当过「缺 Key」提示的闸门，Key 随 mcimirror 免 Key 化退役后只剩计数一职）
 pub fn cf_row_count(parsed: &ParsedPack) -> usize {
     parsed.mod_files.iter().filter(|f| f.cf.is_some()).count()
 }
@@ -132,41 +132,31 @@ pub fn enrich(parsed: &ParsedPack, index: &CfIndex) -> ParsedPack {
     out
 }
 
-/// 在线补取：逐枚编号要一次元数据，批末落盘。返回 `(没补到的那些编号, 整轮是不是被 Key 级拒绝掐掉的)`
-/// ——已补到的照常进索引、照常生效。第二个量决定要不要接着探取链：账号级别的拒绝，
-/// 每一行都会撞回同一句，敲几百次门没有新信息
-///
-/// 一次一个构建（`/v1/mods/{m}/files/{f}`）：批量口（`POST /v1/mods/files`）我们没 Key 验不了
-/// 响应形状，不照文档写推测代码。缺 Key / Key 被拒是逐行都一样的失败，一条就够说明问题 ⇒ 收摊，
-/// 剩下的原样交回，不能拿着同一个拒绝原因敲几百次门
+/// 在线补取：逐枚编号要一次元数据，批末落盘。返回没补到的那些编号——已补到的照常进索引、
+/// 照常生效。单个失败（网络抖动、编号不存在）只影响那一行，剩下的照常扫完
 pub async fn resolve_online(
     dl: &Downloader,
     index: &mut CfIndex,
     cache_dir: &Path,
     refs: &[CfRef],
-) -> (Vec<CfRef>, bool) {
+) -> Vec<CfRef> {
     let mut missing: Vec<CfRef> = Vec::new();
-    for (ci, chunk) in refs.chunks(CHUNK).enumerate() {
+    for chunk in refs.chunks(CHUNK) {
         // 带着下标走：buffer_unordered 不保证完成序，而「哪枚编号」要能对上回来的那份元数据
         let queue: Vec<(usize, CfRef)> = chunk.iter().cloned().enumerate().collect();
         // `to_vec()` 那份拥有值的队列（按引用喂 buffer_unordered 会把 closure 绑死在一个寿命上）
-        let done: Vec<(usize, Option<CfFileMeta>, bool)> = stream::iter(queue)
+        let done: Vec<(usize, Option<CfFileMeta>)> = stream::iter(queue)
             .map(|(i, r)| async move {
                 match dl.curseforge_file_meta(&r.mod_id, &r.file_id).await {
-                    Ok(m) if m.usable() => (i, Some(m), false),
-                    // 200 但没名字：与查不到同档，整轮记「不完整」，别把空行贴进方案
-                    Ok(_) => (i, None, false),
-                    // Key 的问题：其余行照旧记失败，但整轮立刻收摊（见函数头）
-                    Err(DownloadError::Refused(_)) => (i, None, true),
-                    Err(_) => (i, None, false),
+                    Ok(m) if m.usable() => (i, Some(m)),
+                    // 200 但没名字 / 请求失败：与查不到同档，整轮记「不完整」，别把空行贴进方案
+                    _ => (i, None),
                 }
             })
             .buffer_unordered(CONCURRENCY)
             .collect()
             .await;
-        let mut refused = false;
-        for (i, meta, is_refused) in done {
-            refused |= is_refused;
+        for (i, meta) in done {
             match meta {
                 Some(m) => index.put(&chunk[i], m),
                 None => missing.push(chunk[i].clone()),
@@ -174,13 +164,8 @@ pub async fn resolve_online(
         }
         // 批末落盘：超时或换包打断时，已经拿到的那部分下次离线即答
         index.save(cache_dir);
-        if refused {
-            // 同一个拒绝原因不必再敲几百次门：剩下没扫到的编号整批算没补到
-            missing.extend(refs.iter().skip((ci + 1) * CHUNK).cloned());
-            return (missing, true);
-        }
     }
-    (missing, false)
+    missing
 }
 
 /// 还没探过取链许可的那些编号（去重）。只有**补到元数据**的行才进这一列：回落链是按
@@ -254,12 +239,12 @@ async fn probe_online(
 }
 
 /// 补取的结果：`parsed` 是把元数据与许可态贴回去的那一份；`unresolved` 仍然只有编号的行数
-/// （就是「要配 Key」那句实话的主语）；`renamed` = 贴完**真的改写了行**（名字/大小/sha1 任一）。
+/// `renamed` = 贴完**真的改写了行**（名字/大小/sha1 任一）；
 ///
 /// `renamed` 是调用方那两道闸门（换掉解析缓存那份 Arc、作废端取证结论）的判据，
 /// 而且**不能拿「这轮发了几条请求」代替**：重启后重新解析拿到的是没补过的包，而索引是热的，
 /// 那一档一条请求都不发、却必须改写——否则明明知道真名字也照样给用户一排编号。
-/// 反过来没 Key 又索引空着时一条没改，就不该白重跑一整轮离线取证
+/// 反过来索引空着且什么都没改时一条没改，就不该白重跑一整轮离线取证
 pub struct Enriched {
     pub parsed: ParsedPack,
     pub unresolved: usize,
@@ -279,7 +264,6 @@ pub struct Enriched {
 ///
 /// 五条省钱/省时口径：
 /// - 索引热的那一档**元数据零请求**（同一个包第二次打开只读盘；但取链许可还是要探一次）
-/// - **没配 Key 就一发都不发**：每发都会立刻撞回同一句拒绝，敲几百次门既没有新信息也只会被限流
 /// - 补元数据、补端标签与探取链**共用一条 `ONLINE_BUDGET`**（见那个常量），到点收摊，
 ///   已拿到的照常生效（每趟都批末落盘）
 /// - 补端标签那条腿只为本功能上线前的老索引条目存在：`env_checked` 一旦有值就永久收队
@@ -299,33 +283,22 @@ pub async fn ensure(
         index.clear_links();
     }
     let pending = pending_refs(parsed, &index);
-    if dl.has_curseforge_key() {
-        let _ = tokio::time::timeout(ONLINE_BUDGET, async {
-            if !pending.is_empty() {
-                let (_missing, refused) =
-                    resolve_online(dl, &mut index, cache_dir, &pending).await;
-                if refused {
-                    // Key 级拒绝是账号的事，与这枚模组放行与否无关：探测每一发都撞回同一句 ⇒ 收摊
-                    return;
-                }
-            }
-            // 老索引条目补端标签：重发一次元数据（名字/大小/sha1 原样换新，多不了什么），
-            // env_checked 从此有值，这条腿对这份索引就永久收队了
-            let need_env = env_unchecked_refs(parsed, &index);
-            if !need_env.is_empty() {
-                let (_missing, refused) =
-                    resolve_online(dl, &mut index, cache_dir, &need_env).await;
-                if refused {
-                    return;
-                }
-            }
-            let refs = unprobed_refs(parsed, &index);
-            if !refs.is_empty() {
-                probe_online(dl, &mut index, cache_dir, &refs).await;
-            }
-        })
-        .await;
-    }
+    let _ = tokio::time::timeout(ONLINE_BUDGET, async {
+        if !pending.is_empty() {
+            resolve_online(dl, &mut index, cache_dir, &pending).await;
+        }
+        // 老索引条目补端标签：重发一次元数据（名字/大小/sha1 原样换新，多不了什么），
+        // env_checked 从此有值，这条腿对这份索引就永久收队了
+        let need_env = env_unchecked_refs(parsed, &index);
+        if !need_env.is_empty() {
+            resolve_online(dl, &mut index, cache_dir, &need_env).await;
+        }
+        let refs = unprobed_refs(parsed, &index);
+        if !refs.is_empty() {
+            probe_online(dl, &mut index, cache_dir, &refs).await;
+        }
+    })
+    .await;
     let unresolved = pending_refs(parsed, &index).len();
     let out = enrich(parsed, &index);
     // enrich 不动行序，按下标对齐比一遍就知道到底改没改
@@ -539,10 +512,10 @@ mod tests {
         assert_eq!(out.mod_files[1].cf.as_ref().unwrap().env, None);
     }
 
-    /// 没配 Key：一轮下来名字照常贴回，但**一行缺件都不许冒出来**——那句拒绝是账号的事，
-    /// 不是这些模组的属性；把它写成缺件等于用一个配置问题拦下一个能构建的包
+    /// 热索引：一轮下来名字照常贴回，但**一行缺件都不许冒出来**——索引答过的行不算缺件，
+    /// 把「索引里有」演成「拿不到字节」等于用一个假状态拦下一个能构建的包
     #[tokio::test]
-    async fn keyless_ensure_invents_no_blocked_rows() {
+    async fn warm_index_ensure_invents_no_blocked_rows() {
         let dir = std::env::temp_dir().join(format!("sideshift-cf-keyless-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&dir).unwrap();
         let mut index = CfIndex::default();

@@ -51,12 +51,11 @@ export interface AppSettings {
      */
     updateChannel: UpdateChannel | null;
     /**
-     * CurseForge Core API 的 `x-api-key`（第三方应用走官方表单申请，地址见 `CURSEFORGE_APPLY_FORM`；
-     * `console.curseforge.com` 是给游戏方的 Studios 控制台，不是这里）。
-     * `null`/缺省 = 没配：那一侧的搜索与版本列表整块不可用，「从网络添加模组」在切到 CurseForge
-     * 时给出去申请的出口，而不是让用户对着一条 403 猜原因。只存本机 settings.json，不进日志。
+     * Modrinth 的 API 查询优先走 mcimirror（`mod.mcimirror.top`）、官方自动兜底（Rust: `modrinth_mirror`）。
+     * **默认开**：透明反向代理，没有快照正确性风险；唯一风险是可用性，官方兜底消化它。
+     * CurseForge 的数据**始终**经 mcimirror 获取（免 Key，不受本档控制）。
      */
-    curseforgeApiKey?: string | null;
+    modrinthMirror: boolean;
     /**
      * 本机执行 loader installer（Forge / NeoForge 产物「上传即跑」的前提：装出 `libraries/` 与服务端本体）。
      * 默认开：这一档就是主路径。代价是多跑一次安装器（磁盘 + 时间），且本机没有合适 JDK 时任务直接失败。

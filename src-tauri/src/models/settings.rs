@@ -59,11 +59,13 @@ pub struct AppSettings {
     /// 用户在设置页选过一次之后就是显式值，从此不再看自己的版本号（这正是他要的手动切换）。
     #[serde(default)]
     pub update_channel: Option<UpdateChannel>,
-    /// CurseForge Core API 的 `x-api-key`。**None / 空串 = 没配**：那一侧的搜索与构建列表整块不可用，
-    /// 界面据此给「去获取 Key」的出口，而不是让用户对着一条 403 猜原因。
-    /// 这是用户自己的凭据：只写在 settings.json（他本机数据根），不进日志、不进仓库。
-    #[serde(default)]
-    pub curseforge_api_key: Option<String>,
+    /// Modrinth 的 API 查询优先走 mcimirror（`mod.mcimirror.top`）、官方自动兜底。
+    /// **默认开**：它是透明反向代理（同一份数据原样转发，没有快照正确性风险），唯一风险是
+    /// 可用性，而候选链的官方兜底把这一点也消化了。CurseForge 的数据**始终**经 mcimirror
+    /// 获取（免 Key，那是无 Key 世界里唯一能应答的源），不受本档控制——见 `source::candidates`。
+    /// 旧 settings.json 无此字段 → default_fn 补 true。
+    #[serde(default = "default_modrinth_mirror")]
+    pub modrinth_mirror: bool,
     /// 本机执行 loader installer（Forge / NeoForge 想要「上传即跑」的前提：装出 `libraries/` 与服务端本体）。
     ///
     /// **默认开**：这一档存在的目的就是「解压即开服」，默认关等于把主路径藏起来。
@@ -148,6 +150,11 @@ pub struct UpdateInfo {
 }
 
 fn default_online_classify() -> bool {
+    true
+}
+
+/// Modrinth 镜像默认开：见字段注释
+fn default_modrinth_mirror() -> bool {
     true
 }
 
@@ -239,7 +246,8 @@ impl Default for AppSettings {
             // 百科补全腿默认关：非官方行为（HTML 解析 + 社区二手声明），见字段注释
             env_lookup_mcmod: false,
             update_channel: None,
-            curseforge_api_key: None,
+            // Modrinth 镜像默认开：透明代理无正确性风险，官方兜底消化可用性风险（见字段注释）
+            modrinth_mirror: true,
             install_loader_locally: true,
             reuse_loader_installs: true,
             locale: AppLocale::Auto,
@@ -274,12 +282,6 @@ impl AppSettings {
         // 语言档位写坏了顶成"跟随系统"：否则设置页的下拉会显示成一个不存在的选项，
         // 而且落盘时会把 "unspecified" 写回 settings.json（同 download_source 那一行）
         self.locale = self.locale.normalized();
-        // 凭据字段：粘贴时常带首尾空白，带着空格发出去的 403 用户读不懂，
-        // 所以在这里一次归位；清空的串记成 None，让「没配」与「配了个空」是同一个状态
-        self.curseforge_api_key = self
-            .curseforge_api_key
-            .map(|k| k.trim().to_string())
-            .filter(|k| !k.is_empty());
         self
     }
 }

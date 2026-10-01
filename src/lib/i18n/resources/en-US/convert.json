@@ -17,8 +17,6 @@
   "convert.await-loader-version": "Awaiting selection",
   "convert.back-home": "Back to home",
   "convert.cancel-anytime": "You can cancel anytime; downloads are cached and reused",
-  "convert.cf-needs-key_one": "{{count}} mod in this CurseForge pack ships no jar file · building downloads it from CurseForge, which needs an API Key in Settings",
-  "convert.cf-needs-key_other": "{{count}} mods in this CurseForge pack ship no jar file · building downloads them from CurseForge, which needs an API Key in Settings",
   "convert.change-folder": "Change folder…",
   "convert.clear-edits": "Clear my edits",
   "convert.client-mods": "Client mods removed",

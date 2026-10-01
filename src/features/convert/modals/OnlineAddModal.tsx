@@ -1,5 +1,5 @@
 /* ================= 网络添加弹窗（800×464，St8m8 + 详情 wphzw） ================= */
-import { ChevronLeft, ChevronRight, ExternalLink, Puzzle } from "lucide-react";
+import { ChevronLeft, ChevronRight, Puzzle } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import * as api from "@/lib/api";
 import { formatSize, loaderLabel, modcatLabel } from "@/lib/format";
@@ -95,13 +95,6 @@ export function OnlineAddModal({
     /** 失败原因存后端原文（网络类是 `net:种类:主机` 这种代码），渲染处过 `errOf` 才换语言：
      *  在捕获处就翻译的话，切语言之后这句还挂在屏上、不会跟着变 */
     const [error, setError] = useState<string | null>(null);
-    /**
-     * CurseForge 的 API Key，开弹窗时读一次设置：`null` = 设置还没读到，`""` = 读到了、确实没配。
-     * 两者必须分开——把「还没读到」演成「没配」，用户会看到一句假的需要去申请。
-     * CurseForge 的每条查询都要这个 Key，缺它 = 平台在门口就拒（403），所以这里宁可不发请求。
-     */
-    const [cfKey, setCfKey] = useState<string | null>(null);
-
     // 弹窗壳常驻挂载：每次打开重置回一级视图与包自身版本/加载器
     useEffect(() => {
         if (!open) return;
@@ -114,8 +107,6 @@ export function OnlineAddModal({
         setCatSel("all");
         // 上一次搜索的结果不能在外壳重新挂起的那一帧里露底：先回到「请求中」
         setLoading(true);
-        // Key 同理：每次开弹窗重读设置，读回来之前不许按上一次的配置发请求
-        setCfKey(null);
     }, [open, mcVersion, loader]);
 
     // 搜索词防抖 300ms：真实后端逐键请求会打爆 Modrinth
@@ -124,8 +115,7 @@ export function OnlineAddModal({
         return () => clearTimeout(t);
     }, [query]);
 
-    // 筛选下拉的真实选项：MC 版本表 + 当前来源的类别标签（两家词表不同，切来源要重拉）；
-    // 顺带读一次设置——CurseForge 那一侧没有用户自己的 Key 就根本发不出可用请求
+    // 筛选下拉的真实选项：MC 版本表 + 当前来源的类别标签（两家词表不同，切来源要重拉）
     useEffect(() => {
         if (!open) return;
         void api.listMcVersions().then(setMcOptions).catch(() => {});
@@ -133,27 +123,10 @@ export function OnlineAddModal({
             .listModCategories(source)
             .then(setCategories)
             .catch(() => setCategories([]));
-        void api
-            .getSettings()
-            .then((s) => setCfKey(s.curseforgeApiKey ?? ""))
-            // 读设置都能失败的话，没有更可信的事实可依据了：按「没配」显示出口，
-            // 总比卡在「搜索中…」什么都不给看强
-            .catch(() => setCfKey(""));
     }, [open, source]);
 
     useEffect(() => {
         if (!open) return;
-        if (source === "curseforge") {
-            // 设置还没读回来：整块停在「请求中」，别把「没读到」演成「没配」
-            if (cfKey === null) return;
-            if (!cfKey.trim()) {
-                // 缺 Key 一次请求都不发（发了必被平台拒）：清掉另一家的结果，让结果区只说这一句
-                setResult({ total: 0, results: [] });
-                setError(null);
-                setLoading(false);
-                return;
-            }
-        }
         let alive = true;
         setLoading(true);
         setError(null);
@@ -180,10 +153,8 @@ export function OnlineAddModal({
         return () => {
             alive = false;
         };
-    }, [open, source, debounced, page, verSel, loSel, catSel, cfKey]);
+    }, [open, source, debounced, page, verSel, loSel, catSel]);
 
-    /** 结果区该不该换成「去申请 Key」这句话（与上面那道闸门同一个判据） */
-    const cfBlocked = source === "curseforge" && cfKey !== null && !cfKey.trim();
     /** 当前来源的显示名：页脚那句状态与详情页副标题都按它说 */
     const srcName = source === "modrinth" ? "Modrinth" : "CurseForge";
 
@@ -533,13 +504,11 @@ export function OnlineAddModal({
             title={t("convert-modals.add-mods", "从网络添加模组")}
             sub={t("convert-modals.search-modrinth", "搜索 Modrinth 与 CurseForge · {{filter}}", { filter: filterNote })}
             footerNote={
-                cfBlocked
-                    ? t("convert-modals.curseforge-needs", "CurseForge · 需要 API Key")
-                    : error
-                      ? t("convert-modals.src-load", "{{src}} · 加载失败", { src: srcName })
-                      : loading
-                        ? t("convert-modals.src-searching", "{{src}} · 搜索中…", { src: srcName })
-                        : t("convert-modals.src-count", "{{src}} · 共 {{count}} 个结果", { src: srcName, count: result.total })
+                error
+                    ? t("convert-modals.src-load", "{{src}} · 加载失败", { src: srcName })
+                    : loading
+                      ? t("convert-modals.src-searching", "{{src}} · 搜索中…", { src: srcName })
+                      : t("convert-modals.src-count", "{{src}} · 共 {{count}} 个结果", { src: srcName, count: result.total })
             }
             footerActions={
                 <>
@@ -626,23 +595,6 @@ export function OnlineAddModal({
             <div className="-mx-1 flex min-h-0 flex-1 flex-col gap-0.5 overflow-auto px-1">
                 {loading ? (
                     <ListSkeleton rows={6} icon />
-                ) : cfBlocked ? (
-                    <div className="flex min-h-0 flex-1 flex-col items-center justify-center gap-1 text-center">
-                        <span className="text-[12px] leading-[18px] text-text-2">
-                            {t("convert-modals.curseforge-api", "CurseForge API Key 未配置")}
-                        </span>
-                        <span className="text-[11px] leading-[16px] text-text-3">
-                            {t("convert-modals.request-paste", "申请后填到「设置 · 网络 · CurseForge API Key」后即可")}
-                        </span>
-                        <Btn
-                            size="sm"
-                            icon={ExternalLink}
-                            className="mt-2"
-                            onClick={() => void api.openExternal(api.CURSEFORGE_APPLY_FORM)}
-                        >
-                            {t("convert-modals.get-key", "去申请 Key")}
-                        </Btn>
-                    </div>
                 ) : error ? (
                     <span className="py-8 text-center text-[11px] text-gold">
                         {t("convert-modals.load-failed", "加载失败 · {{error}}", { error: errOf(error) })}

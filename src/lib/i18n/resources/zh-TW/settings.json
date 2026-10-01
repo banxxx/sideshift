@@ -39,7 +39,6 @@
   "settings.failed-read-cache": "讀取快取佔用失敗：{{reason}}",
   "settings.failed-read-settings": "讀取設定失敗：{{reason}}",
   "settings.follows-system": "跟隨系統（當前：{{name}}）",
-  "settings.get": "獲取",
   "settings.install-loader": "本機安裝 Loader",
   "settings.junk-files": "無用檔案",
   "settings.language": "介面語言",
@@ -53,7 +52,6 @@
   "settings.online-side": "聯網反查端信息",
   "settings.parallel-downloads": "併發下載數",
   "settings.parts-partial": "半截下載 {{parts}} 個 · 殘留暫存 {{orphan}} 個 · 空殼目錄 {{empty}} 個",
-  "settings.paste-api": "粘貼 API Key",
   "settings.pinned-choice": "已按你的選擇固定，不再看本機版本號判檔",
   "settings.pinned-choice-longer": "已按你的選擇固定，不再隨系統語言變化",
   "settings.pinned-follows": "當前建置版本（{{channel}}）",
@@ -64,8 +62,6 @@
   "settings.reuse-installed": "複用已裝的 Loader",
   "settings.runs-forge": "Forge / NeoForge 轉換時在本機跑 installer，產物上傳即可開服（需本機 Java）",
   "settings.server-output": "伺服器端輸出目錄",
-  "settings.set-curseforge": "已配置：網路添加里的 CurseForge 搜尋與建置列表、端信息指紋反查可用",
-  "settings.set-use": "未配置：CurseForge API Key，點「獲取」填表申請",
   "settings.source-minekuai": "麥塊 API",
   "settings.storage-cache": "存儲與快取",
   "settings.strip-client": "剔除客戶端專屬資源",
@@ -83,5 +79,7 @@
   "settings.verify-after": "建置後自檢",
   "settings.where-finished": "轉換完成的整合包落位目錄",
   "settings.mcmod-lookup": "百科補全",
-  "settings.mcmod-lookup-desc": "平台各腿全答不上時，查 MC百科詞條的「運行環境」（非官方介面，預設關）"
+  "settings.mcmod-lookup-desc": "平台各腿全答不上時，查 MC百科詞條的「運行環境」（非官方介面，預設關）",
+  "settings.modrinth-mirror": "Modrinth 鏡像",
+  "settings.modrinth-mirror-desc": "Modrinth 查詢優先走 mcimirror 鏡像、官方自動兜底；CurseForge 資料始終經 mcimirror 獲取（無需 API Key）"
 }

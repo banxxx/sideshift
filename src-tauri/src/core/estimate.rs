@@ -87,7 +87,7 @@ pub async fn estimate(
         if let Some((i, f)) = matched {
             used.insert(i);
             // CF 那一档（清单只给编号）：字节不在包里，直链带时效、构建期才取 ⇒ 这行**一定**是联网项。
-            // 大小问补回来的元数据；没补到（没配 Key / 离线 / CF 没答）就是真不知道，记 incomplete，
+            // 大小问补回来的元数据；没补到（离线 / CF 没答）就是真不知道，记 incomplete，
             // 与上面 pinned 那条「url 恒空只用实测大小」同一口径。缓存按 URL 记账，这一档对不上号，
             // 所以宁可多算一遍也不扣（少扣会低估，多扣只是让用户白看一眼数字）
             if f.cf.is_some() {
