@@ -22,7 +22,7 @@ const RETRIES: u32 = 3;
 /// （几十 MB 的模组包合理，端判定反查不合理）：那一路一次只取几 KB，挂住一个请求
 /// 不该把整轮串行队列拖到分钟级，所以每个查询请求单独掐。
 /// 镜像候选链各试一次 ⇒ 一个 `get_json` 最坏两个 `METADATA_TIMEOUT`
-const METADATA_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+pub(crate) const METADATA_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
 
 /// 单次下载尝试的失败分类
 enum Attempt {

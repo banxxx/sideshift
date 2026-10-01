@@ -30,7 +30,7 @@ pub enum CfLink {
 }
 
 /// 端信息的证据来源（前端据此显示「依据什么判定」）。
-/// 可信度顺序见 `env::rank`：jar 自证 > 平台按构建 > 平台按项目 > 镜像项目 > 整合包声明 > 名称启发
+/// 可信度顺序见 `env::rank`：jar 自证 > 平台按构建 > 平台按项目 > 镜像项目 > 百科词条 > 整合包声明 > 名称启发
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, Default, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub enum EnvSource {
@@ -45,6 +45,9 @@ pub enum EnvSource {
     /// 国内镜像（麦块开放 API）的项目级声明：内容同 ModrinthProject，但它是第三方快照，
     /// 可能滞后 ⇒ 只排在官方项目层之下、打包者声明之上
     MirrorProject,
+    /// MC百科词条的「运行环境」：社区编辑整理的第二手声明，只在平台各腿全答不上时才问它一次
+    /// （见 `env::index::resolve_via_mcmod`）。名字严格同形才采信，所以它对错的是「有没有这条依据」
+    Mcmod,
     /// 模组名关键字表，仅兜底
     NameHeuristic,
     /// 无任何证据

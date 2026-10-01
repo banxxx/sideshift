@@ -28,6 +28,8 @@ export type EnvSource =
     | "modrinthProject"
     /** 国内镜像（麦块开放 API）的项目级声明：内容同上一条，但是第三方快照、可能滞后 */
     | "mirrorProject"
+    /** MC百科词条的「运行环境」：平台各腿全答不上时才问的补全源，社区编辑的第二手声明 */
+    | "mcmod"
     /** 模组名关键字表，纯兜底 */
     | "nameHeuristic"
     /** 无任何证据：默认保留 */

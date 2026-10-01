@@ -25,15 +25,19 @@ pub type EvidenceMap = HashMap<String, Evidence>;
 /// `environment` 是加载器运行时强制执行的，平台侧声明则由模组作者在自己项目上维护。
 /// 镜像档（`MirrorProject`）内容就是 Modrinth 的项目级声明，但它是第三方快照、可能滞后，
 /// 所以永远排在官方项目层之下：官方答上过的那一行，镜像结论压不动它。
+/// 百科档（`Mcmod`）是社区编辑按模组自述整理的词条字段：它专门回答「这一端要不要装」这一件事，
+/// 比打包者顺手抄的整表声明更有针对性，但同样是第二手、且跟着编辑的校对走 ⇒ 排在所有平台层之下、
+/// mrpack 声明之上。它只在平台各腿全答不上时才有机会出场（见 `index::resolve_via_mcmod`）。
 pub fn rank(s: EnvSource) -> u8 {
     match s {
         EnvSource::JarMetadata => 0,
         EnvSource::ModrinthHash => 1,
         EnvSource::ModrinthProject => 2,
         EnvSource::MirrorProject => 3,
-        EnvSource::Mrpack => 4,
-        EnvSource::NameHeuristic => 5,
-        EnvSource::Unknown => 6,
+        EnvSource::Mcmod => 4,
+        EnvSource::Mrpack => 5,
+        EnvSource::NameHeuristic => 6,
+        EnvSource::Unknown => 7,
     }
 }
 

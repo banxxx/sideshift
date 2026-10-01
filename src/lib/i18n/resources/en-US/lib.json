@@ -27,6 +27,7 @@
   "lib.install": "Install",
   "lib.installing": "Installing",
   "lib.jar-metadata": "Jar metadata",
+  "lib.mcmod-entry": "Wiki entry",
   "lib.minutes-seconds": "{{minutes}}m {{seconds}}s",
   "lib.mirror-project": "Mirror project",
   "lib.mod-files": "Mod files",

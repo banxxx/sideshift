@@ -393,6 +393,7 @@
   "lib.install": "安装",
   "lib.installing": "安装中",
   "lib.jar-metadata": "jar 自证",
+  "lib.mcmod-entry": "百科声明",
   "lib.minutes-seconds": "{{minutes}}分 {{seconds}}秒",
   "lib.mirror-project": "镜像项目",
   "lib.mod-files": "模组文件",

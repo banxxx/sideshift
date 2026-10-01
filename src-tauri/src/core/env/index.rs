@@ -8,7 +8,7 @@ use std::time::Duration;
 use futures::stream::{self, StreamExt};
 use serde::Deserialize;
 
-use crate::core::downloader::{Downloader, ModrinthEnv};
+use crate::core::downloader::{mcmod_confident, Downloader, McmodPage, ModrinthEnv};
 use crate::models::EnvSource;
 use super::evidence::{evidence_from_modrinth, put, Evidence, EvidenceMap};
 use super::ident::{is_slug, slugs_from_file_name};
@@ -155,6 +155,11 @@ const LOOKUP_CHUNK: usize = 32;
 const MIRROR_PROJECT_BUDGET: usize = 150;
 const MIRROR_SEARCH_BUDGET: usize = 150;
 
+/// 百科补全腿的行上限（每行最多两发：搜索页 + 词条页 ⇒ 最坏 48 个请求）。
+/// 排在平台各腿之后，只处理它们**一条都没答上**的行——那种行通常只剩十几行，
+/// 这个额度基本吃不满；吃不满是好事，顶到的是设计上限，不是故障。
+const MCMOD_ROW_BUDGET: usize = 24;
+
 /// 在线反查整轮的墙钟预算。命令层用它掐 `resolve_online`：单次请求已经有
 /// `downloader::client::METADATA_TIMEOUT` 各兜 10s，这一档管的是「一百多个请求各慢一点」
 /// 累出来的总账——到点就带着已拿到的部分结论收场，前端按「未全部完成」提示重新分类。
@@ -233,8 +238,10 @@ fn mirror_project_queue(
 
 /// 在线反查：**设置里选了哪个源就只问那个源**，不再「先镜像、答不上回落官方」——
 /// 那样两家的钱都付一遍，选了国内源反而比纯官方更慢（镜像 0.2s + 官方 2.2s 串在一行上）。
-/// `mirror=true` ⇒ 整条链只发 `api.minekuai.cn`（含 sha1 批量那条 Modrinth-only 接口也不发，
+/// `mirror=true` ⇒ 平台那条链只发 `api.minekuai.cn`（含 sha1 批量那条 Modrinth-only 接口也不发，
 /// 见 `resolve_via_mirror` 的代价说明）；`mirror=false` ⇒ 官方三条腿照旧，镜像连存活自查都不做。
+/// 两档末尾都挂着同一条百科补全腿（`resolve_via_mcmod`）：它不属于「平台源」，
+/// 只在前面所有层一条都没答上的行上发请求，问的是 `mcmod.cn`，失败也不改本函数的返回值。
 /// 结果同时写回 out 与索引，并且分批落盘。
 /// 返回 false = 有请求失败、超出请求上限，或被整轮预算掐掉（前端提示「联网反查未全部完成」）。
 pub async fn resolve_online(
@@ -406,11 +413,15 @@ pub async fn resolve_online(
         index.save(cache_dir);
     }
 
+    // 补全腿：官方三条腿下来仍无一条证据的行（`out` 里没键的那些）
+    resolve_via_mcmod(dl, index, cache_dir, targets, out).await;
+
     index.save(cache_dir);
     ok
 }
 
-/// 麦块档的整条联网链：**只发 `api.minekuai.cn`**，官方三条腿（sha1 批量 / 项目 / 搜索）一条都不碰。
+/// 麦块档的整条平台链：**只发 `api.minekuai.cn`**，官方三条腿（sha1 批量 / 项目 / 搜索）一条都不碰
+/// （末尾那条百科补全腿除外，它不是平台源）。
 ///
 /// 两条入口各发一发自检后才派腿（路径被改名时它回的是 200 + `{"code":404}`，只看状态码会被骗）。
 /// 这一档里镜像就是**用户选中的那个源**，不是加速件 ⇒ 自检验不过就等于这一轮没跑完（`ok=false`，
@@ -419,7 +430,8 @@ pub async fn resolve_online(
 /// **这一档拿不到的东西**（设置项的说明文案要对得上）：
 /// - 第 3 层「按 sha1 批量反查构建」（精确到这一个文件的 `environment`，rank 1）：它没有对应端点；
 /// - 权威 `project_id` 那条候选（URL 里带出的那个）：它只认 slug，`detail/u6dRKJwZ` 实测 404；
-/// - 不在收录的模组（抽样的 `coppered-equipment` 就 404）：这一轮没有第二个源可问，停在「未判定」。
+/// - 不在收录的模组（抽样的 `coppered-equipment` 就 404）：Modrinth 侧没有第二个源可问，
+///   只剩末尾那条百科补全腿（`resolve_via_mcmod`，问的是 `mcmod.cn`）；它也没答上才停在「未判定」。
 ///
 /// 落盘的结论一律标 `MirrorProject`（rank 3），阶梯与官方档同一条：已经在索引里的 jar/hash 级证据
 /// 不会因为换档被压掉（`put` 只认等档或更好档）。
@@ -548,8 +560,135 @@ async fn resolve_via_mirror(
         }
     }
 
+    // 补全腿：镜像两条腿下来仍无一条证据的行。它发的是 `mcmod.cn`，不是 Modrinth 官方，
+    // 所以「选了麦块就只问麦块」那条口径没被破——破的只是「这一档没第二个源可问」这句旧说明
+    resolve_via_mcmod(dl, index, cache_dir, targets, out).await;
+
     index.save(cache_dir);
     ok
+}
+
+/// 补全腿：平台各腿（官方三条 / 镜像两条）**全答不上**的那些行，才去 MC百科各问一次。
+/// 只在 `resolve_online` 与 `resolve_via_mirror` 的末尾调用，所以对已有证据的行零影响：
+/// 一行只要被 jar / 哈希 / 项目 / 镜像任何一层答过，`out` 里就有它的键，这一层连请求都不发。
+///
+/// **它的失败不改 `complete`**（返回 `()`，不进 `ok`）：这一层是补全，不是用户选中的那个源。
+/// 百科挂了或被拦了，平台那一轮照样算跑完；把「补充源没问到」演成「联网反查未全部完成」，
+/// 只会让人去点重新分类，而重跑一遍改不了任何结论。
+///
+/// 四种「问不到」分开走，混起来就是把「没有」记成「有」：
+/// - 搜不到词条 / 词条没写运行环境 / 只写了一端 ⇒ 没有依据，什么都不落；
+/// - 名字对不上 ⇒ 不采信（同名衍生分支与别的模组就在这一条上被挡掉）；
+/// - 200 + 那段跳首页的人机验证脚本 ⇒ 整条腿当场收队，剩下的行本轮不问（继续敲只会加深拦截）；
+/// - 请求本身失败 ⇒ 那一行本轮没结论，下一轮再问。
+///
+/// 采信要**两道同形**：搜索列表里那条的名字要对得上，词条页标题也得对得上（页面改版时
+/// 列表与详情页不会同时恰好糊成一个对得上的名字）。结论同时挂在这一行的 sha1 与全部项目候选下，
+/// 下次离线即答——与其余各层同一口径，也因此同样落在「索引不过期」那条遗留约束里。
+async fn resolve_via_mcmod(
+    dl: &Downloader,
+    index: &mut EnvIndex,
+    cache_dir: &Path,
+    targets: &[Target],
+    out: &mut EvidenceMap,
+) {
+    let rows: Vec<(usize, String)> = targets
+        .iter()
+        .enumerate()
+        .filter(|(_, t)| !out.contains_key(&t.path))
+        .filter_map(|(i, t)| {
+            let q = t
+                .title
+                .as_deref()
+                .or(t.slugs.first().map(|s| s.as_str()))
+                .map(str::trim)
+                .filter(|q| !q.is_empty())?;
+            Some((i, q.to_string()))
+        })
+        .collect();
+    // 一行两发、**整条腿串行**：这家对并发极不友好（实测两路并发时同一句查询会间歇性回
+    // 22KB 的空结果页，串行 8 轮 16 发全数正常），而空结果页与「真查无此模组」长得一模一样，
+    // 补问一轮也救不回来（实测仍会抖）。慢一点换的是结论稳定，值得
+    for (i, query) in &rows[..rows.len().min(MCMOD_ROW_BUDGET)] {
+        let (got, blocked) = mcmod_ask(dl, &targets[*i], query).await;
+        if let Some((keys, ev)) = got {
+            store_mcmod(index, out, targets, *i, &keys, ev);
+            index.save(cache_dir);
+        }
+        if blocked {
+            return;
+        }
+    }
+}
+
+/// 一行的百科问答：搜索页找名字对得上的词条，再进词条页取「运行环境」。
+/// 返回 `(结论, 被拦)`；`被拦` 只有那一段跳首页的人机验证脚本会置，作用是让上面那条腿当场收队。
+///
+/// **两条反直觉的口径，改之前先读**：
+/// - 别给这条链挂浏览器 User-Agent：实测同一个 `key=sodium`，我们的默认 UA 回带 30 条结果的页面，
+///   而 Chrome UA 回 20KB 的空结果页（两边都是 200）。换 UA 不会绕过拦截，只会把每一行都变成「查无」；
+/// - 词条页缺 `<title>`（解析不出）时放过第二道闸：列表那条已经对上了，详情页没标题只是改版，
+///   不构成「这是另一个模组」的证据
+async fn mcmod_ask(
+    dl: &Downloader,
+    t: &Target,
+    query: &str,
+) -> (Option<(Vec<String>, Evidence)>, bool) {
+    // 比对用的候选：显示名在前、文件名切出的 slug 在后（与官方那条同一份名单）
+    let cands: Vec<String> = t.title.iter().chain(t.slugs.iter()).cloned().collect();
+    let hits = match dl.mcmod_search(query).await {
+        Ok(McmodPage::Answered(h)) => h,
+        Ok(McmodPage::Blocked) => return (None, true),
+        // 空结果页与「真查无此模组」同形，本轮就当没有依据：补问救不回来（见上面那条腿）
+        Ok(McmodPage::Absent) => return (None, false),
+        Err(_) => return (None, false),
+    };
+    let Some(hit) = hits.iter().find(|h| mcmod_confident(&cands, &h.name)) else {
+        // 搜到了别的模组：不采信，也不算故障
+        return (None, false);
+    };
+    let entry = match dl.mcmod_entry(&hit.id).await {
+        Ok(McmodPage::Answered(e)) => e,
+        Ok(McmodPage::Blocked) => return (None, true),
+        _ => return (None, false),
+    };
+    // 第二道同形闸
+    if !entry.name.is_empty() && !mcmod_confident(&cands, &entry.name) {
+        return (None, false);
+    }
+    let (Some(c), Some(s)) = (entry.client, entry.server) else {
+        return (None, false);
+    };
+    (
+        Some((
+            cands,
+            Evidence {
+                client: Some(c),
+                server: Some(s),
+                source: EnvSource::Mcmod,
+            },
+        )),
+        false,
+    )
+}
+
+/// 百科结论落进证据表与本地索引：这一行的 sha1 与全部项目候选都挂同一条结论，下次离线即答
+fn store_mcmod(
+    index: &mut EnvIndex,
+    out: &mut EvidenceMap,
+    targets: &[Target],
+    i: usize,
+    keys: &[String],
+    ev: Evidence,
+) {
+    let t = &targets[i];
+    put(out, &t.path, ev);
+    if let Some(h) = &t.sha1 {
+        index.record(sha1_key(h), ev);
+    }
+    for k in keys {
+        index.record(project_key(k), ev);
+    }
 }
 
 /// 单个本地 jar 的端取证阶梯（用户手动添加的行走这条路），口径与整包分类完全一致：
@@ -825,6 +964,76 @@ mod tests {
         assert!(
             !out.contains_key("mods/zz-not-a-real-mod.jar"),
             "查无此模组必须留空待人工，绝不拿名字猜一个"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+
+    /// 百科补全腿的真联网用例（本轮起因就是这枚：FTB 任务在两家平台都没端声明）。
+    /// 三条判据：① 平台没答上的行由百科答上、来源标 `Mcmod`；② 词条没收录的行留空；
+    /// ③ 已有证据的行不该被这条腿改写（`resolve_via_mcmod` 压根不为它发请求）
+    #[tokio::test]
+    #[ignore = "真联网：百科搜索页 + 词条页各发一发"]
+    async fn mcmod_leg_answers_rows_the_platform_left_empty() {
+        let dir = std::env::temp_dir().join(format!("sideshift-env-mcmod-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let _ = std::fs::remove_file(dir.join(INDEX_FILE));
+        let targets = vec![
+            Target {
+                path: "mods/ftb-quests-forge.jar".into(),
+                sha1: None,
+                project_id: None,
+                slugs: vec!["ftbquests".into()],
+                title: Some("FTB Quests".into()),
+            },
+            Target {
+                path: "mods/zz-not-a-real-mod.jar".into(),
+                sha1: None,
+                project_id: None,
+                slugs: vec!["zz-not-a-real-mod".into()],
+                title: None,
+            },
+            Target {
+                path: "mods/sodium.jar".into(),
+                sha1: None,
+                project_id: None,
+                slugs: vec!["sodium".into()],
+                title: Some("Sodium".into()),
+            },
+        ];
+        let mut out: EvidenceMap = [(
+            "mods/sodium.jar".to_string(),
+            Evidence {
+                client: Some(SideFlag::Required),
+                server: None,
+                source: EnvSource::JarMetadata,
+            },
+        )]
+        .into_iter()
+        .collect();
+        let mut index = EnvIndex::load(&dir);
+        let dl = Downloader::new(dir.clone(), 4);
+        resolve_via_mcmod(&dl, &mut index, &dir, &targets, &mut out).await;
+
+        assert_eq!(
+            out.get("mods/ftb-quests-forge.jar").map(|e| e.source),
+            Some(EnvSource::Mcmod),
+            "词条在册却没答上 ⇒ 名字闸太严或解析没跟上页面"
+        );
+        assert_eq!(
+            out.get("mods/ftb-quests-forge.jar")
+                .and_then(|e| e.server),
+            Some(SideFlag::Required),
+            "实测词条 1423 写的是「客户端需装, 服务端需装」"
+        );
+        assert!(
+            !out.contains_key("mods/zz-not-a-real-mod.jar"),
+            "查无此词条必须留空，绝不拿相近名字凑一条依据"
+        );
+        assert_eq!(
+            out.get("mods/sodium.jar").map(|e| e.source),
+            Some(EnvSource::JarMetadata),
+            "jar 自证的行不该被补全腿压掉"
         );
         let _ = std::fs::remove_dir_all(&dir);
     }

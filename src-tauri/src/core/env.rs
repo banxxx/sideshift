@@ -1,6 +1,7 @@
 //! 端判定证据采集：取证一个模组「服务端要不要」，按可信度阶梯（jar 自证 > 平台构建反查 >
-//! 平台项目声明 > mrpack files[].env > 名称启发兜底），不含裁决规则（裁决在 detector）。
+//! 平台项目声明 > 镜像项目声明 > 百科词条 > 整合包 files[].env > 名称启发兜底），不含裁决规则（裁决在 detector）。
 //! - 第 3/4 层是网络查询，结果落 `cache_dir/env-index.json`，同一模组第二次见到即离线可答。
+//! - 百科那一层是补全：只在平台各腿全答不上的行上发请求，两个平台源都跑它（见 `index::resolve_via_mcmod`）。
 //! - Forge / NeoForge 元数据没有自证端字段，jar 自证与构建反查只覆盖 Fabric / Quilt；
 //!   字节码结构提示（`read_code_facts`）只用来按住名称关键字层的误删，不参与剔除。
 //! - 模块根（barrel）：`evidence`·`jar`·`code`·`index`·`ident` 五块，对外用 `crate::core::env::X`。
