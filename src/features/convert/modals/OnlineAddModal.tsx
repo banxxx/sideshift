@@ -1,6 +1,6 @@
 /* ================= 网络添加弹窗（800×464，St8m8 + 详情 wphzw） ================= */
 import { ChevronLeft, ChevronRight, Puzzle } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import * as api from "@/lib/api";
 import { formatSize, loaderLabel, modcatLabel } from "@/lib/format";
 import { activeLocale, useT } from "@/lib/i18n";
@@ -88,6 +88,14 @@ export function OnlineAddModal({
         results: [],
     });
     /**
+     * 会话级两张表：一次打开之内问过的构建列表 / 前置详情不再问第二次（返回上一本、反复点同一枚
+     * 前置都会重敲同一发）。命中窗口压在「这一次打开」里 ⇒ 不需要任何过期规矩：作者刚上传的新构建
+     * 下次打开就能看见，也不会有「旧答案永久钉住」那一档。空列表不记（空往往是解析没对上，
+     * 不是那边真没有），失败更不记
+     */
+    const verCache = useRef(new Map<string, ModVersionEntry[]>());
+    const detailCache = useRef(new Map<string, ModSearchResult>());
+    /**
      * 初值 true：弹窗壳常驻挂载，首帧时列表还是空的。空 = 「没搜到」还是「没搜过」，
      * 光看 `result` 分不出来，所以由这里显式记着「第一次请求还没落地」，
      * 否则打开瞬间会先闪一帧「无匹配结果 · 共 0 个结果」。
@@ -106,6 +114,8 @@ export function OnlineAddModal({
         setVerSel(mcVersion);
         setLoSel(loader);
         setCatSel("all");
+        verCache.current.clear();
+        detailCache.current.clear();
         // 上一次搜索的结果不能在外壳重新挂起的那一帧里露底：先回到「请求中」
         setLoading(true);
     }, [open, mcVersion, loader]);
@@ -167,9 +177,20 @@ export function OnlineAddModal({
         setZh(null);
         setZhOn(false);
         setZhLoading(false);
+        const key = `${mod.source}:${mod.id}`;
+        const hit = verCache.current.get(key);
+        if (hit) {
+            // 命中就不进「载入中」：那一帧骨架屏比请求本身还慢，看着像又转了一次
+            setVersionsLoading(false);
+            setVersions(hit);
+            return;
+        }
         void api
             .listModVersions(mod.source, mod.id)
-            .then(setVersions)
+            .then((list) => {
+                if (list.length > 0) verCache.current.set(key, list);
+                setVersions(list);
+            })
             .catch((e: unknown) => setVersionsError(e instanceof Error ? e.message : String(e)))
             .finally(() => setVersionsLoading(false));
     };
@@ -196,6 +217,13 @@ export function OnlineAddModal({
     const openDependency = (dep: ModDependency) => {
         if (!detail) return;
         const src = detail.source;
+        const key = `${src}:${dep.id}`;
+        const hit = detailCache.current.get(key);
+        if (hit) {
+            // 详情补齐过就不再压一份半份进去：那会在栈上多出一帧「简介/作者是空的」
+            openDetail(hit);
+            return;
+        }
         openDetail({
             id: dep.id,
             slug: dep.slug,
@@ -212,6 +240,7 @@ export function OnlineAddModal({
         void api
             .modDetail(src, dep.id)
             .then((full) => {
+                detailCache.current.set(key, full);
                 setDetailStack((s) => {
                     const top = s[s.length - 1];
                     if (!top || top.id !== dep.id || top.source !== src) return s;

@@ -28,6 +28,39 @@ pub(crate) const METADATA_TIMEOUT: std::time::Duration = std::time::Duration::fr
 /// 再长就把「加载失败」的等待拉到 20s 以上了
 const FLAKY_BACKOFF: std::time::Duration = std::time::Duration::from_millis(400);
 
+/// 进程级「一张表只问一次」：类别词表与 MC 版本清单这类几乎不变的东西，每次开弹窗都重敲一发不值。
+/// 代价说清楚：新版本/新类别在这次进程存活期间不会出现在下拉里，重启才更新。
+/// 下面两条规矩是它能常驻内存的前提——
+/// - **只记成功**：坏答案没有第二次机会去纠正它（没有 TTL、没有刷新出口，重启才清）；
+/// - **空表不算答案**：一份空清单往往意味着那边改了字段或镜像给了个读不懂的东西，
+///   而不是「真的一个类别都没有」，记下去就等于把整张下拉永久钉成空。
+pub(crate) struct OnceTable<T>(std::sync::OnceLock<std::sync::Mutex<Option<Vec<T>>>>);
+
+impl<T: Clone> OnceTable<T> {
+    pub(crate) const fn new() -> Self {
+        Self(std::sync::OnceLock::new())
+    }
+
+    /// 命中即回；没记过才发 `f`，成功且非空才记账
+    pub(crate) async fn memo<F, Fut>(&'static self, f: F) -> Result<Vec<T>, DownloadError>
+    where
+        F: FnOnce() -> Fut,
+        Fut: std::future::Future<Output = Result<Vec<T>, DownloadError>>,
+    {
+        let slot = self.0.get_or_init(Default::default);
+        // 取完就撒手：守卫跨 `.await` 挂着会让整条命令的 future 不 Send
+        let hit = slot.lock().unwrap().clone();
+        if let Some(v) = hit {
+            return Ok(v);
+        }
+        let got = f().await?;
+        if !got.is_empty() {
+            *slot.lock().unwrap() = Some(got.clone());
+        }
+        Ok(got)
+    }
+}
+
 /// 单次下载尝试的失败分类
 enum Attempt {
     /// 换个时间再试可能成功（连接重置、429/5xx）：退避后重试
@@ -863,6 +896,42 @@ mod tests {
         }
         assert_eq!(leftovers, 0, "临时文件必须清干净");
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// `OnceTable` 的三条规矩：记过一次就不再发（省请求是它存在的全部理由），而**空表与失败都不记账**
+    /// ——它没有 TTL、没有刷新出口，坏答案一旦被钉住就得重启才解得开
+    #[tokio::test]
+    async fn once_table_caches_only_a_usable_answer() {
+        static FILLED: OnceTable<String> = OnceTable::new();
+        static BLANK: OnceTable<String> = OnceTable::new();
+        static BROKEN: OnceTable<String> = OnceTable::new();
+        use std::sync::atomic::{AtomicUsize, Ordering::SeqCst};
+        let asked = |n: &'static AtomicUsize| {
+            n.fetch_add(1, SeqCst);
+            async { Ok(vec!["a".to_string()]) }
+        };
+        static HITS: AtomicUsize = AtomicUsize::new(0);
+        assert_eq!(FILLED.memo(|| asked(&HITS)).await.unwrap().len(), 1);
+        assert_eq!(FILLED.memo(|| asked(&HITS)).await.unwrap().len(), 1);
+        assert_eq!(HITS.load(SeqCst), 1, "第二次该直接拿表里的，不该再发");
+
+        static BLANK_HITS: AtomicUsize = AtomicUsize::new(0);
+        let blank = || {
+            BLANK_HITS.fetch_add(1, SeqCst);
+            async { Ok(Vec::new()) }
+        };
+        assert!(BLANK.memo(blank).await.unwrap().is_empty());
+        assert!(BLANK.memo(blank).await.unwrap().is_empty());
+        assert_eq!(BLANK_HITS.load(SeqCst), 2, "空表不是答案，别把它永久钉住");
+
+        static BROKEN_HITS: AtomicUsize = AtomicUsize::new(0);
+        let broken = || {
+            BROKEN_HITS.fetch_add(1, SeqCst);
+            async { Err(DownloadError::NotFound("x".to_string())) }
+        };
+        assert!(BROKEN.memo(broken).await.is_err());
+        assert!(BROKEN.memo(broken).await.is_err());
+        assert_eq!(BROKEN_HITS.load(SeqCst), 2, "失败的那一次不算答过");
     }
 
     /// 抖动判据的守门人：`worth_retry` 决定「同一条源再敲一次」还是「换源/认了」，

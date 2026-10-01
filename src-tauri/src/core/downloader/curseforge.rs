@@ -15,7 +15,7 @@ use crate::models::{
     CfLink, LoaderKind, ModDepends, ModSearchPage, ModSearchQuery, ModSearchResult, ModSource,
     ModVersionEntry, SideFlag,
 };
-use super::client::Downloader;
+use super::client::{Downloader, OnceTable};
 use super::types::DownloadError;
 use super::util::urlencoding;
 
@@ -284,24 +284,29 @@ impl Downloader {
     /// CF 的类别表（**免 Key**）：模组向 `(号, 名字)`，按名字排序去重。
     /// 下拉给用户看名字、搜索接口只认 `categoryIds` 号，所以这一张表同时喂两处
     async fn cf_categories(&self) -> Result<Vec<(u64, String)>, DownloadError> {
-        let url = format!("{CURSEFORGE_API}/categories?gameId={MC_GAME_ID}");
-        let v = self.get_json(&url).await?;
-        let mut out: Vec<(u64, String)> = v["data"]
-            .as_array()
-            .map(|a| {
-                a.iter()
-                    .filter(|c| c["classId"].as_i64() == Some(CLASS_MODS as i64))
-                    .filter_map(|c| {
-                        let id = num(&c["id"]);
-                        let name = c["name"].as_str()?.trim().to_string();
-                        (id > 0 && !name.is_empty()).then_some((id, name))
+        static CF_CATEGORIES: OnceTable<(u64, String)> = OnceTable::new();
+        CF_CATEGORIES
+            .memo(|| async move {
+                let url = format!("{CURSEFORGE_API}/categories?gameId={MC_GAME_ID}");
+                let v = self.get_json(&url).await?;
+                let mut out: Vec<(u64, String)> = v["data"]
+                    .as_array()
+                    .map(|a| {
+                        a.iter()
+                            .filter(|c| c["classId"].as_i64() == Some(CLASS_MODS as i64))
+                            .filter_map(|c| {
+                                let id = num(&c["id"]);
+                                let name = c["name"].as_str()?.trim().to_string();
+                                (id > 0 && !name.is_empty()).then_some((id, name))
+                            })
+                            .collect()
                     })
-                    .collect()
+                    .unwrap_or_default();
+                out.sort_by(|a, b| a.1.cmp(&b.1));
+                out.dedup_by(|a, b| a.1 == b.1);
+                Ok(out)
             })
-            .unwrap_or_default();
-        out.sort_by(|a, b| a.1.cmp(&b.1));
-        out.dedup_by(|a, b| a.1 == b.1);
-        Ok(out)
+            .await
     }
 
     /// 「类别」下拉的选项（名字）；`search_curseforge` 再把选中的名字换回号

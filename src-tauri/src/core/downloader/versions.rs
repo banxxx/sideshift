@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 
 use crate::core::mc_version;
 use crate::models::{LoaderKind, VersionOption};
-use super::client::Downloader;
+use super::client::{Downloader, OnceTable};
 use super::types::{DownloadError, Fetch, ItemSpec};
 use super::util::version_cmp;
 
@@ -23,33 +23,40 @@ const NEOFORGE_VERSIONS: &str =
 /// 存的是不可变事实——某个 MC 版本要哪档 Java 永远不会改 ⇒ 命中即用，不设 TTL。
 const JAVA_INDEX_FILE: &str = "java-index.json";
 
+/// MC 版本清单：piston-meta 一次全量返回，内容周级才动 ⇒ 进程内问一次就够（规矩见 `OnceTable`）
+static MC_VERSIONS: OnceTable<VersionOption> = OnceTable::new();
+
 impl Downloader {
     /// 全量版本清单（接口本就一次返回，不截断，前端搜索即全量过滤）。
     /// 收 正式版 + Beta + Alpha 以兼容老整合包；快照（400+ 条）不进选择器。
     pub async fn list_mc_versions(&self) -> Result<Vec<VersionOption>, DownloadError> {
-        let v = self.get_json(PISTON_MANIFEST).await?;
-        let mut out = Vec::new();
-        if let Some(arr) = v["versions"].as_array() {
-            for e in arr {
-                let group = match e["type"].as_str() {
-                    Some("release") => "正式版",
-                    Some("old_beta") => "Beta",
-                    Some("old_alpha") => "Alpha",
-                    _ => continue,
-                };
-                let id = e["id"].as_str().unwrap_or_default().to_string();
-                out.push(VersionOption {
-                    recommended: None,
-                    group: Some(group.into()),
-                    label: id.clone(),
-                    value: id,
-                });
-            }
-        }
-        if let Some(first) = out.first_mut() {
-            first.recommended = Some(true);
-        }
-        Ok(out)
+        MC_VERSIONS
+            .memo(|| async move {
+                let v = self.get_json(PISTON_MANIFEST).await?;
+                let mut out = Vec::new();
+                if let Some(arr) = v["versions"].as_array() {
+                    for e in arr {
+                        let group = match e["type"].as_str() {
+                            Some("release") => "正式版",
+                            Some("old_beta") => "Beta",
+                            Some("old_alpha") => "Alpha",
+                            _ => continue,
+                        };
+                        let id = e["id"].as_str().unwrap_or_default().to_string();
+                        out.push(VersionOption {
+                            recommended: None,
+                            group: Some(group.into()),
+                            label: id.clone(),
+                            value: id,
+                        });
+                    }
+                }
+                if let Some(first) = out.first_mut() {
+                    first.recommended = Some(true);
+                }
+                Ok(out)
+            })
+            .await
     }
 
     /// 某个 MC 版本要求的 Java 主版本 —— 拿**官方权威字段** `javaVersion.majorVersion`

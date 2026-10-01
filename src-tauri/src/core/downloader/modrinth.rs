@@ -7,7 +7,7 @@ use serde_json::Value;
 
 use crate::core::mcmod_names;
 use crate::models::{LoaderKind, ModDepends, ModSearchPage, ModSearchQuery, ModSearchResult, ModSource, ModVersionEntry, SideFlag};
-use super::client::Downloader;
+use super::client::{Downloader, OnceTable};
 use super::types::{DownloadError, Fetch, ItemSpec};
 use super::util::{loader_cat, urlencoding};
 
@@ -449,26 +449,31 @@ impl Downloader {
 
     /// 类别标签（Modrinth 走 GET /tag/category，CF 走免 Key 的 /categories），供「类别」下拉
     pub async fn list_mod_categories(&self, source: ModSource) -> Result<Vec<String>, DownloadError> {
+        static MODRINTH_CATEGORIES: OnceTable<String> = OnceTable::new();
         if source == ModSource::Curseforge {
             return self.list_curseforge_categories().await;
         }
-        let v = self.get_json(&format!("{MODRINTH_API}/tag/category")).await?;
-        let mut out: Vec<String> = Vec::new();
-        if let Some(arr) = v.as_array() {
-            for e in arr {
-                let pt = e["project_type"].as_str().unwrap_or("");
-                if pt != "mod" && pt != "all" {
-                    continue;
-                }
-                if let Some(n) = e["name"].as_str() {
-                    if !out.iter().any(|x| x == n) {
-                        out.push(n.to_string());
+        MODRINTH_CATEGORIES
+            .memo(|| async move {
+                let v = self.get_json(&format!("{MODRINTH_API}/tag/category")).await?;
+                let mut out: Vec<String> = Vec::new();
+                if let Some(arr) = v.as_array() {
+                    for e in arr {
+                        let pt = e["project_type"].as_str().unwrap_or("");
+                        if pt != "mod" && pt != "all" {
+                            continue;
+                        }
+                        if let Some(n) = e["name"].as_str() {
+                            if !out.iter().any(|x| x == n) {
+                                out.push(n.to_string());
+                            }
+                        }
                     }
                 }
-            }
-        }
-        out.sort();
-        Ok(out)
+                out.sort();
+                Ok(out)
+            })
+            .await
     }
 
     /// 解析某模组在 (mc, loader) 下最新 release 构建的下载地址
