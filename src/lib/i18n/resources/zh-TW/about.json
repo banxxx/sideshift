@@ -30,6 +30,7 @@
   "about.tp-loaders": "模組載入器生態，轉換方案判定所依據的公開規範",
   "about.tp-meta": "模組與版本元資料來源",
   "about.tp-mirror": "可選的下載與元資料鏡像加速服務",
+  "about.tp-modnames": "模組中文名的離線詞典",
   "about.tp-public-api": "公開 API",
   "about.tp-self": "本專案自身的發佈協議"
 }

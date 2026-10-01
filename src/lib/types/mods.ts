@@ -28,6 +28,10 @@ export interface ModSearchResult {
      *  「翻译」按钮要的那条 `detail/{slug}` 只认它，缺了就没有这枚钮 */
     slug?: string;
     name: string;
+    /** 内置词典（MC百科词条名）按 slug 反查出的中文显示名，Rust 离线给出、零请求；
+     *  没收录就缺省。只有简体中文档拿它盖过 `name`，`name` 始终是平台原名
+     *  （方案与任务存档写的是那个原名） */
+    nameZh?: string;
     /** 一句话简介 */
     description: string;
     author: string;
@@ -71,6 +75,8 @@ export interface ModSearchQuery {
 export interface ModDependency {
     id: string;
     name?: string;
+    /** 内置词典（MC百科词条名）按 slug 反查的中文显示名，与 `ModSearchResult.nameZh` 同口径 */
+    nameZh?: string;
     slug?: string;
     /** required 必装 / optional 可选（incompatible / embedded 不会出现在表里） */
     required: boolean;

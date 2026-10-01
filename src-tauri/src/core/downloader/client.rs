@@ -12,6 +12,7 @@ use super::offline::{self, CopyJob, OfflineJob, COPY_CHUNK};
 use super::source;
 use super::types::{
     DownloadError, Fetch, FetchSource, ItemOutcome, ItemSpec, OnDone, OnTransfer, TransferProgress,
+    net_err, worth_retry,
 };
 use super::util::{cache_path_for, mark_used, verify_cache_for, PART_MARKER};
 use crate::models::DownloadSource;
@@ -23,6 +24,9 @@ const RETRIES: u32 = 3;
 /// 不该把整轮串行队列拖到分钟级，所以每个查询请求单独掐。
 /// 镜像候选链各试一次 ⇒ 一个 `get_json` 最坏两个 `METADATA_TIMEOUT`
 pub(crate) const METADATA_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+/// 同一条源上重试前的间隔：镜像那种抖动是「上游此刻不通」，几百毫秒后再敲一次就能换到活的上游；
+/// 再长就把「加载失败」的等待拉到 20s 以上了
+const FLAKY_BACKOFF: std::time::Duration = std::time::Duration::from_millis(400);
 
 /// 单次下载尝试的失败分类
 enum Attempt {
@@ -66,6 +70,11 @@ pub struct Downloader {
 
 impl Downloader {
     pub fn new(cache_dir: PathBuf, concurrency: usize) -> Self {
+        // 压缩解码由 Cargo.toml 的 gzip/brotli feature 打开（reqwest 会自动带 `Accept-Encoding`，
+        // 且只在请求自己没有这一行时补）。不是锦上添花：2026-10-01 实测 mcimirror 对未压缩回包限速
+        // 约 32 KB/s —— CF 搜索 264 KB 走 8.2s、534 KB 走 17.2s，两条都在 `METADATA_TIMEOUT` 之外，
+        // 而带编码后是 29–48 KB / 0.2–1.2s。文件的 CDN 不受影响（实测对 `.jar` 忽略 `Accept-Encoding`，
+        // 照回 Content-Length），所以流式进度与 sha1 口径都不变
         let client = Client::builder()
             .user_agent(USER_AGENT)
             .timeout(std::time::Duration::from_secs(120))
@@ -527,10 +536,7 @@ impl Downloader {
             .timeout(METADATA_TIMEOUT)
             .send()
             .await
-            .map_err(|e| DownloadError::Http {
-                url: url.to_string(),
-                status: e.status().map(|s| s.as_u16()).unwrap_or(0),
-            })?;
+            .map_err(|e| net_err(url, &e))?;
         let status = resp.status();
         if !status.is_success() {
             return Err(DownloadError::Http {
@@ -538,72 +544,78 @@ impl Downloader {
                 status: status.as_u16(),
             });
         }
-        let bytes = resp
-            .bytes()
-            .await
-            .map_err(|e| DownloadError::Http {
-                url: url.to_string(),
-                status: e.status().map(|s| s.as_u16()).unwrap_or(0),
-            })?;
+        let bytes = resp.bytes().await.map_err(|e| net_err(url, &e))?;
         Ok(bytes.to_vec())
     }
 
     /// 读一个 JSON 文档：按下载源的候选链试（镜像在前、官方在后）。
     /// 解析失败也换源——镜像未同步时常给 200 + 错误页，只有官方那次的结果才算数。
+    ///
+    /// 抖动类失败（超时/没接上/源自己的 5xx）在**同一条候选上再敲一次**（`worth_retry`）：
+    /// CurseForge 的候选链只有 mcimirror 一条，那一次重试就是它唯一的路——镜像的上游是官方站，
+    /// 隔一段时间会回 502 或干脆挂住，实测同一枚 mod id 连敲两次 502、几分钟后又全程 200，
+    /// 所以「一次敲不通」根本不能当结论。最坏多等一个 `METADATA_TIMEOUT`
     pub(crate) async fn get_json(&self, url: &str) -> Result<Value, DownloadError> {
         let mut last_err = DownloadError::NotFound(url.to_string());
         for cand in source::candidates(url, self.source, self.mod_mirror) {
-            match self.fetch_bytes(&cand).await.and_then(|b| {
-                serde_json::from_slice(&b).map_err(DownloadError::from)
-            }) {
-                Ok(v) => return Ok(v),
-                Err(e) => last_err = e,
+            for attempt in 0..2 {
+                let got = self
+                    .fetch_bytes(&cand)
+                    .await
+                    .and_then(|b| serde_json::from_slice(&b).map_err(DownloadError::from));
+                match got {
+                    Ok(v) => return Ok(v),
+                    Err(e) => {
+                        last_err = e;
+                        if attempt == 1 || !worth_retry(&last_err) {
+                            break;
+                        }
+                        tokio::time::sleep(FLAKY_BACKOFF).await;
+                    }
+                }
             }
         }
         Err(last_err)
     }
 
-    /// 读一个 JSON 值（POST 版本：`get_json` 只能取）。与 `get_json` 同一条候选链——
-    /// Modrinth 的 sha1 批量反查、CF 的指纹/批量取工程都是 POST，镜像优先在这里生效
+    /// 读一个 JSON 值（POST 版本：`get_json` 只能取）。与 `get_json` 同一条候选链、
+    /// 同一套抖动重试——Modrinth 的 sha1 批量反查、CF 的指纹/批量取工程都是 POST，镜像优先在这里生效
     pub(crate) async fn post_json(&self, url: &str, body: &Value) -> Result<Value, DownloadError> {
         let mut last_err = DownloadError::NotFound(url.to_string());
         for cand in source::candidates(url, self.source, self.mod_mirror) {
-            let resp = self
-                .client
-                .post(&cand)
-                .timeout(METADATA_TIMEOUT)
-                .json(body)
-                .send()
+            for attempt in 0..2 {
+                let got: Result<Value, DownloadError> = async {
+                    let resp = self
+                        .client
+                        .post(&cand)
+                        .timeout(METADATA_TIMEOUT)
+                        .json(body)
+                        .send()
+                        .await
+                        .map_err(|e| net_err(&cand, &e))?;
+                    let status = resp.status();
+                    if !status.is_success() {
+                        return Err(DownloadError::Http {
+                            url: cand.clone(),
+                            status: status.as_u16(),
+                        });
+                    }
+                    // 非 2xx 的响应体通常不是 JSON；这里不额外判状态码，读不懂就换源
+                    let bytes = resp.bytes().await.map_err(|e| net_err(&cand, &e))?;
+                    serde_json::from_slice::<Value>(&bytes).map_err(DownloadError::from)
+                }
                 .await;
-            let resp = match resp {
-                Ok(r) => r,
-                Err(e) => {
-                    last_err = DownloadError::Http {
-                        url: cand,
-                        status: e.status().map(|s| s.as_u16()).unwrap_or(0),
-                    };
-                    continue;
-                }
-            };
-            let status = resp.status();
-            let bytes = resp.bytes().await;
-            let bytes = match bytes {
-                Ok(b) => b,
-                Err(e) => {
-                    last_err = DownloadError::Http {
-                        url: cand,
-                        status: e.status().map(|s| s.as_u16()).unwrap_or(0),
-                    };
-                    continue;
-                }
-            };
-            match serde_json::from_slice::<Value>(&bytes) {
-                Ok(v) => return Ok(v),
-                Err(e) => {
-                    last_err = DownloadError::from(e);
+                match got {
+                    Ok(v) => return Ok(v),
+                    Err(e) => {
+                        last_err = e;
+                        if attempt == 1 || !worth_retry(&last_err) {
+                            break;
+                        }
+                        tokio::time::sleep(FLAKY_BACKOFF).await;
+                    }
                 }
             }
-            let _ = status; // 非 2xx 的响应体通常不是 JSON，解析失败自然落进上一格
         }
         Err(last_err)
     }
@@ -851,5 +863,96 @@ mod tests {
         }
         assert_eq!(leftovers, 0, "临时文件必须清干净");
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 抖动判据的守门人：`worth_retry` 决定「同一条源再敲一次」还是「换源/认了」，
+    /// 分错一格就会让真断网多等一整趟、或让镜像的一次 502 直接落进界面
+    #[test]
+    fn only_flaky_failures_get_retried_on_the_same_source() {
+        let at = |status: u16| DownloadError::Http {
+            url: "https://mod.mcimirror.top/curseforge/v1/mods/306612".to_string(),
+            status,
+        };
+        // 超时、根本没接上、源自己的 5xx ⇒ 再敲一次
+        assert!(worth_retry(&DownloadError::Timeout {
+            url: "https://mod.mcimirror.top/x".to_string()
+        }));
+        assert!(worth_retry(&at(0)));
+        assert!(worth_retry(&at(502)));
+        // 4xx 与读不懂：再敲一次拿到的还是同一个答案，白等
+        assert!(!worth_retry(&at(403)));
+        assert!(!worth_retry(&at(404)));
+        assert!(!worth_retry(&at(429)));
+        assert!(!worth_retry(&DownloadError::Api(
+            serde_json::from_str::<serde_json::Value>("<html>oops").unwrap_err()
+        )));
+        // 本地/包内读失败与「没这条路」都不是网络的事
+        assert!(!worth_retry(&DownloadError::NotFound(
+            "https://api.curseforge.com/v1/x".to_string()
+        )));
+    }
+
+    /// 压缩那条 feature 的看门人：Cargo.toml 里摘掉 gzip/brotli，这两件事当场不成立——
+    /// 请求不带 `Accept-Encoding`（于是镜像按未压缩限速回，慢到超时），且 gzip 回包解不开
+    #[tokio::test]
+    async fn json_responses_are_transparently_decompressed() {
+        use std::io::{Read, Write};
+
+        let payload = br#"{"data":[{"id":301445,"name":"Refined Storage"}]}"#;
+        let mut enc = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
+        enc.write_all(payload).unwrap();
+        let gz = enc.finish().unwrap();
+
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let srv = tokio::task::spawn_blocking(move || {
+            let (mut sock, _) = listener.accept().unwrap();
+            let mut buf = [0u8; 4096];
+            let n = sock.read(&mut buf).unwrap();
+            let head = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Encoding: gzip\r\n\
+                 Content-Length: {}\r\nConnection: close\r\n\r\n",
+                gz.len()
+            );
+            let _ = sock.write_all(head.as_bytes());
+            let _ = sock.write_all(&gz);
+            let _ = sock.flush();
+            String::from_utf8_lossy(&buf[..n]).to_lowercase()
+        });
+
+        let dir = std::env::temp_dir().join(format!("sideshift-gz-{}", uuid::Uuid::new_v4()));
+        let dl = Downloader::new(dir.join("out"), 1);
+        let v = dl
+            .get_json(&format!("http://{addr}/search"))
+            .await
+            .expect("gzip 回包没解开");
+        let req = srv.await.unwrap();
+        assert!(
+            req.contains("accept-encoding: ") && req.contains("gzip"),
+            "请求里没声明能吃 gzip：{req}"
+        );
+        assert_eq!(v["data"][0]["name"].as_str(), Some("Refined Storage"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// `Timeout` 必须说出「慢」，不许混进「连不上」那句（那句让用户去查自己的代理，白查）
+    #[test]
+    fn timeout_has_its_own_code() {
+        assert_eq!(
+            DownloadError::Timeout {
+                url: "https://mod.mcimirror.top/curseforge/v1/mods/search?gameId=432".to_string()
+            }
+            .ipc_msg(),
+            "net:timeout:mod.mcimirror.top"
+        );
+        // 与状态码 0（根本没答）分家
+        assert_eq!(
+            DownloadError::Http {
+                url: "https://mod.mcimirror.top/x".to_string(),
+                status: 0
+            }
+            .ipc_msg(),
+            "net:offline:mod.mcimirror.top"
+        );
     }
 }

@@ -10,6 +10,7 @@
 use serde_json::Value;
 use std::collections::HashMap;
 
+use crate::core::mcmod_names;
 use crate::models::{
     CfLink, LoaderKind, ModDepends, ModSearchPage, ModSearchQuery, ModSearchResult, ModSource,
     ModVersionEntry, SideFlag,
@@ -209,6 +210,7 @@ fn cf_depends(f: &Value) -> Vec<ModDepends> {
             None => out.push(ModDepends {
                 id,
                 name: None,
+                name_zh: None,
                 slug: None,
                 required,
             }),
@@ -342,6 +344,7 @@ impl Downloader {
                 results.push(ModSearchResult {
                     slug: m["slug"].as_str().map(String::from),
                     name: m["name"].as_str().unwrap_or_default().to_string(),
+                    name_zh: mcmod_names::zh_name_of(m["slug"].as_str()),
                     description: m["summary"].as_str().unwrap_or_default().to_string(),
                     author: m["authors"]
                         .as_array()
@@ -405,7 +408,14 @@ impl Downloader {
                     d.slug = (!slug.is_empty()).then(|| slug.clone());
                     d.name = (!name.is_empty()).then(|| name.clone());
                 }
+                // 前置胶囊也是模组名：slug 到手就顺手查一次内置词典（离线、零请求）
+                d.name_zh = mcmod_names::zh_name_of(d.slug.as_deref());
             }
+        }
+        // 运行时基建（Fabric API / QSL）不当前置展示：判据见 `ModDepends::is_runtime_base`。
+        // 放在名字回填之后，slug 那一档判据才有得比
+        for e in entries.iter_mut() {
+            e.depends.retain(|d| !d.is_runtime_base());
         }
         entries.sort_by(|a, b| {
             (a.mc_version != mc_version)
@@ -475,6 +485,7 @@ impl Downloader {
             id,
             slug: m["slug"].as_str().map(String::from),
             name: m["name"].as_str().unwrap_or_default().to_string(),
+            name_zh: mcmod_names::zh_name_of(m["slug"].as_str()),
             description: m["summary"].as_str().unwrap_or_default().to_string(),
             author: m["authors"]
                 .as_array()
@@ -883,6 +894,7 @@ mod tests {
             slug: m["slug"].as_str().map(String::from),
             id: ident(&m["id"]),
             name: m["name"].as_str().unwrap_or_default().to_string(),
+            name_zh: mcmod_names::zh_name_of(m["slug"].as_str()),
             description: m["summary"].as_str().unwrap_or_default().to_string(),
             author: m["authors"][0]["name"].as_str().unwrap_or_default().to_string(),
             downloads: num(&m["downloadCount"]),
@@ -897,5 +909,43 @@ mod tests {
         // slug 是中文简介那条线的入场券（麦块 detail/{slug} 只认它，不认数字 id）
         assert_eq!(r.slug.as_deref(), Some("yacl"));
         assert_eq!(r.source, ModSource::Curseforge);
+    }
+
+    /// 真联网：CF 那几类查询在镜像这条**唯一候选**上是否还答得出来（2026-10-01：镜像会间歇回
+    /// 502 或干脆挂住，同一枚 mod id 连敲两次 502、几分钟后又全程 200）。用途是把「镜像此刻不通」
+    /// 与「我们自己的响应解析坏了」分开——界面只会说一句网络话，读不出这两档。
+    /// 只钉「答得出来」，不钉条数/版本/链的内容（远端词表会变，直链还带时效）
+    #[tokio::test]
+    #[ignore = "真联网：搜索 / 类别 / 构建列表 / 前置批量反查 / 取直链各发一发"]
+    async fn curseforge_chain_answers_through_the_mirror() {
+        let d = Downloader::new(std::env::temp_dir(), 1);
+        let q = ModSearchQuery {
+            source: ModSource::Curseforge,
+            text: "fabric-api".into(),
+            mc_version: String::new(),
+            loader: None,
+            category: None,
+            page: 1,
+        };
+        let page = d.search_curseforge(&q).await.expect("搜索这一发就挂了");
+        let hit = page.results.first().expect("第一屏就是空");
+        let cats = d.list_curseforge_categories().await.expect("类别这一发挂了");
+        let files = d.list_curseforge_versions(&hit.id, "").await.expect("构建列表挂了");
+        let file = files.first().expect("这个项目一个构建都没解析出来");
+        // 前置那张批量口（POST /v1/mods）内部吞错、永远返回表，所以这里只看它挂没挂上名字
+        let briefs = d.curseforge_mod_briefs(std::slice::from_ref(&hit.id)).await;
+        let link = d
+            .curseforge_download_url(&hit.id, &file.id)
+            .await
+            .expect("取直链挂了（整项目被拒发的那类 403 也算在这条里，重试前先看详情那句）");
+        assert!(cats.len() > 1, "类别只回来 {} 条", cats.len());
+        assert!(link.starts_with("https://"), "取回来的不像一条链：{link}");
+        println!(
+            "[cf-chain] mod {} · 类别 {} · 构建 {} 枚 · 前置反查 {} 条 · 链 {link}",
+            hit.id,
+            cats.len(),
+            files.len(),
+            briefs.len()
+        );
     }
 }

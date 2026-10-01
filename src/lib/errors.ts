@@ -13,6 +13,8 @@ const SITES: [string, string][] = [
     ["curseforge.com", "CurseForge"],
     ["minekuai.cn", "麦块 API"],
     ["bangbang93.com", "BMCLAPI"],
+    // 查 Modrinth 与 CurseForge 都走它，所以不能叫成任何一家的名字
+    ["mcimirror.top", "mcimirror"],
     ["mojang.com", "Mojang"],
     ["minecraft.net", "Mojang"],
     ["forge.gg", "Forge"],

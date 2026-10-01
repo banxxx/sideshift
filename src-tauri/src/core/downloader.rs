@@ -19,6 +19,8 @@ pub use curseforge::CfFileMeta;
 pub use modrinth::ModrinthEnv;
 // 百科那条补全腿的采信判据交给 env 层用（页面结构只在这块里解析，别让 HTML 漏出去）
 pub(crate) use mcmod::{mcmod_confident, McmodPage};
+// 名字归一化两份账共用：联网那条百科腿的「同形」判据与内置词典的中文键必须是同一个算法
+pub(crate) use mcmod::norm_name;
 pub use types::{
     DownloadError, Fetch, FetchSource, ItemSpec, TransferProgress, net_code, reqwest_code,
 };

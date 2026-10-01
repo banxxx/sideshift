@@ -4,6 +4,8 @@ pub mod env;
 pub mod detector;
 pub mod downloader;
 pub mod mc_version;
+// 内置模组名称词典（离线，与下面那两家在线 API 同层但零请求）
+pub mod mcmod_names;
 pub mod java;
 pub mod installer;
 pub mod builder;

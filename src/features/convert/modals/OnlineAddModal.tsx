@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import * as api from "@/lib/api";
 import { formatSize, loaderLabel, modcatLabel } from "@/lib/format";
 import { activeLocale, useT } from "@/lib/i18n";
+import { modName } from "@/lib/mod-name";
 import { notify } from "@/lib/notify";
 import { errOf } from "@/lib/errors";
 import type {
@@ -199,6 +200,7 @@ export function OnlineAddModal({
             id: dep.id,
             slug: dep.slug,
             name: dep.name || dep.slug || dep.id,
+            nameZh: dep.nameZh,
             description: "",
             author: "",
             downloads: 0,
@@ -339,7 +341,7 @@ export function OnlineAddModal({
                 height={464}
                 icon={Puzzle}
                 iconNode={<ModIcon url={detail.iconUrl} className="size-10" puzzleClass="size-5" />}
-                title={zhNow?.titleZh || detail.name}
+                title={modName(detail, zhNow?.titleZh)}
                 titleTag={modTag ? <SideChip sides={modTag} warnClient /> : undefined}
                 sub={
                     detail.author
@@ -430,7 +432,7 @@ export function OnlineAddModal({
                                     label={t("convert-modals.depends-open", "查看前置详情")}
                                     align="center"
                                 />
-                                {d.name || d.slug || d.id}
+                                {modName(d) || d.slug || d.id}
                                 {!d.required && (
                                     <span className="ml-1 text-text-3">
                                         {t("convert-modals.depends-optional", "可选")}
@@ -613,7 +615,7 @@ export function OnlineAddModal({
                                 <ModIcon url={m.iconUrl} />
                                 <span className="flex min-w-0 flex-1 flex-col gap-0.5">
                                     <span className="truncate font-mono text-[12px] leading-[18px] font-medium text-text-1">
-                                        {m.name}
+                                        {modName(m)}
                                     </span>
                                     <span className="truncate text-[10px] leading-[14px] font-normal text-text-3">
                                         {m.description}

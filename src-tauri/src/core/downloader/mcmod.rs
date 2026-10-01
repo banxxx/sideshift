@@ -105,10 +105,7 @@ impl Downloader {
             .timeout(super::client::METADATA_TIMEOUT)
             .send()
             .await
-            .map_err(|e| DownloadError::Http {
-                url: url.to_string(),
-                status: e.status().map(|s| s.as_u16()).unwrap_or(0),
-            })?;
+            .map_err(|e| super::types::net_err(url, &e))?;
         let status = resp.status();
         if !status.is_success() {
             return Err(DownloadError::Http {
@@ -116,10 +113,10 @@ impl Downloader {
                 status: status.as_u16(),
             });
         }
-        let text = resp.text().await.map_err(|e| DownloadError::Http {
-            url: url.to_string(),
-            status: e.status().map(|s| s.as_u16()).unwrap_or(0),
-        })?;
+        let text = resp
+            .text()
+            .await
+            .map_err(|e| super::types::net_err(url, &e))?;
         // 正常结果页里从来没有 `Jump(`（实测两份真页面各 0 次），出现即人机验证出口
         if text.contains("Jump(") {
             return Ok(McmodPage::Blocked);

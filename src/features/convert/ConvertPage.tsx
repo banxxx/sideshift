@@ -14,6 +14,7 @@ import { notify } from "@/lib/notify";
 import { errOf } from "@/lib/errors";
 import { formatSize, loaderLabel, outputNameOf, reviewFirst, truncateMiddle } from "@/lib/format";
 import { t, useT } from "@/lib/i18n";
+import { modName } from "@/lib/mod-name";
 import type {
     AppSettings,
     ConversionOptions,
@@ -674,7 +675,7 @@ export function ConvertPage() {
             if (replaced.version !== version.versionNumber) {
                 notify(
                     t("convert.switched-name", "已将 {{name}} 的构建换为 {{version}}", {
-                        name: mod.name,
+                        name: modName(mod),
                         version: version.versionNumber,
                         interpolation: { escapeValue: false },
                     }),

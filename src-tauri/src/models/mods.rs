@@ -18,6 +18,11 @@ pub struct ModSearchResult {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub slug: Option<String>,
     pub name: String,
+    /// 内置词典（MC百科词条名）按 `slug` 反查出来的中文显示名；词典没收录就缺省。
+    /// 只有前端在简体中文档拿它盖过 `name`，**`name` 本身始终是平台原名**：
+    /// 方案与任务存档写的、端判定拿去验同形的都是那个原名，换语言不改动任何已存的东西
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name_zh: Option<String>,
     pub description: String,
     pub author: String,
     pub downloads: u64,
@@ -58,6 +63,13 @@ pub struct ModSearchQuery {
     pub page: u32,
 }
 
+impl ModSearchQuery {
+    /// 只换查询词的一份副本：中文词改写走这条，来源/翻页/facet 一律原样保留
+    pub fn with_text(&self, text: String) -> ModSearchQuery {
+        ModSearchQuery { text, ..self.clone() }
+    }
+}
+
 #[derive(Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct ModVersionEntry {
@@ -93,11 +105,32 @@ pub struct ModDepends {
     pub id: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
+    /// 内置词典按 slug（Modrinth 那边 id 就是 slug）反查的中文显示名，与 `ModSearchResult::name_zh` 同口径
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name_zh: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub slug: Option<String>,
     /// required 必装 / optional 可选。incompatible / embedded 不进这张表——
     /// 前者是要避开的关系，后者已经打进 jar 里，都不是「要另装的前置」
     pub required: bool,
+}
+
+impl ModDepends {
+    /// 运行时基建：这类是装了加载器就该在场的底层库，不是「这个模组的前置」。服务端包缺它时
+    /// 自动补齐那条链（`core::detector`）本来就按 id 兜住了，所以详情页的前置行里摆它是纯噪音。
+    ///
+    /// 判据只认平台 id 与 slug，不认 `name`（名字会被内置词典/机翻改写，不稳定）；两枚各记两家
+    /// 平台的 id（2026-10-01 实测），实为 2 个模组：CF 306612 / MR P7dR8mSH = Fabric API，
+    /// CF 634179 / MR qvIfYCYJ = Quilted Fabric API (QFAPI) / Quilt Standard Libraries (QSL)。
+    ///
+    /// 只影响在线详情那一行的显示，不影响安装：方案行的依赖另有一本账（`PlanMod::depends`，
+    /// mrpack 元数据），反向依赖警告与自动补齐都不读这里。
+    pub fn is_runtime_base(&self) -> bool {
+        const IDS: [&str; 4] = ["306612", "634179", "P7dR8mSH", "qvIfYCYJ"];
+        const SLUGS: [&str; 2] = ["fabric-api", "qsl"];
+        IDS.iter().any(|i| i.eq_ignore_ascii_case(&self.id))
+            || self.slug.as_deref().is_some_and(|s| SLUGS.contains(&s))
+    }
 }
 
 /// 手动添加那一行的取证结果（本地 jar 与在线构建共用；两侧支持度来自阶梯跑完的那一层）

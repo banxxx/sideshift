@@ -30,6 +30,7 @@
   "about.tp-loaders": "Mod loader ecosystems whose public specs the conversion plan is judged against",
   "about.tp-meta": "Sources of mod and version metadata",
   "about.tp-mirror": "Optional download and metadata mirror",
+  "about.tp-modnames": "Offline dictionary of Chinese mod names",
   "about.tp-public-api": "Public API",
   "about.tp-self": "The license this project itself is published under"
 }

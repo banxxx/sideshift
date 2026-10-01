@@ -8,6 +8,11 @@ use thiserror::Error;
 pub enum DownloadError {
     #[error("网络请求失败：{url}（HTTP {status}）")]
     Http { url: String, status: u16 },
+    /// 单次请求在自己的预算内没走完（`METADATA_TIMEOUT` 掐的）。必须与「根本没连上」分开：
+    /// 前者说「响应太慢」，后者才说「连不上、检查网络或代理」——混成后者会让人去查自己家代理，
+    /// 而镜像站点慢恰恰是查不到的那种慢
+    #[error("请求超时：{url}")]
+    Timeout { url: String },
     #[error("文件读写失败：{0}")]
     Io(#[from] std::io::Error),
     #[error("数据解析失败：{0}")]
@@ -65,11 +70,32 @@ pub fn net_code(url: &str, status: u16) -> String {
 
 /// 不经 `Downloader` 的那几条 reqwest 调用（`check_update` 直连 GitHub）走同一套代码，
 /// 否则界面会露出 reqwest 自己那句英文 `error sending request for url (...)`。
+/// 分类只有 `net_err` 一个出口：两条路径不会说出两种话
 pub fn reqwest_code(e: &reqwest::Error, url: &str) -> String {
-    match e.status() {
-        Some(s) => net_code(url, s.as_u16()),
-        None if e.is_timeout() => format!("net:timeout:{}", host_of(url)),
-        None => net_code(url, 0),
+    net_err(url, e).ipc_msg()
+}
+
+/// reqwest 的错误 → `DownloadError`：超时单独成一档，其余仍按「有没有状态码」分
+/// （答了但答得不对 = 带状态码的 `Http`，根本没答 = 状态码 0）。
+/// 每个 send/text/bytes 失败点都走这里，别再各自 `unwrap_or(0)`——那样超时会被念成「连不上」
+pub fn net_err(url: &str, e: &reqwest::Error) -> DownloadError {
+    if e.is_timeout() {
+        return DownloadError::Timeout { url: url.to_string() };
+    }
+    DownloadError::Http {
+        url: url.to_string(),
+        status: e.status().map(|s| s.as_u16()).unwrap_or(0),
+    }
+}
+
+/// 这一类失败值得在**同一条源**上再敲一次：超时、根本没接上、以及源自己的 5xx。
+/// 4xx 不重（Key 无效、路径不存在，重试只是白等）；解析失败也不重（镜像给的是错误页，
+/// 再要一次还是那页）——那两种直接换下一条候选
+pub fn worth_retry(e: &DownloadError) -> bool {
+    match e {
+        DownloadError::Timeout { .. } => true,
+        DownloadError::Http { status, .. } => *status == 0 || (500..=599).contains(status),
+        _ => false,
     }
 }
 
@@ -78,6 +104,7 @@ impl DownloadError {
     pub fn net_code(&self) -> Option<String> {
         Some(match self {
             DownloadError::Http { url, status } => net_code(url, *status),
+            DownloadError::Timeout { url } => format!("net:timeout:{}", host_of(url)),
             // `NotFound` 的 payload 有两种形状：一条 URL（client.rs 的「候选链全部没拿到」）
             // 和一个模组名/中文短语（`cloth-config`、「CurseForge 构建 x/y 的下载链接」）。
             // 只有前者能说出「是谁没找到」；把短语当主机名喂给界面会吐出一句乱码 ⇒ 归不了类，原句照旧

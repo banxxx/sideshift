@@ -224,4 +224,29 @@ mod tests {
         assert!(old.skipped_mods.is_empty());
         assert!(!old.options.allow_missing_mods, "旧档缺键必须按不放行，不能默认跳过缺件");
     }
+
+    /// 运行时基建只是从在线详情的「前置」那一行消失，不是从安装里消失。四枚 id / 两枚 slug 是
+    /// 2026-10-01 实测的（2 个模组 × 两家平台），其余前置必须照旧留着
+    #[test]
+    fn runtime_base_deps_are_flagged_for_hiding() {
+        let dep = |id: &str, slug: Option<&str>| ModDepends {
+            id: id.into(),
+            name: None,
+            name_zh: None,
+            slug: slug.map(str::to_string),
+            required: true,
+        };
+        for id in ["306612", "634179", "P7dR8mSH", "qvIfYCYJ"] {
+            assert!(dep(id, None).is_runtime_base(), "{id} 没被认成运行时基建");
+        }
+        for slug in ["fabric-api", "qsl"] {
+            assert!(
+                dep("whatever", Some(slug)).is_runtime_base(),
+                "{slug} 没被认成运行时基建"
+            );
+        }
+        // 真前置不能误伤：Cloth Config 既是 Fabric API 自己的前置、也常年挂在别人的前置里
+        assert!(!dep("mQtYetb2", Some("cloth-config")).is_runtime_base());
+        assert!(!dep("999999", None).is_runtime_base());
+    }
 }

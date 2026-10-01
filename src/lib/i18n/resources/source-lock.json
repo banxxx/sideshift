@@ -30,6 +30,7 @@
   "about.tp-loaders": "模组加载器生态，转换方案判定所依据的公开规范",
   "about.tp-meta": "模组与版本元数据来源",
   "about.tp-mirror": "可选的下载与元数据镜像加速服务",
+  "about.tp-modnames": "模组中文名的离线词典",
   "about.tp-public-api": "公开 API",
   "about.tp-self": "本项目自身的发布协议",
   "backend.7z-supported": "暂不支持 .7z 格式，请先解压为 zip 或改用 .mrpack",

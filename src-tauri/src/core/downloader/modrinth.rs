@@ -5,6 +5,7 @@ use std::path::PathBuf;
 
 use serde_json::Value;
 
+use crate::core::mcmod_names;
 use crate::models::{LoaderKind, ModDepends, ModSearchPage, ModSearchQuery, ModSearchResult, ModSource, ModVersionEntry, SideFlag};
 use super::client::Downloader;
 use super::types::{DownloadError, Fetch, ItemSpec};
@@ -81,6 +82,7 @@ fn modrinth_depends(v: &Value) -> Vec<ModDepends> {
             None => out.push(ModDepends {
                 id,
                 name: None,
+                name_zh: None,
                 slug: None,
                 required,
             }),
@@ -173,11 +175,36 @@ impl Downloader {
             .unwrap_or_default())
     }
 
+    /// 搜索的唯一分发点：两家各一条请求链，**中文查询词的改写闸也收在这一处**（命令层不再各判一次）。
+    ///
+    /// 两道闸按实测分开定，不是偷懒复制：
+    /// - Modrinth 对中文词**恒回 0 条**（实测 钠/小地图/暮色 的 `total_hits` 都是 0，而同义的
+    ///   Sodium/minimap/twilight 回 353/197/116）⇒ 「原样先查，空了才改写重发一次」在那边是纯增益，
+    ///   结构上不可能把已有的好结果换差，多付的那一发只发生在今天必然空屏的场合；
+    /// - CurseForge 对中文词回的是 **6–20 条无关项而不是空**（实测 钠 回一堆音乐唱片），
+    ///   同一条「空了才改」的闸在它身上永不触发 ⇒ 含中文且命中唯一候选就先改写再发。
+    ///   代价说清楚：只有**词典收录了、改写词却对不上 CF 词表**（或词条本身对齐错了）那一档
+    ///   从「一屏垃圾」变成「0 条」；词典没收录的中文词照旧原样发出，表现不变。
+    ///
+    /// 两边共用 `rewrite_term` 的唯一性闸：同一中文键下的候选给不出同一个英文词就不改
     pub async fn search_mods(&self, q: &ModSearchQuery) -> Result<ModSearchPage, DownloadError> {
-        // 两家平台唯一的分发点在这里（命令层不再各判一次）；CurseForge 经 mcimirror 免 Key 获取
         if q.source == ModSource::Curseforge {
-            return self.search_curseforge(q).await;
+            // CurseForge 经 mcimirror 免 Key 获取
+            return match mcmod_names::rewrite_term(&q.text) {
+                Some(term) => self.search_curseforge(&q.with_text(term)).await,
+                None => self.search_curseforge(q).await,
+            };
         }
+        let page = self.search_modrinth(q).await?;
+        if page.total == 0 && page.results.is_empty() {
+            if let Some(term) = mcmod_names::rewrite_term(&q.text) {
+                return self.search_modrinth(&q.with_text(term)).await;
+            }
+        }
+        Ok(page)
+    }
+
+    async fn search_modrinth(&self, q: &ModSearchQuery) -> Result<ModSearchPage, DownloadError> {
         let page_size = 20u32;
         let offset = (q.page.saturating_sub(1)) * page_size;
         let mut facets: Vec<Vec<String>> = Vec::new();
@@ -219,6 +246,7 @@ impl Downloader {
                     slug: h["slug"].as_str().map(String::from),
                     id: h["slug"].as_str().unwrap_or_default().to_string(),
                     name: h["title"].as_str().unwrap_or_default().to_string(),
+                    name_zh: mcmod_names::zh_name_of(h["slug"].as_str()),
                     description: h["description"].as_str().unwrap_or_default().to_string(),
                     author: h["author"].as_str().unwrap_or_default().to_string(),
                     downloads: h["downloads"].as_u64().unwrap_or(0),
@@ -323,7 +351,14 @@ impl Downloader {
                     d.slug = (!slug.is_empty()).then(|| slug.clone());
                     d.name = (!title.is_empty()).then(|| title.clone());
                 }
+                // 前置胶囊也是模组名：slug 到手就顺手查一次内置词典（离线、零请求）
+                d.name_zh = mcmod_names::zh_name_of(d.slug.as_deref());
             }
+        }
+        // 运行时基建（Fabric API / QSL）不当前置展示：判据见 `ModDepends::is_runtime_base`。
+        // 放在名字回填之后，slug 那一档判据才有得比
+        for e in entries.iter_mut() {
+            e.depends.retain(|d| !d.is_runtime_base());
         }
         // 兼容请求 MC 版本的构建排前，组内按发布日期倒序；首个标推荐
         entries.sort_by(|a, b| {
@@ -399,6 +434,7 @@ impl Downloader {
             id,
             slug: v["slug"].as_str().map(String::from),
             name: v["title"].as_str().unwrap_or_default().to_string(),
+            name_zh: mcmod_names::zh_name_of(v["slug"].as_str()),
             description: v["description"].as_str().unwrap_or_default().to_string(),
             author: owner_name(&members.unwrap_or_default()),
             downloads: v["downloads"].as_u64().unwrap_or(0),
@@ -552,5 +588,42 @@ mod tests {
         // 认不出来的新枚举值：宁缺毋滥
         assert_eq!(env(None, None, Some("some_new_value")).sides(), None);
         assert_eq!(env(None, None, None).sides(), None);
+    }
+
+    /// 中文查询词改写的真联网用例（不参与常规跑批）：两家两道闸的**判据**在这条上分别验证——
+    /// Modrinth 那一发是先原样打到空、再改写出货；CurseForge 那一发根本没发过原样词。
+    /// 断言只钉「有货且第一屏就是它」，不钉条数（远端词表会变）
+    #[tokio::test]
+    #[ignore = "真联网：Modrinth 官方搜索两发 + CurseForge 镜像一发"]
+    async fn chinese_query_is_rewritten_on_both_sources() {
+        let q = |source: ModSource, text: &str| ModSearchQuery {
+            source,
+            text: text.to_string(),
+            mc_version: String::new(),
+            loader: None,
+            category: None,
+            page: 1,
+        };
+        let d = Downloader::new(std::env::temp_dir(), 1);
+
+        let mr = d.search_mods(&q(ModSource::Modrinth, "钠")).await.unwrap();
+        assert!(
+            mr.results.iter().any(|r| r.id == "sodium"),
+            "Modrinth 的中文词该由改写那一发出货，实际 {:?}",
+            mr.results.iter().map(|r| r.id.clone()).collect::<Vec<_>>()
+        );
+
+        let cf = d.search_mods(&q(ModSource::Curseforge, "钠")).await.unwrap();
+        assert!(
+            cf.results.iter().any(|r| {
+                r.slug
+                    .as_deref()
+                    .unwrap_or_default()
+                    .contains("sodium")
+                    || r.name.to_lowercase().contains("sodium")
+            }),
+            "CurseForge 该在发请求前就换词，实际 {:?}",
+            cf.results.iter().map(|r| r.name.clone()).collect::<Vec<_>>()
+        );
     }
 }

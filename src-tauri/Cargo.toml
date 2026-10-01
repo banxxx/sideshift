@@ -18,6 +18,8 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
+# 构建期把词典 TSV 压成 blob（见 build.rs）；feature 与依赖树里 zip 那份取的是同一个后端，不多编 crate
+flate2 = { version = "1", default-features = false, features = ["rust_backend"] }
 
 [dependencies]
 tauri = { version = "2", features = [] }
@@ -28,7 +30,9 @@ tauri-plugin-dialog = "2"
 tauri-plugin-fs = "2"
 tauri-plugin-http = "2"
 tokio = { version = "1", features = ["fs", "io-util", "macros", "rt", "sync", "time"] }
-reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "stream"] }
+# gzip/brotli 不是省流量的锦上添花，是 CF 那条链能不能活下来的开关：mcimirror 对未压缩响应限速到
+# 约 32 KB/s，而一次搜索的回包就有 260–530 KB ⇒ 8–18 秒，必然越过 `METADATA_TIMEOUT`（实测见 client.rs 头）
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "stream", "gzip", "brotli"] }
 zip = { version = "2", default-features = false, features = ["deflate"] }
 futures = "0.3"
 chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
@@ -40,6 +44,8 @@ sha1 = "0.10"
 base64 = { version = "0.22", default-features = false, features = ["std"] }
 # 检查更新要比 `1.0.0-beta.2` 与 `1.0.0` 谁新，字符串比较判不出（0.10.0 字面比 0.9.0 小）
 semver = "1"
+# 内置词典（core::mcmod_names）运行时解 build.rs 压出来的那块 blob；与 zip 取同一后端，不新增编译单元
+flate2 = { version = "1", default-features = false, features = ["rust_backend"] }
 
 # 数据根预选要读每个盘的剩余空间（GetDiskFreeSpaceExW）；锁在 windows 目标里，
 # 其他平台编译不到这行，data_root 那边直接返回空候选、回落用户目录

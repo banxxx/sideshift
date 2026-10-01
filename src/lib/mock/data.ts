@@ -250,12 +250,13 @@ export function mockJavaForMc(mc: string): string {
     return "8";
 }
 
-/** Online Add 搜索结果（四页数据，与设计稿行对齐；两侧支持度按 Modrinth 实测值） */
+/** Online Add 搜索结果（四页数据，与设计稿行对齐；两侧支持度按 Modrinth 实测值）。
+ *  `nameZh` 只给内置词典真收录的那几条，值取自 `assets/mcmod-names.tsv`；没给的那些就是「查不到、露原名」的那一档 */
 const searchPool = [
-    { id: "krypton", name: "Krypton", description: "轻量级协议层优化，显著降低服务端网络开销", author: "modmuss50", downloads: 12_040_000, clientSide: "unsupported", serverSide: "required" },
+    { id: "krypton", name: "Krypton", nameZh: "氪 (Krypton)", description: "轻量级协议层优化，显著降低服务端网络开销", author: "modmuss50", downloads: 12_040_000, clientSide: "unsupported", serverSide: "required" },
     { id: "c2me", name: "C2ME", description: "并发化区块生成与写入，提升跑图性能", author: "ishland", downloads: 3_820_000, clientSide: "optional", serverSide: "required" },
-    { id: "ferritecore", name: "FerriteCore", description: "内存占用优化，适合大型整合包", author: "malte0612", downloads: 9_150_000, clientSide: "required", serverSide: "required" },
-    { id: "spark", name: "spark", description: "服务端性能分析器，火焰图与内存采样", author: "lucko", downloads: 15_600_000, clientSide: "unsupported", serverSide: "required" },
+    { id: "ferritecore", name: "FerriteCore", nameZh: "铁氧体磁芯 (FerriteCore)", description: "内存占用优化，适合大型整合包", author: "malte0612", downloads: 9_150_000, clientSide: "required", serverSide: "required" },
+    { id: "spark", name: "spark", nameZh: "火花 (spark)", description: "服务端性能分析器，火焰图与内存采样", author: "lucko", downloads: 15_600_000, clientSide: "unsupported", serverSide: "required" },
     { id: "ksyxis", name: "Ksyxis", description: "跳过原版世界生成的无效区域加载", author: "Dreeya", downloads: 2_100_000, clientSide: "unsupported", serverSide: "required" },
     { id: "moreculling", name: "More Culling", description: "更激进的实体与方块剔除，提高帧数", author: "fxmorin", downloads: 4_500_000, clientSide: "required", serverSide: "unsupported" },
     { id: "noisemax", name: "Noisemax", description: "生物群系与噪声生成优化", author: "thegggg", downloads: 980_000, clientSide: "required", serverSide: "optional" },
@@ -265,7 +266,11 @@ const searchPool = [
 export function mockSearch(query: ModSearchQuery): ModSearchPage {
     const text = query.text.trim().toLowerCase();
     const filtered = searchPool.filter(
-        (m) => !text || m.name.toLowerCase().includes(text) || m.description.toLowerCase().includes(text)
+        (m) =>
+            !text ||
+            m.name.toLowerCase().includes(text) ||
+            m.description.toLowerCase().includes(text) ||
+            (m.nameZh ?? "").toLowerCase().includes(text)
     );
     const pageSize = 4;
     const start = (query.page - 1) * pageSize;
@@ -323,9 +328,10 @@ export const mockModCategories: string[] = [
     "storage", "technology", "transportation", "utility", "worldgen",
 ];
 
-/** Mod Detail：Krypton 的版本行（整行点击下载；构建级端声明随版本一起返回） */
+/** Mod Detail：Krypton 的版本行（整行点击下载；构建级端声明随版本一起返回）。
+ *  前置里没有 Fabric API：后端按 `ModDepends::is_runtime_base` 把它剔掉了，mock 照同一口径 */
 export const mockModVersions: ModVersionEntry[] = [
-    { id: "v-0.2.3", versionNumber: "0.2.3", mcVersion: "1.20.1", loader: "fabric", date: "2023-11-02", sizeBytes: 412_000, recommended: true, url: "https://cdn.modrinth.com/data/fabric-krypton/versions/v-0.2.3/krypton-0.2.3.jar", sha1: "a3d5f1c09b7e2d46c8a05e1f3b7d9c2e4a6c8e01", fileName: "krypton-0.2.3.jar", clientSide: "unsupported", serverSide: "required", depends: [{ id: "P7dR8mSH", name: "Fabric API", slug: "fabric-api", required: true }, { id: "mQtYetb2", name: "Cloth Config API", slug: "cloth-config", required: false }] },
+    { id: "v-0.2.3", versionNumber: "0.2.3", mcVersion: "1.20.1", loader: "fabric", date: "2023-11-02", sizeBytes: 412_000, recommended: true, url: "https://cdn.modrinth.com/data/fabric-krypton/versions/v-0.2.3/krypton-0.2.3.jar", sha1: "a3d5f1c09b7e2d46c8a05e1f3b7d9c2e4a6c8e01", fileName: "krypton-0.2.3.jar", clientSide: "unsupported", serverSide: "required", depends: [{ id: "mQtYetb2", name: "Cloth Config API", slug: "cloth-config", required: false }] },
     { id: "v-0.2.2", versionNumber: "0.2.2", mcVersion: "1.20.1", loader: "fabric", date: "2023-08-19", sizeBytes: 410_500, recommended: false, url: "https://cdn.modrinth.com/data/fabric-krypton/versions/v-0.2.2/krypton-0.2.2.jar", sha1: "b4e6a2d10c8f3e57d9b16f2a4c8e0d3f5b7d9e02", fileName: "krypton-0.2.2.jar", clientSide: "unsupported", serverSide: "required" },
     { id: "v-0.2.1", versionNumber: "0.2.1", mcVersion: "1.20", loader: "fabric", date: "2023-06-07", sizeBytes: 408_100, recommended: false, url: "https://cdn.modrinth.com/data/fabric-krypton/versions/v-0.2.1/krypton-0.2.1.jar", sha1: "c5f7b3e21d9a4f68e0c27a3b5d9f1e4a6c8e0f03", fileName: "krypton-0.2.1.jar", clientSide: "optional", serverSide: "required" },
     { id: "v-0.2.0", versionNumber: "0.2.0", mcVersion: "1.19.4", loader: "fabric", date: "2023-02-14", sizeBytes: 402_900, recommended: false, url: "https://cdn.modrinth.com/data/fabric-krypton/versions/v-0.2.0/krypton-0.2.0.jar", fileName: "krypton-0.2.0.jar", clientSide: "optional", serverSide: "required" },

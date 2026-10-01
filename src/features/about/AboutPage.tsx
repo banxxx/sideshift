@@ -41,8 +41,8 @@ function privacyRows(t: TranslateFn): Array<[LucideIcon, string, string]> {
 }
 
 /**
- * 许可与依赖。只留**外部**的三项（加载器生态、元数据 API、镜像服务）加本项目自身的发布协议——
- * `name` 与 `license` 是专有名词与 SPDX 标识，**不翻**，只有用途那句过 `t`。
+ * 许可与依赖。只留**外部**的四项（加载器生态、元数据 API、镜像服务、内置名称词典的出处）加本项目
+ * 自身的发布协议——`name` 与 `license` 是专有名词与 SPDX 标识，**不翻**，只有用途那句过 `t`。
  *
  * 应用栈（运行时/框架/组件基线/字体）不列在这里：这一页不是 NOTICE 文件，把工程依赖摊给用户看
  * 只增加阅读成本。Minecraft 的权利声明也不在这张表里——下面「声明」那一块已经写了，
@@ -52,6 +52,7 @@ function licenseRows(t: TranslateFn): Array<[string, string, string]> {
     return [
         ["Fabric · Forge · NeoForge", t("about.tp-loaders", "模组加载器生态，转换方案判定所依据的公开规范"), "Apache-2.0 / LGPL"],
         ["Modrinth API · CurseForge API", t("about.tp-meta", "模组与版本元数据来源"), t("about.tp-public-api", "公开 API")],
+        ["MC百科", t("about.tp-modnames", "模组中文名的离线词典"), "CC BY-NC-SA 4.0"],
         ["BMCLAPI（麦块）", t("about.tp-mirror", "可选的下载与元数据镜像加速服务"), "MIT"],
         ["MIT License", t("about.tp-self", "本项目自身的发布协议"), "MIT"],
     ];
@@ -103,8 +104,10 @@ function FoldBody({ children }: { children: ReactNode }) {
 export function AboutPage() {
     const t = useT();
     const { people, skins, skinReady, status, retry } = useContributors();
-    const [privacyOpen, setPrivacyOpen] = useState(false);
-    const [licenseOpen, setLicenseOpen] = useState(false);
+    /* 两块默认摊开：这两份是「本机做了什么」和「用了哪些第三方」的陈述，收起来等于把要公开的话藏起来。
+       `Collapse` 里的 `AnimatePresence initial={false}` 认的是挂载那一刻的 `when` ⇒ 首帧直接在场、不演一遍。 */
+    const [privacyOpen, setPrivacyOpen] = useState(true);
+    const [licenseOpen, setLicenseOpen] = useState(true);
 
     return (
         <motion.div
@@ -193,8 +196,8 @@ export function AboutPage() {
                     />
                     <Collapse when={licenseOpen} gap={10}>
                         <FoldBody>
-                            {/* 两列并排（等分 fr，不写固定宽）：四条正好 2×2，读起来是一份对照表
-                                而不是四行清单；窗口最小 1120 时单列约容 21 字，最长的用途句不换行 */}
+                            {/* 两列并排（等分 fr，不写固定宽）：五条 = 2×2 再落单一条，读起来是一份对照表
+                                而不是清单；窗口最小 1120 时单列约容 21 字，最长的用途句不换行 */}
                             <div className="grid grid-cols-2 gap-x-6 gap-y-3">
                                 {licenseRows(t).map(([name, usage, license]) => (
                                     <LicenseRow key={name} name={name} usage={usage} license={license} />
