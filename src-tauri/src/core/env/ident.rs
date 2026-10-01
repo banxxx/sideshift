@@ -109,6 +109,7 @@ pub fn targets_for(files: &[PackFile], env_trusted: bool) -> Vec<Target> {
         .map(|f| Target {
             path: f.path.clone(),
             sha1: f.sha1.clone(),
+            cf_fingerprint: None, // jar 层探测（apply_probes）才补得上指纹
             project_id: project_id_from_url(&f.url),
             slugs: slugs_from_file_name(&f.file_name),
             title: None,

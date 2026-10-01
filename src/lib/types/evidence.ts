@@ -24,11 +24,17 @@ export type EnvSource =
     | "jarMetadata"
     /** Modrinth 按文件 sha1 反查构建 */
     | "modrinthHash"
+    /**
+     * CurseForge 构建级端标签：file 对象 `gameVersions` 里的 `Client`/`Server`
+     * （作者上传时勾的官方声明，精确到这一枚 jar）。CF 清单行随元数据补取带回；
+     * zip 包内的 CF 独占模组走 murmur2 指纹反查（`POST /v1/fingerprints`）取同一份声明
+     */
+    | "cfFile"
     /** Modrinth 项目级 client_side/server_side */
     | "modrinthProject"
     /** 国内镜像（麦块开放 API）的项目级声明：内容同上一条，但是第三方快照、可能滞后 */
     | "mirrorProject"
-    /** MC百科词条的「运行环境」：平台各腿全答不上时才问的补全源，社区编辑的第二手声明 */
+    /** MC百科词条的「运行环境」：平台各腿全答不上时才问的补全源（设置里默认关），社区编辑的第二手声明 */
     | "mcmod"
     /** 模组名关键字表，纯兜底 */
     | "nameHeuristic"

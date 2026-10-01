@@ -81,5 +81,9 @@
   "convert-modals.zh-loading": "翻譯中…",
   "convert-modals.zh-original": "原文",
   "convert-modals.zh-translate": "翻譯",
-  "home.loader": "載入器"
+  "home.loader": "載入器",
+  "convert-modals.depends": "前置模組",
+  "convert-modals.depends-optional": "可選",
+  "convert-modals.depends-open": "查看前置詳情",
+  "convert-modals.src-downloads": "{{src}} · {{downloads}} 次下載"
 }

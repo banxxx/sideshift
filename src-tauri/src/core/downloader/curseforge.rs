@@ -1,13 +1,17 @@
-//! CurseForge 侧：Core API v1 的搜索 / 构建列表 / 类别 / 临时下载链四类查询。
+//! CurseForge 侧：Core API v1 的搜索 / 构建列表 / 类别 / 指纹反查 / 临时下载链五类查询。
 //! 除 `/categories`（免 Key 200，带 classId 反而 403）外，每条请求都要 `x-api-key`（用户自己申请，存 settings.json）。
-//! CF 没有端声明：`client_side`/`server_side` 一律 None，端判定只能走离线取证层，不从 `gameVersions` 标签猜。
+//! CF 的端声明在**构建级**：file 对象 `gameVersions` 里的 `Client`/`Server` 标签是作者上传时
+//! 勾的官方声明（实测 JEI 两侧齐勾、Oculus 等纯客户端只勾 Client）——按文件精确，但没有
+//! optional 这一档，且老构建普遍没勾 ⇒ 没标签不算「服务端不支持」，只算这一层没答上（`cf_sides`）。
 //! 下载链临时且可能缺：这里给出的 `url` 恒为空串，构建期按 (mod id, file id) 现取（`curseforge_build_url`：官方链优先、被拒退内容分发站推导链；`curseforge_probe_link` 逐枚探链入清单）。
 //! 校验值按长度认（40=sha1、32=md5），不信 `algo` 枚举号（各语言实现公认对不上）。
 
 use serde_json::Value;
+use std::collections::HashMap;
 
 use crate::models::{
-    CfLink, LoaderKind, ModSearchPage, ModSearchQuery, ModSearchResult, ModSource, ModVersionEntry,
+    CfLink, LoaderKind, ModDepends, ModSearchPage, ModSearchQuery, ModSearchResult, ModSource,
+    ModVersionEntry, SideFlag,
 };
 use super::client::Downloader;
 use super::types::DownloadError;
@@ -77,6 +81,13 @@ pub struct CfFileMeta {
     pub file_name: String,
     pub size_bytes: u64,
     pub sha1: Option<String>,
+    /// 构建级端标签（`cf_sides` 的产出）。**双层 Option 是给老索引留的升级通道**：
+    /// 外层 `None` = 这条是本功能上线前写进索引的（没问过端标签）⇒ `cfpack` 会为它
+    /// 重发一次元数据请求；`Some(None)` = 问过了、作者两个标签都没勾（这也是个结论，
+    /// 不许再问）；`Some(Some((c, s)))` = 问到了真声明。老条目经一轮补取后都有了外层值，
+    /// 「同一个包第二次打开零请求」从那之后恢复
+    #[serde(default)]
+    pub env: Option<Option<(SideFlag, SideFlag)>>,
     /// 索引顺带记的**取链许可态**（不属于 API 那三件事，是本地探出来的）。
     /// `None` = 还没探过（老索引条目、以及没配 Key 的那些轮）；探过的行下次进同一个包零请求。
     /// 存的是「能不能拿到链」这个结论，**不是链本身**——直链带时效，存下来就是埋雷
@@ -89,6 +100,24 @@ impl CfFileMeta {
     pub fn usable(&self) -> bool {
         !self.file_name.trim().is_empty()
     }
+
+    /// 端标签这一问补过了没有（外层有值即问过，无论内层是不是 None）
+    pub fn env_checked(&self) -> bool {
+        self.env.is_some()
+    }
+
+    /// 贴回 `CfRef` 的那份端声明：问过才有值，没勾标签就是 None
+    pub fn sides(&self) -> Option<(SideFlag, SideFlag)> {
+        self.env.flatten()
+    }
+}
+
+/// 一条指纹匹配带回的东西：那枚 file 的端标签与 sha1（有的行顺手把 sha1 也补上，
+/// 证据可以同时挂 `fp:` 与 `sha1:` 两个键，下次离线即答）
+#[derive(Debug, Clone)]
+pub struct CfFpMatch {
+    pub sides: Option<(SideFlag, SideFlag)>,
+    pub sha1: Option<String>,
 }
 
 /// 从 `gameVersions` 标签里挑 MC 版本号。CF 这一个数组同时装着加载器名、
@@ -133,6 +162,60 @@ fn cf_loader(file: &Value) -> LoaderKind {
     }
 }
 
+/// 构建级端标签（`gameVersions` 里的 `Client`/`Server`）→ 两侧支持度。
+///
+/// **四个象限的判据来自 2026-10 实测**（api.cfwidget.com 的文件级 `versions` 标签计数，
+/// 与 API 的 `gameVersions` 同源）：JEI（两端可用）的 Client 与 Server 各 1059 个文件、
+/// 逐文件齐勾；Oculus / Legendary Tooltips / Mouse Tweaks 三个纯客户端模组
+/// 全部只勾 Client、Server 为 0。即作者勾了哪侧就是哪侧可用：
+/// - 只勾 `Client` ⇒ (必需, 不支持)——纯客户端模组在 CF 上的标准勾法；
+/// - 只勾 `Server` ⇒ (不支持, 必需)，两侧齐勾 ⇒ (必需, 必需)；
+/// - **两个都没勾 ⇒ `None`**：老构建普遍没勾，把「没勾」读成「不支持」会把
+///   那些模组从服务端包里冤枉删掉——这一层没答上，交回证据阶梯的下一层
+fn cf_sides(file: &Value) -> Option<(SideFlag, SideFlag)> {
+    let hit = |tag: &str| {
+        file["gameVersions"]
+            .as_array()
+            .map(|a| a.iter().filter_map(|g| g.as_str()).any(|g| g.eq_ignore_ascii_case(tag)))
+            .unwrap_or(false)
+    };
+    use SideFlag::{Required, Unsupported};
+    match (hit("Client"), hit("Server")) {
+        (true, true) => Some((Required, Required)),
+        (true, false) => Some((Required, Unsupported)),
+        (false, true) => Some((Unsupported, Required)),
+        (false, false) => None,
+    }
+}
+
+/// file 的 `dependencies[]` → 前置表。CF 的关系号（`ModDependencyType`）：
+/// 3 = 必需前置、2 = 可选前置；1 = 内嵌库、4 = 工具、5 = 不兼容、6 = 包含
+/// 都不是「要另装的前置」，不进表。同一 modId 重复声明时按「任一必需」记
+fn cf_depends(f: &Value) -> Vec<ModDepends> {
+    let mut out: Vec<ModDepends> = Vec::new();
+    for d in f["dependencies"].as_array().map(Vec::as_slice).unwrap_or_default() {
+        let id = ident(&d["modId"]);
+        if id.is_empty() || id == "0" {
+            continue;
+        }
+        let required = match d["relationType"].as_u64() {
+            Some(3) => true,
+            Some(2) => false,
+            _ => continue,
+        };
+        match out.iter_mut().find(|x| x.id == id) {
+            Some(x) => x.required = x.required || required,
+            None => out.push(ModDepends {
+                id,
+                name: None,
+                slug: None,
+                required,
+            }),
+        }
+    }
+    out
+}
+
 /// 一条 CF file → 一个构建条目。`url` 恒空：见模块头第 3 条
 fn file_entry(f: &Value, want_mc: &str) -> Option<ModVersionEntry> {
     // CF 上「处理中/被拒/已删」的文件 `isAvailable=false`，点了必失败，不如根本不给
@@ -165,9 +248,10 @@ fn file_entry(f: &Value, want_mc: &str) -> Option<ModVersionEntry> {
         url: String::new(),
         sha1: cf_sha1(f),
         file_name,
-        // CF 无端声明：留给离线取证层
-        client_side: None,
-        server_side: None,
+        // 构建级端标签：作者勾的 Client/Server，没勾就留 None（`cf_sides` 有实测判据）
+        client_side: cf_sides(f).map(|(c, _)| c),
+        server_side: cf_sides(f).map(|(_, s)| s),
+        depends: cf_depends(f),
         id,
     })
 }
@@ -303,6 +387,25 @@ impl Downloader {
             .as_array()
             .map(|a| a.iter().filter_map(|f| file_entry(f, mc_version)).collect())
             .unwrap_or_default();
+        // 前置反查：全部构建里出现过的 modId 去重后**一次批量**问名（`POST /v1/mods`，
+        // 上限 100——超出的那条前置只剩数字 id，前端按 id 兜底）。请求失败就缺省（前置行
+        // 是顺手的显示件，不是主内容），但不因它失败
+        let mut ids: Vec<String> = entries
+            .iter()
+            .flat_map(|e| e.depends.iter().map(|d| d.id.clone()))
+            .collect();
+        ids.sort();
+        ids.dedup();
+        ids.truncate(100);
+        let briefs = self.curseforge_mod_briefs(&ids).await;
+        for e in entries.iter_mut() {
+            for d in e.depends.iter_mut() {
+                if let Some((slug, name)) = briefs.get(&d.id) {
+                    d.slug = (!slug.is_empty()).then(|| slug.clone());
+                    d.name = (!name.is_empty()).then(|| name.clone());
+                }
+            }
+        }
         entries.sort_by(|a, b| {
             (a.mc_version != mc_version)
                 .cmp(&(b.mc_version != mc_version))
@@ -312,6 +415,83 @@ impl Downloader {
             first.recommended = true;
         }
         Ok(entries)
+    }
+
+    /// 一批 CF mod id → `(slug, name)`（`POST /v1/mods`，body `{"modIds": [数字]}`）。
+    /// 给「前置模组」显示挂名用：请求失败返回空表（调用方按数字 id 兜底），不算故障
+    pub async fn curseforge_mod_briefs(
+        &self,
+        ids: &[String],
+    ) -> HashMap<String, (String, String)> {
+        let mut out = HashMap::new();
+        let nums: Vec<u64> = ids.iter().filter_map(|s| s.trim().parse().ok()).collect();
+        if nums.is_empty() {
+            return out;
+        }
+        if let Ok(v) = self
+            .cf_post_json(
+                &format!("{CURSEFORGE_API}/mods"),
+                &serde_json::json!({ "modIds": nums }),
+            )
+            .await
+        {
+            if let Some(arr) = v["data"].as_array() {
+                for m in arr {
+                    let id = ident(&m["id"]);
+                    if id.is_empty() {
+                        continue;
+                    }
+                    out.insert(
+                        id,
+                        (
+                            m["slug"].as_str().unwrap_or_default().to_string(),
+                            m["name"].as_str().unwrap_or_default().to_string(),
+                        ),
+                    );
+                }
+            }
+        }
+        out
+    }
+
+    /// 单个项目的展示信息（`GET /v1/mods/{modId}`）：详情页直跳一枚前置时补齐详情页要的
+    /// 那几样，作者/简介/图标/下载量都在这一发响应里。CF 没有项目级端声明，两侧恒空——
+    /// 详情页的端标签会退到版本行那份构建级标签（`file_entry`），与搜索结果同一口径
+    pub async fn curseforge_detail(
+        &self,
+        mod_id: &str,
+    ) -> Result<ModSearchResult, DownloadError> {
+        let url = format!("{CURSEFORGE_API}/mods/{}", urlencoding(mod_id.trim()));
+        let v = self.cf_get_json(&url).await?;
+        let m = &v["data"];
+        let id = ident(&m["id"]);
+        if id.is_empty() {
+            return Err(DownloadError::NotFound(format!(
+                "CurseForge 模组 {mod_id}"
+            )));
+        }
+        Ok(ModSearchResult {
+            id,
+            slug: m["slug"].as_str().map(String::from),
+            name: m["name"].as_str().unwrap_or_default().to_string(),
+            description: m["summary"].as_str().unwrap_or_default().to_string(),
+            author: m["authors"]
+                .as_array()
+                .and_then(|a| a.first())
+                .and_then(|a| a["name"].as_str())
+                .unwrap_or_default()
+                .to_string(),
+            downloads: num(&m["downloadCount"]),
+            icon_url: m["logo"]["thumbnailUrl"]
+                .as_str()
+                .or(m["logo"]["url"].as_str())
+                .map(String::from),
+            source: ModSource::Curseforge,
+            compatible: true,
+            already_added: false,
+            client_side: None,
+            server_side: None,
+        })
     }
 
     /// 一条声明编号 → 那个构建的**离线拿不到的三件事**（文件名 / 大小 / sha1）。
@@ -338,6 +518,8 @@ impl Downloader {
             file_name: f["fileName"].as_str().unwrap_or_default().trim().to_string(),
             size_bytes: num(&f["fileLength"]),
             sha1: cf_sha1(f),
+            // 端标签与元数据同一发响应：外层 Some = 这一问补过了（没勾标签是 Some(None)，也是结论）
+            env: Some(cf_sides(f)),
             // 取链许可是**另一发请求**的结论，不在这条元数据里（CF 没有任何字段预告
             // 「这个项目放不放行 API 链」，见 `CfLink` 的文档）。留 None = 还没探过
             link: None,
@@ -428,6 +610,45 @@ impl Downloader {
             Err(_) => None,
         }
     }
+
+    /// 按**文件指纹**批量反查构建（`POST /v1/fingerprints/{MC_GAME_ID}`）。
+    /// zip 包内的 CF 独占模组（Forge 系大多不在 Modrinth）既没有 sha1 可查 Modrinth、
+    /// 清单又不给编号，murmur2 指纹（`env::jar::cf_fingerprint`）是把「这枚 jar」
+    /// 对回 CF 官方文件对象的唯一身份钥匙；匹配上的行带完整 file 对象——端标签（`cf_sides`）
+    /// 与 sha1（`cf_sha1`）都从那里来。没匹配上的指纹直接缺席，不算故障。
+    /// 返回 `Err(Refused)` = 缺 Key / Key 被拒（调用方按「整腿跳过」处理，与 cfpack 同口径）；
+    /// 其余 `Err` = 网络故障，由调用方计进「这一轮没跑完」。
+    /// 官方接口单批上限 128，这里取 100 留余量
+    pub async fn curseforge_fingerprints(
+        &self,
+        fingerprints: &[u32],
+    ) -> Result<HashMap<u32, CfFpMatch>, DownloadError> {
+        let mut out = HashMap::new();
+        if fingerprints.is_empty() {
+            return Ok(out);
+        }
+        let url = format!("{CURSEFORGE_API}/fingerprints/{MC_GAME_ID}");
+        let v = self
+            .cf_post_json(&url, &serde_json::json!({ "fingerprints": fingerprints }))
+            .await?;
+        if let Some(arr) = v["data"]["exactMatches"].as_array() {
+            for m in arr {
+                let fp = num(&m["id"]) as u32;
+                if fp == 0 {
+                    continue;
+                }
+                let f = &m["file"];
+                out.insert(
+                    fp,
+                    CfFpMatch {
+                        sides: cf_sides(f),
+                        sha1: cf_sha1(f),
+                    },
+                );
+            }
+        }
+        Ok(out)
+    }
 }
 
 #[cfg(test)]
@@ -435,6 +656,52 @@ mod tests {
     use super::*;
     use crate::models::SideFlag;
     use LoaderKind::*;
+
+    /// 端标签四象限（实测判据见 `cf_sides` 注释）：勾了哪侧才是哪侧，
+    /// **两个都没勾 ≠ 服务端不支持**——那批老构建交回证据阶梯的下一层
+    #[test]
+    fn cf_sides_reads_only_what_the_author_tagged() {
+        let gv = |tags: &[&str]| serde_json::json!({ "gameVersions": tags });
+        use SideFlag::{Required, Unsupported};
+        assert_eq!(
+            cf_sides(&gv(&["1.20.1", "Forge", "Client", "Server"])),
+            Some((Required, Required))
+        );
+        assert_eq!(
+            cf_sides(&gv(&["1.20.1", "Client"])),
+            Some((Required, Unsupported))
+        );
+        assert_eq!(
+            cf_sides(&gv(&["1.20.1", "Server"])),
+            Some((Unsupported, Required))
+        );
+        assert_eq!(cf_sides(&gv(&["1.20.1", "Forge"])), None);
+        assert_eq!(cf_sides(&gv(&[])), None);
+    }
+
+    /// 关系号只收 3（必需）/ 2（可选）；内嵌库、工具、不兼容、包含都不算「要另装的前置」；
+    /// modId 0 与重复声明（任一必需）也有各自的判
+    #[test]
+    fn cf_depends_keeps_only_installable_relations() {
+        let f = serde_json::json!({
+            "dependencies": [
+                { "modId": 238222, "relationType": 3 },
+                { "modId": 238222, "relationType": 2 },
+                { "modId": 456, "relationType": 2 },
+                { "modId": 789, "relationType": 1 },
+                { "modId": 111, "relationType": 5 },
+                { "modId": 0, "relationType": 3 },
+                { "relationType": 3 }
+            ]
+        });
+        let got = cf_depends(&f);
+        assert_eq!(got.len(), 2, "内嵌/不兼容/脏行不进表");
+        assert_eq!(got[0].id, "238222");
+        assert!(got[0].required, "任一必需即必需");
+        assert_eq!(got[1].id, "456");
+        assert!(!got[1].required);
+        assert_eq!(cf_depends(&serde_json::json!({})).len(), 0);
+    }
 
     /// 回落链那两段的补零是这条规则唯一容易写错的地方：`8797042` → `8797/042`，不是 `8797/42`。
     /// 号码超过四位时只补不截（`12345678` → `12345/678`）

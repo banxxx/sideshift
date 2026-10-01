@@ -79,6 +79,25 @@ pub struct ModVersionEntry {
     pub client_side: Option<SideFlag>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub server_side: Option<SideFlag>,
+    /// 该构建声明的前置（依赖）。版本列表接口本就带着这份数据（Modrinth `dependencies[]` /
+    /// CF file `dependencies[]`），名字由一次批量反查补上；查不到就只有 id，前端按 id 兜底显示
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub depends: Vec<ModDepends>,
+}
+
+/// 构建的一条前置。`id` 是平台侧项目标识（Modrinth project_id / CurseForge 数字 mod id），
+/// `name`/`slug` 是反查回来的显示信息（平台没答上就缺省）
+#[derive(Serialize, Deserialize, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct ModDepends {
+    pub id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub slug: Option<String>,
+    /// required 必装 / optional 可选。incompatible / embedded 不进这张表——
+    /// 前者是要避开的关系，后者已经打进 jar 里，都不是「要另装的前置」
+    pub required: bool,
 }
 
 /// 手动添加那一行的取证结果（本地 jar 与在线构建共用；两侧支持度来自阶梯跑完的那一层）

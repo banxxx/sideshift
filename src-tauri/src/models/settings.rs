@@ -44,8 +44,16 @@ pub struct AppSettings {
     /// **默认关**：判据来自一个无 SLA 的第三方快照，覆盖率实测也不是满的（收录外的 slug 返回 404）。
     /// 开着时联网那一轮**只发麦块**：官方三条腿（含它没有对应端点的 sha1 批量那条）一条都不发，
     /// 存活自查不过就直接记「这一轮没跑完」，不再悄悄回落官方。
+    /// （CF 指纹腿独立于本档：它问的是 CurseForge、凭用户自己的 Key，见 `cfpack`。）
     #[serde(default)]
     pub env_lookup_mirror: bool,
+    /// 端判定的百科补全腿（MC百科词条的「运行环境」）。
+    /// **默认关**：它不是官方行为——没有公开 API，靠解析两页 HTML（搜索页 + 词条页），
+    /// 对方一次改版、一次人机验证就能让整条腿哑掉；结论也是社区编辑的第二手声明。
+    /// 开着时它只补平台各腿（Modrinth 官方/镜像 + CF 构建/指纹）全答不上的那几行，
+    /// 且名字严格同形才采信（见 `env::index::resolve_via_mcmod`）。
+    #[serde(default)]
+    pub env_lookup_mcmod: bool,
     /// 更新渠道。`None` 不是"没选过"的临时状态而是真语义：**跟随这一枚包自己的版本号**——
     /// 带预发布位的包收 Beta，纯版本号收正式版，所以新装用户一个 setting 都没动也不会站错队。
     /// 用户在设置页选过一次之后就是显式值，从此不再看自己的版本号（这正是他要的手动切换）。
@@ -228,6 +236,8 @@ impl Default for AppSettings {
             auto_classify_online: true,
             // 第三方镜像默认关：见字段注释（覆盖率与新鲜度都不由我们保证）
             env_lookup_mirror: false,
+            // 百科补全腿默认关：非官方行为（HTML 解析 + 社区二手声明），见字段注释
+            env_lookup_mcmod: false,
             update_channel: None,
             curseforge_api_key: None,
             install_loader_locally: true,

@@ -5,7 +5,7 @@ use std::path::PathBuf;
 
 use serde_json::Value;
 
-use crate::models::{LoaderKind, ModSearchPage, ModSearchQuery, ModSearchResult, ModSource, ModVersionEntry, SideFlag};
+use crate::models::{LoaderKind, ModDepends, ModSearchPage, ModSearchQuery, ModSearchResult, ModSource, ModVersionEntry, SideFlag};
 use super::client::Downloader;
 use super::types::{DownloadError, Fetch, ItemSpec};
 use super::util::{loader_cat, urlencoding};
@@ -56,6 +56,52 @@ impl ModrinthEnv {
             _ => return None,
         })
     }
+}
+
+/// 构建级 `dependencies[]` → 前置表。只收 required / optional 两档：
+/// incompatible 是要避开的关系、embedded 已经打进 jar 里，都不是「要另装的前置」。
+/// 同一项目在一条构建里重复声明时按「任一 required」记
+fn modrinth_depends(v: &Value) -> Vec<ModDepends> {
+    let mut out: Vec<ModDepends> = Vec::new();
+    for d in v["dependencies"].as_array().map(Vec::as_slice).unwrap_or_default() {
+        let id = d["project_id"].as_str().unwrap_or_default().trim().to_string();
+        if id.is_empty() {
+            continue;
+        }
+        let required = match d["dependency_type"].as_str().map(|s| s.trim().to_lowercase()) {
+            Some(t) => match t.as_str() {
+                "required" => true,
+                "optional" => false,
+                _ => continue,
+            },
+            None => continue,
+        };
+        match out.iter_mut().find(|x| x.id == id) {
+            Some(x) => x.required = x.required || required,
+            None => out.push(ModDepends {
+                id,
+                name: None,
+                slug: None,
+                required,
+            }),
+        }
+    }
+    out
+}
+
+/// 成员表里的作者名：owner 优先，没有 owner 就取第一个；表空/脏返回空串
+/// （前端对空作者省略「作者」那一段，见 OnlineAddModal 的 sub 行）
+fn owner_name(members: &Value) -> String {
+    let Some(arr) = members.as_array() else {
+        return String::new();
+    };
+    let pick = arr
+        .iter()
+        .find(|x| x["is_owner"].as_bool().unwrap_or(false))
+        .or_else(|| arr.first());
+    pick.and_then(|x| x["user"]["username"].as_str())
+        .unwrap_or_default()
+        .to_string()
 }
 
 impl Downloader {
@@ -257,7 +303,27 @@ impl Downloader {
                     file_name: file["filename"].as_str().unwrap_or("mod.jar").to_string(),
                     client_side: sides.map(|(c, _)| c),
                     server_side: sides.map(|(_, s)| s),
+                    depends: modrinth_depends(e),
                 });
+            }
+        }
+        // 前置反查：全部构建里出现过的 project_id 去重后**一次批量**问名（`GET /v2/projects?ids=…`，
+        // 上限 100——超出的那条前置只剩 id，前端按 id 兜底显示）。名字问不到就缺省，不因它失败：
+        // 版本列表本身才是主内容，前置行是顺手的显示件
+        let mut ids: Vec<String> = entries
+            .iter()
+            .flat_map(|e| e.depends.iter().map(|d| d.id.clone()))
+            .collect();
+        ids.sort();
+        ids.dedup();
+        ids.truncate(100);
+        let briefs = self.project_briefs(&ids).await;
+        for e in entries.iter_mut() {
+            for d in e.depends.iter_mut() {
+                if let Some((slug, title)) = briefs.get(&d.id) {
+                    d.slug = (!slug.is_empty()).then(|| slug.clone());
+                    d.name = (!title.is_empty()).then(|| title.clone());
+                }
             }
         }
         // 兼容请求 MC 版本的构建排前，组内按发布日期倒序；首个标推荐
@@ -270,6 +336,80 @@ impl Downloader {
             first.recommended = true;
         }
         Ok(entries)
+    }
+
+    /// 一批 project_id → `(slug, title)`（`GET /v2/projects?ids=[…]`，官方支持 id 与 slug 混列）。
+    /// 给「前置模组」显示挂名用：请求失败返回空表（调用方按 id 兜底），不算故障
+    pub async fn project_briefs(&self, ids: &[String]) -> HashMap<String, (String, String)> {
+        let mut out = HashMap::new();
+        if ids.is_empty() {
+            return out;
+        }
+        let list = serde_json::to_string(&ids).unwrap_or_default();
+        let url = format!("{MODRINTH_API}/projects?ids={}", urlencoding(&list));
+        if let Ok(v) = self.get_json(&url).await {
+            if let Some(arr) = v.as_array() {
+                for p in arr {
+                    let id = p["id"].as_str().unwrap_or_default().to_string();
+                    if id.is_empty() {
+                        continue;
+                    }
+                    out.insert(
+                        id,
+                        (
+                            p["slug"].as_str().unwrap_or_default().to_string(),
+                            p["title"].as_str().unwrap_or_default().to_string(),
+                        ),
+                    );
+                }
+            }
+        }
+        out
+    }
+
+    /// 详情页直跳一枚前置：按来源分派到两家的单项目查询
+    pub async fn mod_detail(
+        &self,
+        source: ModSource,
+        mod_id: &str,
+    ) -> Result<ModSearchResult, DownloadError> {
+        if source == ModSource::Curseforge {
+            return self.curseforge_detail(mod_id).await;
+        }
+        self.modrinth_detail(mod_id).await
+    }
+
+    /// 单个项目的展示信息（`GET /v2/project/{id|slug}`）：详情页直跳一枚前置时，
+    /// 把版本列表给不了的那几样（简介/图标/下载量/端标签）补齐。项目对象不带作者名
+    /// （只有 team id），顺带问一次成员表取 owner——两发并发；成员表挂了不碍事，
+    /// author 留空让前端把作者那一段省掉
+    pub async fn modrinth_detail(&self, mod_id: &str) -> Result<ModSearchResult, DownloadError> {
+        let key = urlencoding(mod_id.trim());
+        let proj_url = format!("{MODRINTH_API}/project/{key}");
+        let members_url = format!("{MODRINTH_API}/project/{key}/members");
+        let proj = self.get_json(&proj_url);
+        let members = self.get_json(&members_url);
+        let (proj, members) = tokio::join!(proj, members);
+        let v = proj?;
+        let id = v["id"].as_str().unwrap_or_default().to_string();
+        if id.is_empty() {
+            return Err(DownloadError::NotFound(format!("Modrinth 项目 {mod_id}")));
+        }
+        let sides = Self::modrinth_env(&v).sides();
+        Ok(ModSearchResult {
+            id,
+            slug: v["slug"].as_str().map(String::from),
+            name: v["title"].as_str().unwrap_or_default().to_string(),
+            description: v["description"].as_str().unwrap_or_default().to_string(),
+            author: owner_name(&members.unwrap_or_default()),
+            downloads: v["downloads"].as_u64().unwrap_or(0),
+            icon_url: v["icon_url"].as_str().map(String::from),
+            source: ModSource::Modrinth,
+            compatible: true,
+            already_added: false,
+            client_side: sides.map(|(c, _)| c),
+            server_side: sides.map(|(_, s)| s),
+        })
     }
 
     /// 类别标签（Modrinth 走 GET /tag/category，CF 走免 Key 的 /categories），供「类别」下拉
@@ -339,6 +479,44 @@ impl Downloader {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// 作者名取 owner；没有 owner 取第一个；空表/脏形状返回空串
+    #[test]
+    fn owner_name_prefers_the_owner_and_tolerates_dirty_tables() {
+        let members = serde_json::json!([
+            { "user": { "username": "helper" }, "is_owner": false },
+            { "user": { "username": "jellysquid3" }, "is_owner": true }
+        ]);
+        assert_eq!(owner_name(&members), "jellysquid3");
+        let no_flag = serde_json::json!([{ "user": { "username": "solo" } }]);
+        assert_eq!(owner_name(&no_flag), "solo");
+        assert_eq!(owner_name(&serde_json::json!([])), "");
+        assert_eq!(owner_name(&serde_json::json!({"x": 1})), "");
+    }
+
+    /// 只收 required/optional 两档；同一项目重复声明按「任一 required」记；
+    /// incompatible / embedded 与缺 project_id 的脏行不进表
+    #[test]
+    fn modrinth_depends_keeps_only_installable_relations() {
+        let v = serde_json::json!({
+            "dependencies": [
+                { "project_id": "AANobbMI", "dependency_type": "required" },
+                { "project_id": "AANobbMI", "dependency_type": "optional" },
+                { "project_id": "xyz12345", "dependency_type": "optional" },
+                { "project_id": "bad00000", "dependency_type": "incompatible" },
+                { "project_id": "emb00000", "dependency_type": "embedded" },
+                { "dependency_type": "required" },
+                { "project_id": "notype123" }
+            ]
+        });
+        let got = modrinth_depends(&v);
+        assert_eq!(got.len(), 2, "incompatible/embedded/脏行不进表");
+        assert_eq!(got[0].id, "AANobbMI");
+        assert!(got[0].required, "任一 required 即必需");
+        assert_eq!(got[1].id, "xyz12345");
+        assert!(!got[1].required);
+        assert_eq!(modrinth_depends(&serde_json::json!({})).len(), 0);
+    }
 
     #[test]
     fn modrinth_sides_prefers_project_flags_and_falls_back_to_environment() {

@@ -2,12 +2,13 @@
 import { ChevronLeft, ChevronRight, ExternalLink, Puzzle } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import * as api from "@/lib/api";
-import { formatSize, loaderLabel } from "@/lib/format";
-import { activeLocale, tSource, useT } from "@/lib/i18n";
+import { formatSize, loaderLabel, modcatLabel } from "@/lib/format";
+import { activeLocale, useT } from "@/lib/i18n";
 import { notify } from "@/lib/notify";
 import { errOf } from "@/lib/errors";
 import type {
     LoaderKind,
+    ModDependency,
     ModSearchResult,
     ModTranslation,
     ModVersionEntry,
@@ -20,6 +21,8 @@ import {
     ModalShell,
     SearchBox,
     SearchSelect,
+    TIP_TRIGGER,
+    Tip,
     type SelectOption,
     ToneChip,
 } from "@/components/ui";
@@ -48,7 +51,15 @@ export function OnlineAddModal({
     onAdd: (mod: ModSearchResult, version: ModVersionEntry) => void;
 }) {
     const t = useT();
-    const [view, setView] = useState<"list" | "detail">("list");
+    /**
+     * 详情页栈：从搜索列表进详情是开新链（栈里一页）；点一枚前置是往链上压一页
+     * （PCL2 口径，直接进那个前置的详情而不是回搜索）。栈顶就是当前显示的那本；
+     * 返回键逐级退，退空了回到列表。压栈的是完整搜索结果，或「先按 id/名字进的半份、
+     * 单项目查询到了再原地补全」的前置页
+     */
+    const [detailStack, setDetailStack] = useState<ModSearchResult[]>([]);
+    /** 栈顶即当前详情；派生值——栈空 = 一级列表视图 */
+    const detail = detailStack[detailStack.length - 1] ?? null;
     const [source, setSource] = useState<Source>("modrinth");
     const [query, setQuery] = useState("");
     const [debounced, setDebounced] = useState("");
@@ -59,7 +70,6 @@ export function OnlineAddModal({
     const [catSel, setCatSel] = useState("all");
     const [mcOptions, setMcOptions] = useState<VersionOption[]>([]);
     const [categories, setCategories] = useState<string[]>([]);
-    const [detail, setDetail] = useState<ModSearchResult | null>(null);
     const [versions, setVersions] = useState<ModVersionEntry[]>([]);
     const [versionsLoading, setVersionsLoading] = useState(false);
     const [versionsError, setVersionsError] = useState<string | null>(null);
@@ -95,8 +105,7 @@ export function OnlineAddModal({
     // 弹窗壳常驻挂载：每次打开重置回一级视图与包自身版本/加载器
     useEffect(() => {
         if (!open) return;
-        setView("list");
-        setDetail(null);
+        setDetailStack([]);
         setQuery("");
         setDebounced("");
         setPage(1);
@@ -178,13 +187,11 @@ export function OnlineAddModal({
     /** 当前来源的显示名：页脚那句状态与详情页副标题都按它说 */
     const srcName = source === "modrinth" ? "Modrinth" : "CurseForge";
 
-    const openDetail = (mod: ModSearchResult) => {
-        setDetail(mod);
-        setView("detail");
+    /** 载入某一本的版本列表（进详情与逐级返回共用）：换一本 = 换一句译文，旧译文与显示态都不带过来 */
+    const loadVersions = (mod: ModSearchResult) => {
         setVersions([]);
         setVersionsError(null);
         setVersionsLoading(true);
-        // 换一本 = 换一句译文：上一本的译文与显示态都不带过来
         setZh(null);
         setZhOn(false);
         setZhLoading(false);
@@ -193,6 +200,53 @@ export function OnlineAddModal({
             .then(setVersions)
             .catch((e: unknown) => setVersionsError(e instanceof Error ? e.message : String(e)))
             .finally(() => setVersionsLoading(false));
+    };
+
+    /** 进详情：从列表进入开新链；已在详情里（前置跳转）则把当前这本压栈 */
+    const openDetail = (mod: ModSearchResult) => {
+        setDetailStack((s) => (detail ? [...s, mod] : [mod]));
+        loadVersions(mod);
+    };
+
+    /** 返回键：逐级退回上一本详情，退空了回到搜索列表。上一本的版本列表要重新载入 */
+    const goBack = () => {
+        const next = detailStack.slice(0, -1);
+        setDetailStack(next);
+        const top = next[next.length - 1];
+        if (top) loadVersions(top);
+    };
+
+    /**
+     * 点一枚前置 = 直跳它的详情页：先用手里已有的字段立即进入（版本列表马上能看），
+     * 展示信息（简介/作者/图标/下载量）由一发单项目查询补齐，没补齐前按 id/名字兜底。
+     * 回复到达前用户又跳了别的：栈顶 id 对不上就丢弃，别把资料挂错本
+     */
+    const openDependency = (dep: ModDependency) => {
+        if (!detail) return;
+        const src = detail.source;
+        openDetail({
+            id: dep.id,
+            slug: dep.slug,
+            name: dep.name || dep.slug || dep.id,
+            description: "",
+            author: "",
+            downloads: 0,
+            iconUrl: undefined,
+            source: src,
+            compatible: true,
+            alreadyAdded: false,
+        });
+        void api
+            .modDetail(src, dep.id)
+            .then((full) => {
+                setDetailStack((s) => {
+                    const top = s[s.length - 1];
+                    if (!top || top.id !== dep.id || top.source !== src) return s;
+                    return [...s.slice(0, -1), { ...top, ...full }];
+                });
+            })
+            // 展示信息没补齐也有 id/名字兜底，详情页照常可用（版本列表是独立一路请求）
+            .catch(() => {});
     };
 
     /* 「翻译」这枚钮的门槛：机翻出来的是简体，繁体档给它会露出错体 ⇒ 只在简体中文档出现；
@@ -211,7 +265,7 @@ export function OnlineAddModal({
         }
         setZhLoading(true);
         void api
-            .translateModZh(mod.source, slug)
+            .translateModZh(mod.source, slug, mod.name)
             .then((tr) => {
                 setZhLoading(false);
                 if (!tr) {
@@ -236,8 +290,7 @@ export function OnlineAddModal({
 
     const close = () => {
         onClose();
-        setView("list");
-        setDetail(null);
+        setDetailStack([]);
     };
 
     const verOpts = useMemo<SelectOption[]>(
@@ -265,9 +318,10 @@ export function OnlineAddModal({
     const catOpts = useMemo<SelectOption[]>(
         () => [
             { value: "all", chip: t("common.entry-2", "全部"), label: t("convert-modals.categories", "全部类别") },
-            // 类别名来自后端平台词表（Modrinth 为英文 slug，CurseForge 可能中文）：
-            // value 用原文（走 IPC 的筛选项），显示处 tSource(raw) 让登记过的类别名自动翻
-            ...categories.map((c) => ({ value: c, chip: tSource(c), label: tSource(c) })),
+            // 类别名来自后端平台词表（Modrinth 为英文 slug，CurseForge 为类目名）：
+            // value 恒用原文（走 IPC 的筛选项），显示处 modcatLabel 按当前语言给名字——
+            // 词表没登记的长尾原样返回，筛选不受任何影响
+            ...categories.map((c) => ({ value: c, chip: modcatLabel(c), label: modcatLabel(c) })),
         ],
         [categories, t]
     );
@@ -281,6 +335,16 @@ export function OnlineAddModal({
         [versions, verSel, loSel]
     );
 
+    /**
+     * 前置行取哪份构建的依赖：推荐构建优先（它被筛掉时退到筛选后的第一个）。
+     * 依赖是构建级声明，同一模组各构建的前置极少不同，取参考构建即可代表
+     */
+    const refVersion = useMemo(
+        () => shownVersions.find((v) => v.recommended) ?? shownVersions[0] ?? null,
+        [shownVersions]
+    );
+    const depends = refVersion?.depends ?? [];
+
     const filterNote = `${verSel ? `Minecraft ${verSel}` : t("convert-modals.versions", "全部版本")} · ${loSel ? loaderLabel(loSel) : t("convert-modals.loader", "任意加载器")}`;
 
     /* 模组名后那一枚端标签（全弹窗只此一处，列表行与版本行都不再挂）：
@@ -292,25 +356,33 @@ export function OnlineAddModal({
     }, [detail, shownVersions]);
 
     /* ---- 二级视图：模组详情 + 版本列表（整行点击下载） ---- */
-    if (view === "detail" && detail) {
+    if (detail) {
         const zhDesc = zhNow?.descriptionZh;
         return (
             <ModalShell
                 open={open}
                 onClose={close}
                 persistent
-                back={() => setView("list")}
+                back={goBack}
                 width={800}
                 height={464}
                 icon={Puzzle}
                 iconNode={<ModIcon url={detail.iconUrl} className="size-10" puzzleClass="size-5" />}
                 title={zhNow?.titleZh || detail.name}
                 titleTag={modTag ? <SideChip sides={modTag} warnClient /> : undefined}
-                sub={t("convert-modals.src-author", "{{src}} · 作者 {{author}} · {{downloads}} 次下载", {
-                    src: srcName,
-                    author: detail.author,
-                    downloads: formatCount(detail.downloads),
-                })}
+                sub={
+                    detail.author
+                        ? t("convert-modals.src-author", "{{src}} · 作者 {{author}} · {{downloads}} 次下载", {
+                              src: srcName,
+                              author: detail.author,
+                              downloads: formatCount(detail.downloads),
+                          })
+                        // 直跳的前置页作者可能没查到（成员表挂了）：省掉那一段，别渲染出「作者 」悬空
+                        : t("convert-modals.src-downloads", "{{src}} · {{downloads}} 次下载", {
+                              src: srcName,
+                              downloads: formatCount(detail.downloads),
+                          })
+                }
             >
                 {/* 简介一栏就地换译文：两条各一个 Collapse 反向开关、同一条曲线，所以高度沿同一条
                     插值走过去，不会「先塌一下再撑开」。外层普通 div 让父级那格 gap 只算一次（两格都在
@@ -363,6 +435,40 @@ export function OnlineAddModal({
                         )}
                     </div>
                 </div>
+                {/* 前置模组一行：数据来自版本列表接口本就带回的构建级 dependencies[]，
+                    名字由后端一发批量反查补上。放在下载选择正上方——选中某份构建前先看清
+                    它要什么。点一枚前置 = 直跳它的详情页（PCL2 口径），在那里还能顺手把它加进方案；
+                    返回键逐级退回。悬浮说明用项目自己的 Tip，不挂原生 title */}
+                {!versionsLoading && depends.length > 0 && (
+                    <div className="flex shrink-0 flex-wrap items-center gap-x-2 gap-y-1 text-[11px] leading-[16px]">
+                        <span className="font-medium text-text-3">
+                            {t("convert-modals.depends", "前置模组")}
+                        </span>
+                        {depends.map((d) => (
+                            <button
+                                key={d.id}
+                                type="button"
+                                aria-label={t("convert-modals.depends-open", "查看前置详情")}
+                                className={cn(
+                                    "max-w-[220px] cursor-pointer truncate rounded bg-surface px-1.5 py-0.5 text-text-2 transition-colors hover:bg-surface-2 hover:text-text-1",
+                                    TIP_TRIGGER
+                                )}
+                                onClick={() => openDependency(d)}
+                            >
+                                <Tip
+                                    label={t("convert-modals.depends-open", "查看前置详情")}
+                                    align="center"
+                                />
+                                {d.name || d.slug || d.id}
+                                {!d.required && (
+                                    <span className="ml-1 text-text-3">
+                                        {t("convert-modals.depends-optional", "可选")}
+                                    </span>
+                                )}
+                            </button>
+                        ))}
+                    </div>
+                )}
                 <div className="-mx-1 flex min-h-0 flex-1 flex-col gap-0.5 overflow-auto px-1">
                     {versionsLoading ? (
                         <ListSkeleton rows={5} />

@@ -47,9 +47,9 @@ async fn cf_enrich(state: &S<'_>, reprobe: bool) -> (usize, bool) {
     let dl = downloader_of(state);
     let needs_key = !dl.has_curseforge_key();
     let out = cfpack::ensure(&dl, &cache_dir, &parsed, reprobe).await;
-    // 一轮下来行内容一点没变（索引本来就热、或没 Key 一条没补到、也没许可态可写）⇒
+    // 一轮下来行内容一点没变（索引本来就热、或没 Key 一条没补到、也没许可态/端标签可写）⇒
     // 什么都不动，尤其别把 env 取证结论清掉：那会让同一个包切页往返又重跑一整轮离线探测
-    if !out.renamed && !out.links_changed {
+    if !out.renamed && !out.links_changed && !out.env_changed {
         return (rows, needs_key);
     }
     {
@@ -94,7 +94,7 @@ pub async fn classify_pack(
     // 拿着一份旧的名字去建方案（第一屏一排编号），而且 reuse 那条短路会把补取整个跳过
     let (cf_rows, cf_needs_key) = cf_enrich(&state, force).await;
     // 快照 inputs：guard 必须在这个块里结束，否则 MutexGuard 跨 await 让命令 future 不 Send
-    let (parsed, file_name, strip, online, mirror, cache_dir, concurrency, cached) = {
+    let (parsed, file_name, strip, online, mirror, mcmod, cache_dir, concurrency, cached) = {
         let inner = lock(&state);
         let empty = env::EvidenceMap::new();
         match last_parsed_of(&inner) {
@@ -126,6 +126,7 @@ pub async fn classify_pack(
                     inner.settings.strip_client_only,
                     inner.settings.auto_classify_online,
                     inner.settings.env_lookup_mirror,
+                    inner.settings.env_lookup_mcmod,
                     PathBuf::from(&inner.settings.cache_dir),
                     inner.settings.concurrency.max(1) as usize,
                     cached,
@@ -200,6 +201,22 @@ pub async fn classify_pack(
     env::apply_probes(&probes, &mut targets);
     // 离线层 2：上次联网查到的本地索引（有则免去在线请求）
     let pending = env::apply_index(&index, &targets, &mut ev);
+    // CF 构建级端标签（cfpack 从 cf-files-index.json 贴回行上的那枚）：作者上传时勾的
+    // 官方声明，是 CF 清单行在 Modrinth 之外唯一的构建级证据。播种排在 jar 自证与索引
+    // 结论之后——`put` 只认等档或更好，真正更优的旧结论不会被这枚新标签压掉
+    for f in &parsed.mod_files {
+        if let Some((c, s)) = f.cf.as_ref().and_then(|r| r.env) {
+            env::put(
+                &mut ev,
+                &f.path,
+                env::Evidence {
+                    client: Some(c),
+                    server: Some(s),
+                    source: EnvSource::CfFile,
+                },
+            );
+        }
+    }
 
     let plan = detector::build_plan(&parsed, strip, &ev, &code);
     // 离线那次推送：还有在线层要跑就说明本轮没结束（done=false，前端继续转圈）
@@ -287,6 +304,7 @@ pub async fn classify_pack(
                     &pending,
                     &mut ev,
                     mirror,
+                    mcmod,
                 ),
             )
             .await

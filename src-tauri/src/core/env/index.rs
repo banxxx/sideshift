@@ -1,20 +1,32 @@
 //! 第 3/4 层：在线反查（按设置只走 Modrinth 官方或麦块镜像那一家）+ `cache_dir/env-index.json`
-//! 本地索引（离线即答）。
+//! 本地索引（离线即答）+ CF 指纹腿（官方平台、凭用户自己的 Key）。
 
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
-use std::time::Duration;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use futures::stream::{self, StreamExt};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 use crate::core::downloader::{mcmod_confident, Downloader, McmodPage, ModrinthEnv};
-use crate::models::EnvSource;
-use super::evidence::{evidence_from_modrinth, put, Evidence, EvidenceMap};
+use crate::models::{EnvSource, SideFlag};
+use super::evidence::{evidence_from_modrinth, put, rank, Evidence, EvidenceMap};
 use super::ident::{is_slug, slugs_from_file_name};
 use super::jar::JarProbe;
 
 const INDEX_FILE: &str = "env-index.json";
+
+/// 本地索引里一条结论的保鲜期。端声明基本是静态的，但「作者后来修正了服务端支持」
+/// 与「镜像快照滞后」都是真事：过期的结论照常垫底（在线轮被掐时它不至于裸奔），
+/// 但仍进反查队列争取刷新——答上了就按 `put` 的等档/更优档规则覆盖
+const INDEX_TTL_DAYS: i64 = 90;
+
+fn now_secs() -> i64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0)
+}
 
 fn sha1_key(h: &str) -> String {
     format!("sha1:{}", h.to_lowercase())
@@ -22,8 +34,29 @@ fn sha1_key(h: &str) -> String {
 fn project_key(p: &str) -> String {
     format!("proj:{}", p.to_lowercase())
 }
+fn fp_key(fp: u32) -> String {
+    format!("fp:{fp}")
+}
 
-/// `cache_dir/env-index.json`：sha1 / 项目 → 端证据。联网层查到的结果写这里，
+/// 索引条目的落盘形状：证据 + 记录时间。`ts` 缺失 = 端 TTL 上线前写的老条目（按过期处理，
+/// 下一轮重查一次并补上时间戳）。`flatten` 进 `Evidence` 的字段 ⇒ 盘上形状对老文件向后兼容
+#[derive(Serialize, Deserialize)]
+struct StoredEvidence {
+    #[serde(flatten)]
+    ev: Evidence,
+    /// 记录时间（unix 秒）；`None` = 老条目，按过期处理
+    #[serde(default)]
+    ts: Option<i64>,
+}
+
+impl StoredEvidence {
+    fn fresh(&self) -> bool {
+        self.ts
+            .is_some_and(|t| now_secs() - t < INDEX_TTL_DAYS * 24 * 3600)
+    }
+}
+
+/// `cache_dir/env-index.json`：sha1 / 项目 / 指纹 → 端证据。联网层查到的结果写这里，
 /// 下次同一模组（哪怕在另一个包里）离线即答。
 ///
 /// `transparent`：盘上存的就是这张表本身（`save` 写 `&self.map`），不是 `{"map": …}` 的包装。
@@ -32,7 +65,7 @@ fn project_key(p: &str) -> String {
 #[derive(Default, Deserialize)]
 #[serde(transparent)]
 pub struct EnvIndex {
-    map: HashMap<String, Evidence>,
+    map: HashMap<String, StoredEvidence>,
 }
 
 impl EnvIndex {
@@ -50,8 +83,8 @@ impl EnvIndex {
         }
     }
 
-    fn get(&self, key: &str) -> Option<Evidence> {
-        self.map.get(key).copied()
+    fn stored(&self, key: &str) -> Option<&StoredEvidence> {
+        self.map.get(key)
     }
 
     /// 本地索引是否已答过这一份字节：答过就不必为它解 class（命令层的省钱闸门）
@@ -60,7 +93,7 @@ impl EnvIndex {
     }
 
     fn record(&mut self, key: String, ev: Evidence) {
-        self.map.insert(key, ev);
+        self.map.insert(key, StoredEvidence { ev, ts: Some(now_secs()) });
     }
 }
 
@@ -70,6 +103,9 @@ pub struct Target {
     /// 包内条目路径（EvidenceMap 的键）
     pub path: String,
     pub sha1: Option<String>,
+    /// jar 字节的 CF murmur2 指纹：sha1 在 Modrinth 答不上（CF 独占的 Forge 模组）、
+    /// slug 又猜不出时，向 CF 按文件反查的唯一身份钥匙（见 `resolve_via_fingerprints`）
+    pub cf_fingerprint: Option<u32>,
     /// 权威项目引用：Modrinth 下载 URL 里的 project_id，查到即采信
     pub project_id: Option<String>,
     /// slug 候选（模组自报 id 在前，文件名切出的 id 在后）；返回项目名字对得上才采信
@@ -88,6 +124,9 @@ pub fn apply_probes(probes: &HashMap<String, JarProbe>, targets: &mut [Target]) 
         if t.sha1.is_none() {
             t.sha1 = p.sha1.clone();
         }
+        if t.cf_fingerprint.is_none() {
+            t.cf_fingerprint = p.cf_fingerprint;
+        }
         if let Some(id) = p.mod_id.as_deref().map(|s| s.to_lowercase()) {
             if is_slug(&id) && t.slugs.first().map(|s| s.as_str()) != Some(id.as_str()) {
                 t.slugs.insert(0, id);
@@ -99,7 +138,9 @@ pub fn apply_probes(probes: &HashMap<String, JarProbe>, targets: &mut [Target]) 
     }
 }
 
-/// 用本地索引填空缺（不发请求）；返回仍需联网的 target 下标
+/// 用本地索引填空缺（不发请求）；返回仍需联网的 target 下标。
+/// 命中的行里**过期的结论照常垫底**（在线轮被掐时它不至于裸奔），但仍进反查队列争取刷新：
+/// 作者修正过声明、镜像快照滞后的旧结论不会因为索引热就永远压着新的真话。
 pub fn apply_index(index: &EnvIndex, targets: &[Target], out: &mut EvidenceMap) -> Vec<usize> {
     let mut pending = Vec::new();
     for (i, t) in targets.iter().enumerate() {
@@ -113,14 +154,19 @@ pub fn apply_index(index: &EnvIndex, targets: &[Target], out: &mut EvidenceMap) 
             .into_iter()
             .chain(t.slugs.iter().map(|s| s.as_str()))
             .chain(t.title.as_deref())
-            .find_map(|p| index.get(&project_key(p)));
-        let hit = t
+            .find_map(|p| index.stored(&project_key(p)));
+        let stored = t
             .sha1
             .as_deref()
-            .and_then(|h| index.get(&sha1_key(h)))
+            .and_then(|h| index.stored(&sha1_key(h)))
             .or(by_proj);
-        match hit {
-            Some(ev) => put(out, &t.path, ev),
+        match stored {
+            Some(s) => {
+                put(out, &t.path, s.ev);
+                if !s.fresh() {
+                    pending.push(i);
+                }
+            }
             None => pending.push(i),
         }
     }
@@ -240,8 +286,8 @@ fn mirror_project_queue(
 /// 那样两家的钱都付一遍，选了国内源反而比纯官方更慢（镜像 0.2s + 官方 2.2s 串在一行上）。
 /// `mirror=true` ⇒ 平台那条链只发 `api.minekuai.cn`（含 sha1 批量那条 Modrinth-only 接口也不发，
 /// 见 `resolve_via_mirror` 的代价说明）；`mirror=false` ⇒ 官方三条腿照旧，镜像连存活自查都不做。
-/// 两档末尾都挂着同一条百科补全腿（`resolve_via_mcmod`）：它不属于「平台源」，
-/// 只在前面所有层一条都没答上的行上发请求，问的是 `mcmod.cn`，失败也不改本函数的返回值。
+/// 两档末尾都挂着同一条收尾（`shared_tail`）：CF 指纹腿（官方平台、凭用户自己的 Key，
+/// 与「端信息反查源」那档设置无关——cfpack 的 CF 补取同口径）与百科补全腿（看 `mcmod` 开关）。
 /// 结果同时写回 out 与索引，并且分批落盘。
 /// 返回 false = 有请求失败、超出请求上限，或被整轮预算掐掉（前端提示「联网反查未全部完成」）。
 pub async fn resolve_online(
@@ -252,9 +298,10 @@ pub async fn resolve_online(
     pending: &[usize],
     out: &mut EvidenceMap,
     mirror: bool,
+    mcmod: bool,
 ) -> bool {
     if mirror {
-        return resolve_via_mirror(dl, index, cache_dir, targets, pending, out).await;
+        return resolve_via_mirror(dl, index, cache_dir, targets, pending, out, mcmod).await;
     }
     let mut ok = true;
 
@@ -413,8 +460,8 @@ pub async fn resolve_online(
         index.save(cache_dir);
     }
 
-    // 补全腿：官方三条腿下来仍无一条证据的行（`out` 里没键的那些）
-    resolve_via_mcmod(dl, index, cache_dir, targets, out).await;
+    // 收尾：CF 指纹腿（官方平台补全）+ 百科补全腿（看设置开关）。均为补全，失败不改 `ok`
+    shared_tail(dl, index, cache_dir, targets, pending, out, mcmod).await;
 
     index.save(cache_dir);
     ok
@@ -442,6 +489,7 @@ async fn resolve_via_mirror(
     targets: &[Target],
     pending: &[usize],
     out: &mut EvidenceMap,
+    mcmod: bool,
 ) -> bool {
     let health = dl.mirror_health().await;
     let mut ok = health.project && health.search;
@@ -560,16 +608,106 @@ async fn resolve_via_mirror(
         }
     }
 
-    // 补全腿：镜像两条腿下来仍无一条证据的行。它发的是 `mcmod.cn`，不是 Modrinth 官方，
-    // 所以「选了麦块就只问麦块」那条口径没被破——破的只是「这一档没第二个源可问」这句旧说明
-    resolve_via_mcmod(dl, index, cache_dir, targets, out).await;
+    // 收尾：CF 指纹腿（官方平台补全）+ 百科补全腿（看设置开关）。CF 是独立平台，
+    // 指纹腿与「选了麦块就只问麦块」的口径不冲突——破的只是「Modrinth 官方一条不发」那句
+    shared_tail(dl, index, cache_dir, targets, pending, out, mcmod).await;
 
     index.save(cache_dir);
     ok
 }
 
+/// 两条平台档（官方 / 镜像）共用的收尾：CF 指纹腿 + 百科补全腿。
+/// 都是补全——请求失败不改调用方的 `ok`；百科腿还要看设置开关（默认关，
+/// 它是社区二手声明 + HTML 解析，见 `resolve_via_mcmod` 的纪律说明）
+async fn shared_tail(
+    dl: &Downloader,
+    index: &mut EnvIndex,
+    cache_dir: &Path,
+    targets: &[Target],
+    pending: &[usize],
+    out: &mut EvidenceMap,
+    mcmod: bool,
+) {
+    resolve_via_fingerprints(dl, index, cache_dir, targets, pending, out).await;
+    if mcmod {
+        resolve_via_mcmod(dl, index, cache_dir, targets, out).await;
+    }
+}
+
+/// CF 指纹腿一批发多少个指纹。接口单批上限 128，取 100 留余量；
+/// 真正的花销是「每 100 行一发请求」，比项目腿的一行一发低两个量级
+const FP_BATCH: usize = 100;
+
+/// CF 指纹腿：sha1 / 项目 / 搜索各层都没答上、但手里有 murmur2 指纹的行（CF 独占的
+/// Forge 模组就长这样——不在 Modrinth 上，哈希反查必然落空），向 CF 按文件反查。
+/// 匹配上的行从 file 对象取构建级端标签（`EnvSource::CfFile`）与 sha1——证据同时挂
+/// `fp:` 与 `sha1:` 两个键，下次离线即答。
+///
+/// 它排在这里而不是平台腿之前：平台腿答上的行（Modrinth 哈希/项目）比 CF 标签更优或同级，
+/// 先跑可以省下指纹腿的行；反过来指纹腿答上的行，是平台各层确实无解的那批。
+/// 现有证据**不优于** CF 构建标签的行才进场（镜像 / 百科 / mrpack / 名称层都算）——
+/// jar 自证与 Modrinth 哈希/项目答过的行再问一轮只会得到更差的结论，白花请求。
+///
+/// 没配 Key：整腿跳过，一行请求都不发（与 cfpack 的取链探测同口径）。
+/// **失败不改调用方的 `ok`**：CF 是独立平台，这一腿没答上不该把 Modrinth 那侧
+/// 演成「联网反查未全部完成」；没答上的行留在待查列，下一轮再试
+async fn resolve_via_fingerprints(
+    dl: &Downloader,
+    index: &mut EnvIndex,
+    cache_dir: &Path,
+    targets: &[Target],
+    pending: &[usize],
+    out: &mut EvidenceMap,
+) {
+    if !dl.has_curseforge_key() {
+        return;
+    }
+    let rows: Vec<usize> = pending
+        .iter()
+        .copied()
+        .filter(|&i| {
+            targets[i].cf_fingerprint.is_some()
+                && out
+                    .get(&targets[i].path)
+                    .is_none_or(|ev| rank(ev.source) >= rank(EnvSource::CfFile))
+        })
+        .collect();
+    // 指纹去重：同一份 jar 在包里出现两次（或两行指向同一构建）只问一次
+    let mut uniq: Vec<u32> = rows
+        .iter()
+        .filter_map(|&i| targets[i].cf_fingerprint)
+        .collect();
+    uniq.sort_unstable();
+    uniq.dedup();
+    if uniq.is_empty() {
+        return;
+    }
+    for chunk in uniq.chunks(FP_BATCH) {
+        let Ok(matches) = dl.curseforge_fingerprints(chunk).await else {
+            return; // 缺 Key / 网络故障：本轮收队，已拿到的部分照常落盘
+        };
+        for &i in &rows {
+            let t = &targets[i];
+            let Some(fp) = t.cf_fingerprint else { continue };
+            let Some(hit) = matches.get(&fp) else { continue };
+            let Some((c, s)) = hit.sides else { continue };
+            let ev = Evidence {
+                client: Some(c),
+                server: Some(s),
+                source: EnvSource::CfFile,
+            };
+            put(out, &t.path, ev);
+            index.record(fp_key(fp), ev);
+            if let Some(h) = &hit.sha1 {
+                index.record(sha1_key(h), ev);
+            }
+        }
+        index.save(cache_dir);
+    }
+}
+
 /// 补全腿：平台各腿（官方三条 / 镜像两条）**全答不上**的那些行，才去 MC百科各问一次。
-/// 只在 `resolve_online` 与 `resolve_via_mirror` 的末尾调用，所以对已有证据的行零影响：
+/// 只在 `shared_tail` 里调用（官方档与镜像档共用），所以对已有证据的行零影响：
 /// 一行只要被 jar / 哈希 / 项目 / 镜像任何一层答过，`out` 里就有它的键，这一层连请求都不发。
 ///
 /// **它的失败不改 `complete`**（返回 `()`，不进 `ok`）：这一层是补全，不是用户选中的那个源。
@@ -584,7 +722,7 @@ async fn resolve_via_mirror(
 ///
 /// 采信要**两道同形**：搜索列表里那条的名字要对得上，词条页标题也得对得上（页面改版时
 /// 列表与详情页不会同时恰好糊成一个对得上的名字）。结论同时挂在这一行的 sha1 与全部项目候选下，
-/// 下次离线即答——与其余各层同一口径，也因此同样落在「索引不过期」那条遗留约束里。
+/// 下次离线即答——与其余各层同一口径，也同样受「索引保鲜期」管着（见 `INDEX_TTL_DAYS`）。
 async fn resolve_via_mcmod(
     dl: &Downloader,
     index: &mut EnvIndex,
@@ -693,14 +831,18 @@ fn store_mcmod(
 
 /// 单个本地 jar 的端取证阶梯（用户手动添加的行走这条路），口径与整包分类完全一致：
 /// jar 自证 → 本地索引（离线即答）→ 联网按设置选定的那一个源反查并落盘（见 `resolve_online`）。
-/// 返回 `None` = 三层都没结论（前端标「需人工确认」，绝不猜）
+/// `cf` = 这枚 jar 的 CF 构建级端标签（版本列表带来的官方声明，本地添加恒 None）：
+/// 在 jar 自证与索引结论**之后**播种，`put` 只认等档或更好，真正更优的旧结论压不过它。
+/// 返回 `None` = 各层都没结论（前端标「需人工确认」，绝不猜）
 pub async fn resolve_local_jar(
     dl: &Downloader,
     cache_dir: &Path,
     file_name: &str,
     probe: &JarProbe,
+    cf: Option<(SideFlag, SideFlag)>,
     online: bool,
     mirror: bool,
+    mcmod: bool,
 ) -> Option<Evidence> {
     let key = file_name.to_string();
     let mut out: EvidenceMap = HashMap::new();
@@ -710,6 +852,7 @@ pub async fn resolve_local_jar(
     let mut targets = vec![Target {
         path: key.clone(),
         sha1: probe.sha1.clone(),
+        cf_fingerprint: probe.cf_fingerprint,
         project_id: None,
         slugs: slugs_from_file_name(file_name),
         title: None,
@@ -719,21 +862,32 @@ pub async fn resolve_local_jar(
     apply_probes(&probes, &mut targets);
     let mut index = EnvIndex::load(cache_dir);
     let pending = apply_index(&index, &targets, &mut out);
+    if let Some((c, s)) = cf {
+        put(
+            &mut out,
+            &key,
+            Evidence {
+                client: Some(c),
+                server: Some(s),
+                source: EnvSource::CfFile,
+            },
+        );
+    }
     if online && !pending.is_empty() {
         resolve_online(
-            dl, &mut index, cache_dir, &targets, &pending, &mut out, mirror,
+            dl, &mut index, cache_dir, &targets, &pending, &mut out, mirror, mcmod,
         )
         .await;
     }
     out.get(&key).copied()
 }
 
-/// 「从网络添加」的构建行走同一条阶梯。CurseForge 的响应里没有任何端声明（实测 file 对象
-/// 只有 `gameVersions` 那种类标签），但它给了**构建字节的 sha1**——同一份 jar 传到两个平台
-/// 哈希逐字相同，所以拿它当身份就能问到 Modrinth 那两层（按哈希反查构建 → 项目/显示名），
-/// 结论与包内行同口径、同样落盘，第二次添加零请求。
+/// 「从网络添加」的构建行走同一条阶梯。CurseForge 的响应里没有结构化的端声明，但它给了
+/// **构建字节的 sha1** 与构建级端标签（`gameVersions` 的 Client/Server，前端版本列表解析好的
+/// 那两个值从 `cf` 传进来）——sha1 能问到 Modrinth 那两层（按哈希反查构建 → 项目/显示名），
+/// 端标签在 Modrinth 答不上时兜底（CF 独占模组），结论与包内行同口径、同样落盘，第二次添加零请求。
 /// 与 `resolve_local_jar` 的差别只有 probe 是拼出来的：没有 jar 字节可解，
-/// 所以 `env`（作者自证）与 `code`（字节码提示）恒空，只剩平台那几层可走。
+/// 所以 `env`（作者自证）、`code`（字节码提示）与指纹恒空，只剩平台那几层可走。
 /// `sha1` 只收 40 位 hex：拿到脏值就当没有，免得往索引里写一个永远对不上的键。
 pub async fn resolve_added_build(
     dl: &Downloader,
@@ -741,8 +895,10 @@ pub async fn resolve_added_build(
     file_name: &str,
     sha1: Option<&str>,
     title: Option<&str>,
+    cf: Option<(SideFlag, SideFlag)>,
     online: bool,
     mirror: bool,
+    mcmod: bool,
 ) -> Option<Evidence> {
     let probe = JarProbe {
         sha1: sha1
@@ -751,7 +907,7 @@ pub async fn resolve_added_build(
         title: title.map(|s| s.trim().to_string()).filter(|s| !s.is_empty()),
         ..Default::default()
     };
-    resolve_local_jar(dl, cache_dir, file_name, &probe, online, mirror).await
+    resolve_local_jar(dl, cache_dir, file_name, &probe, cf, online, mirror, mcmod).await
 }
 
 /// 结论挂在哪些键下：返回项目的 slug/id + 本次查询用的键，下次离线即答
@@ -837,6 +993,7 @@ mod tests {
         let t = Target {
             path: "mods/x.jar".into(),
             sha1: None,
+                cf_fingerprint: None,
             project_id: None,
             slugs: vec![],
             title: Some("3D Skin Layers".into()),
@@ -850,6 +1007,7 @@ mod tests {
         Target {
             path: "mods/x.jar".into(),
             sha1: None,
+                cf_fingerprint: None,
             project_id: None,
             slugs: slugs.iter().map(|s| s.to_string()).collect(),
             title: None,
@@ -924,6 +1082,7 @@ mod tests {
             .map(|slug| Target {
                 path: format!("mods/{slug}.jar"),
                 sha1: None,
+                cf_fingerprint: None,
                 project_id: None,
                 slugs: vec![slug.to_string()],
                 title: None,
@@ -941,6 +1100,7 @@ mod tests {
             &all,
             &mut out,
             true,
+            false,
         )
         .await;
 
@@ -982,6 +1142,7 @@ mod tests {
             Target {
                 path: "mods/ftb-quests-forge.jar".into(),
                 sha1: None,
+                cf_fingerprint: None,
                 project_id: None,
                 slugs: vec!["ftbquests".into()],
                 title: Some("FTB Quests".into()),
@@ -989,6 +1150,7 @@ mod tests {
             Target {
                 path: "mods/zz-not-a-real-mod.jar".into(),
                 sha1: None,
+                cf_fingerprint: None,
                 project_id: None,
                 slugs: vec!["zz-not-a-real-mod".into()],
                 title: None,
@@ -996,6 +1158,7 @@ mod tests {
             Target {
                 path: "mods/sodium.jar".into(),
                 sha1: None,
+                cf_fingerprint: None,
                 project_id: None,
                 slugs: vec!["sodium".into()],
                 title: Some("Sodium".into()),
@@ -1062,6 +1225,8 @@ displayName = "Obscure Lib"
             &dir,
             "obscure-lib-1.0.jar",
             &probe_local_jar(&path),
+            None,
+            false,
             false,
             false,
         )
@@ -1082,6 +1247,47 @@ displayName = "Obscure Lib"
         index.save(dir);
     }
 
+    /// 过期的索引结论照常垫底（在线轮被掐时它不至于裸奔），但仍进反查队列争取刷新；
+    /// `record` 落下的新鲜结论照旧离队。`ts: None` / 过老的时间戳都按过期处理
+    #[test]
+    fn stale_index_hits_fall_back_but_stay_pending() {
+        let dir = std::env::temp_dir().join(format!(
+            "sideshift-index-stale-{}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let ev = evidence_from_modrinth(
+            &env_of(SideFlag::Required, SideFlag::Unsupported),
+            EnvSource::ModrinthHash,
+        )
+        .expect("required/unsupported 有区分度");
+        let key = sha1_key("bb0cb397083a0be2601bd4c6f7060326a1c8505f");
+        let mut index = EnvIndex::default();
+        // ts = 0（1970）：必过期
+        index.map.insert(key.clone(), StoredEvidence { ev, ts: Some(0) });
+        index.save(&dir);
+        let index = EnvIndex::load(&dir);
+        let targets = vec![Target {
+            path: "mods/x.jar".into(),
+            sha1: Some("bb0cb397083a0be2601bd4c6f7060326a1c8505f".into()),
+            cf_fingerprint: None,
+            project_id: None,
+            slugs: vec![],
+            title: None,
+        }];
+        let mut out = EvidenceMap::new();
+        let pending = apply_index(&index, &targets, &mut out);
+        assert!(out.contains_key("mods/x.jar"), "过期结论照常垫底，在线轮被掐也不裸奔");
+        assert_eq!(pending, vec![0], "过期的仍进反查队列争取刷新");
+        // record 刚写的（ts = now）才是新鲜结论：照旧离队
+        let mut fresh = EnvIndex::default();
+        fresh.record(key, ev);
+        let mut out2 = EvidenceMap::new();
+        let pending2 = apply_index(&fresh, &targets, &mut out2);
+        assert!(pending2.is_empty(), "新鲜结论不该重查");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     #[test]
     fn index_round_trips_through_its_own_file() {
         // 落盘的形状必须与读回的解析对得上：`save` 写的是**裸表**（`{"sha1:…": …}`），
@@ -1096,7 +1302,7 @@ displayName = "Obscure Lib"
         seed_index(&dir, key.clone());
         let back = EnvIndex::load(&dir);
         assert_eq!(
-            back.get(&key).map(|e| (e.source, e.client, e.server)),
+            back.stored(&key).map(|s| (s.ev.source, s.ev.client, s.ev.server)),
             Some((
                 EnvSource::ModrinthHash,
                 Some(SideFlag::Required),
@@ -1124,6 +1330,8 @@ displayName = "Obscure Lib"
             "jei-1.20.1-forge-15.20.0.105.jar",
             Some(&sha1.to_uppercase()),
             Some("Just Enough Items (JEI)"),
+            None,
+            false,
             false,
             false,
         )
@@ -1157,6 +1365,8 @@ displayName = "Obscure Lib"
                 "obscure-lib-1.0.jar",
                 Some(bad),
                 None,
+                None,
+                false,
                 false,
                 false,
             )
@@ -1182,6 +1392,7 @@ displayName = "Obscure Lib"
         let mut targets = vec![Target {
             path: "mods/x.jar".into(),
             sha1: None,
+                cf_fingerprint: None,
             project_id: None,
             slugs: vec!["x".into()],
             title: None,

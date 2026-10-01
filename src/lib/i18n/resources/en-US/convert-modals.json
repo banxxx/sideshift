@@ -90,5 +90,9 @@
   "convert-modals.zh-load": "Translation failed · {{error}}",
   "convert-modals.zh-loading": "Translating…",
   "convert-modals.zh-original": "Original",
-  "convert-modals.zh-translate": "Translate"
+  "convert-modals.zh-translate": "Translate",
+  "convert-modals.depends": "Requires",
+  "convert-modals.depends-optional": "optional",
+  "convert-modals.depends-open": "Open dependency details",
+  "convert-modals.src-downloads": "{{src}} · {{downloads}} downloads"
 }

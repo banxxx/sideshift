@@ -52,6 +52,7 @@ pub fn run() {
             commands::search_mods,
             commands::list_mod_versions,
             commands::list_mod_categories,
+            commands::mod_detail,
             commands::mod_translate_zh,
             commands::estimate_download,
             commands::start_conversion,

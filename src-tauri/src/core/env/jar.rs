@@ -32,6 +32,11 @@ pub struct JarProbe {
     pub env: Option<Evidence>,
     /// jar 原始字节的 sha1——与 Modrinth `files[].hashes.sha1` 同口径，可直接反查构建
     pub sha1: Option<String>,
+    /// jar 原始字节的 CF murmur2 指纹（`cf_fingerprint`）——Modrinth 哈希反查落空的
+    /// CF 独占模组，凭它向 CF 按文件反查（`POST /v1/fingerprints`）。只在整包哈希
+    /// 已在算的那批（`want_sha1`）与单个本地 jar 上算：mrpack 行的哈希由清单自带，
+    /// 多算一遍指纹等于把最便宜的离线路变贵
+    pub cf_fingerprint: Option<u32>,
     /// 模组 id（`fabric.mod.json:id` / `mods.toml:modId`），多半就是 Modrinth slug
     pub mod_id: Option<String>,
     /// 模组显示名（作者写的英文名），按名搜索兜底用
@@ -134,6 +139,8 @@ fn jar_probe<R: Read + std::io::Seek>(
         }
         if want_sha1 {
             probe.sha1 = Some(sha1_hex(&buf));
+            // 指纹与哈希吃同一份内存里的字节：CF 指纹腿的入场券，别处不补算
+            probe.cf_fingerprint = Some(cf_fingerprint(&buf));
         }
         read_meta(&buf, &mut probe);
         // 加载器元数据已自证端就别再解 class 了：Fabric/Quilt 的 `environment` 更强也更便宜
@@ -141,7 +148,8 @@ fn jar_probe<R: Read + std::io::Seek>(
             probe.code = read_code_facts(&buf);
         }
     } else if want_sha1 {
-        // 只为哈希：分块流式读，不把整包塞进内存
+        // 只为哈希：分块流式读，不把整包塞进内存。指纹不在流式路径上算——
+        // 它的受众是「哈希答不上的 CF 独占模组」，超大 jar 本就罕见，别为它养第二条读带
         let mut h = Sha1::new();
         let mut buf = [0u8; 64 * 1024];
         loop {
@@ -166,13 +174,15 @@ fn sha1_hex(bytes: &[u8]) -> String {
 }
 
 /// 用户「从本地添加」的单个 jar：整文件当 zip 解，取证口径与包内条目完全一致
-/// （自证端 + 自报身份 + 字节 sha1 + 字节码提示）。超大 jar 只算哈希，不整包解元数据。
+/// （自证端 + 自报身份 + 字节 sha1 + CF 指纹 + 字节码提示）。超大 jar 只算哈希，不整包解元数据。
 pub fn probe_local_jar(path: &Path) -> JarProbe {
     let mut probe = JarProbe::default();
     let Ok(bytes) = std::fs::read(path) else {
         return probe;
     };
     probe.sha1 = Some(sha1_hex(&bytes));
+    // 单个文件一条：指纹免费，恒算（在线添加版本列表那档没有字节，走 resolve_added_build）
+    probe.cf_fingerprint = Some(cf_fingerprint(&bytes));
     if bytes.len() as u64 <= JAR_MAX_UNCOMPRESSED {
         read_meta(&bytes, &mut probe);
         // 同包内条目：加载器元数据已自证端就不必再解 class
@@ -181,6 +191,54 @@ pub fn probe_local_jar(path: &Path) -> JarProbe {
         }
     }
     probe
+}
+
+/// CurseForge 的文件指纹：MurmurHash2（32 位、seed=1），先剔除四种空白字节（\t \n \r 空格）。
+/// **2026-10 用真值校准过**：官方 API 报 `fileFingerprint: 3020746965` 的那份文件
+/// （modId 369096 / fileId 4136487，edge.forgecdn.net 直链可下），按此实现逐位一致；
+/// 不剔除空白则得 1550895763，对不上。这是 `POST /v1/fingerprints` 的入场券
+/// （见 `curseforge_fingerprints`），校验和 sha1 各吃一遍内存里的同一份字节
+pub fn cf_fingerprint(bytes: &[u8]) -> u32 {
+    const M: u32 = 0x5bd1e995;
+    const R: u32 = 24;
+    const SEED: u32 = 1;
+    let is_ws = |b: u8| matches!(b, b'\t' | b'\n' | b'\r' | b' ');
+    // seed 要先与总长异或才开始混（murmur2 的规范形状），所以先数一遍有效字节；
+    // 两遍线性扫不分配内存，比把剔除后的字节囤一份省得多
+    let len = bytes.iter().filter(|b| !is_ws(**b)).count() as u32;
+    let mut h: u32 = SEED ^ len;
+    let mut acc = [0u8; 4];
+    let mut fill = 0usize;
+    for &b in bytes {
+        if is_ws(b) {
+            continue;
+        }
+        acc[fill] = b;
+        fill += 1;
+        if fill == 4 {
+            let mut k = u32::from_le_bytes(acc);
+            k = k.wrapping_mul(M);
+            k ^= k >> R;
+            k = k.wrapping_mul(M);
+            h = h.wrapping_mul(M) ^ k;
+            fill = 0;
+        }
+    }
+    // 尾块按规范 fall-through：3/2/1 各档依次叠，只在第 1 档后乘一次
+    if fill >= 3 {
+        h ^= (acc[2] as u32) << 16;
+    }
+    if fill >= 2 {
+        h ^= (acc[1] as u32) << 8;
+    }
+    if fill >= 1 {
+        h ^= acc[0] as u32;
+        h = h.wrapping_mul(M);
+    }
+    h ^= h >> 13;
+    h = h.wrapping_mul(M);
+    h ^= h >> 15;
+    h
 }
 
 fn hex(bytes: &[u8]) -> String {
@@ -300,6 +358,18 @@ displayName = 'GeckoLib'
         assert_eq!(toml_field(toml, "modId"), "create");
         assert_eq!(toml_field(toml, "displayName"), "GeckoLib");
         assert_eq!(toml_field(toml, "logoFile"), "");
+    }
+
+    /// 小向量锁 seed、尾块与空白剔除三处边角；真文件校准（官方 fileFingerprint 逐位一致）
+    /// 见 `cf_fingerprint` 的注释。空白字节（空格/tab/LF/CR）先剔除再混：
+    /// `hello world` 与 `helloworld` 同值、`a b\nc\td\re` 与 `abcde` 同值
+    #[test]
+    fn cf_fingerprint_strips_whitespace_and_matches_reference() {
+        assert_eq!(cf_fingerprint(b"hello world"), 2824650221);
+        assert_eq!(cf_fingerprint(b"helloworld"), 2824650221);
+        assert_eq!(cf_fingerprint(b"a b\nc\td\re"), 3469237630);
+        assert_eq!(cf_fingerprint(b"abcde"), 3469237630);
+        assert_eq!(cf_fingerprint(b""), 1540447798);
     }
 
     #[test]

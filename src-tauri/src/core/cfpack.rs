@@ -1,7 +1,10 @@
-//! CurseForge 官方导出包的「按编号补取」层：`files[]` 只给 `{projectID, fileID}`，联网换回「名字 + 大小 + sha1」，落 `cache_dir/cf-files-index.json`。
+//! CurseForge 官方导出包的「按编号补取」层：`files[]` 只给 `{projectID, fileID}`，联网换回「名字 + 大小 + sha1 + 端标签」，落 `cache_dir/cf-files-index.json`。
 //! - 只管官方包这一种：民间 CF/MCBBS 包字节在包里（解析层直接扫），`.mrpack` 清单自带 URL/sha1（走 downloader）。
 //! - 直链不在这里取（带时效，构建期现取）；但「这一枚拿不拿得到字节」在这里探一次并落进同一张索引，构建前就得知道。
-//! - 补取只改写 `file_name`/`size_bytes`/`sha1`，**`path` 保持解析层的编号锚点不变**——detector 与任务存档都按它回指包内条目，名字一改锚点就飘。
+//! - 端标签（`gameVersions` 的 Client/Server，`cf_sides`）与元数据同一发响应带回：它是 CF 那侧
+//!   最接近「模组自报端」的官方声明，贴回行上供 classify 播种 `EnvSource::CfFile`；老索引条目
+//!   由 `env_unchecked_refs` 补问一轮（`env_checked` 有值后永久收队）。
+//! - 补取只改写 `file_name`/`size_bytes`/`sha1`/端标签/许可态，**`path` 保持解析层的编号锚点不变**——detector 与任务存档都按它回指包内条目，名字一改锚点就飘。
 
 use std::collections::HashMap;
 use std::path::Path;
@@ -110,7 +113,7 @@ pub fn pending_refs(parsed: &ParsedPack, index: &CfIndex) -> Vec<CfRef> {
     out
 }
 
-/// 把索引里的元数据贴回包内条目：**只改名字/大小/sha1/取链许可态，路径那枚锚点原样留着**（模块头有理由）
+/// 把索引里的元数据贴回包内条目：**只改名字/大小/sha1/端标签/取链许可态，路径那枚锚点原样留着**（模块头有理由）
 pub fn enrich(parsed: &ParsedPack, index: &CfIndex) -> ParsedPack {
     let mut out = parsed.clone();
     for f in &mut out.mod_files {
@@ -119,6 +122,9 @@ pub fn enrich(parsed: &ParsedPack, index: &CfIndex) -> ParsedPack {
         f.file_name = m.file_name.clone();
         f.size_bytes = m.size_bytes;
         f.sha1 = m.sha1.clone();
+        // 构建级端标签（CF gameVersions 的 Client/Server）贴回行上：classify 播种
+        // EnvSource::CfFile 证据读的就是它。没勾标签是 None——「没有声明」，不是「不支持」
+        cf.env = m.sides();
         // 许可态贴回行上：构建前的闸门与方案行的「缺件」标记读的都是它（`detector` 据此写
         // `PlanMod.cf_blocked`），而那份行是要过一遍前端再回传进流水线的
         cf.link = m.link.unwrap_or_default();
@@ -190,6 +196,23 @@ pub fn unprobed_refs(parsed: &ParsedPack, index: &CfIndex) -> Vec<CfRef> {
     out
 }
 
+/// 端标签还没问过的那些编号（去重）。只收**元数据已补到**的行：老索引条目（本功能上线前
+/// 写进 `cf-files-index.json` 的那些）没有端标签这一问的记录，重发一次元数据请求把它补齐；
+/// 补齐之后这条腿永久收队（`env_checked` 有值就不再来）。与 `unprobed_refs` 同一口径
+pub fn env_unchecked_refs(parsed: &ParsedPack, index: &CfIndex) -> Vec<CfRef> {
+    let mut out: Vec<CfRef> = Vec::new();
+    for f in &parsed.mod_files {
+        let Some(r) = &f.cf else { continue };
+        let unchecked = index
+            .get(r)
+            .is_some_and(|m| !m.env_checked());
+        if unchecked && !out.contains(r) {
+            out.push(r.clone());
+        }
+    }
+    out
+}
+
 /// 在线探测：逐枚问一次「拿不拿得到字节」，批末落盘。返回**探出结论的行数**（读数用，
 /// 与 `env` 那侧的 `[env]` 探针同一手感）。没有结论的那些（网络抖动）原样留白，下次再探
 async fn probe_online(
@@ -245,15 +268,21 @@ pub struct Enriched {
     /// 名字早就补好了，但行上的 `link` 从 `Unknown` 变成结论 ⇒ 解析缓存那份 Arc 必须换
     /// （闸门与方案行的缺件标记读的都是它）。端取证结论与许可态无关，所以这一档**不该**作废它
     pub links_changed: bool,
+    /// 这一轮把**端标签**贴到了以前没有的行上（老索引条目补问那一档）：与许可态同理，
+    /// Arc 必须换（classify 播种 `EnvSource::CfFile` 读的是行上那枚），端取证结论不作废——
+    /// 播种发生在它自己的阶梯里，不受影响
+    pub env_changed: bool,
 }
 
-/// 一处入口，两处调用方（自动分类、构建阶段 1）共用：读索引 → 缺的联网补 → 探取链 → 贴回包内条目。
+/// 一处入口，两处调用方（自动分类、构建阶段 1）共用：读索引 → 缺的联网补 → 补端标签 →
+/// 探取链 → 贴回包内条目。
 ///
-/// 四条省钱/省时口径：
+/// 五条省钱/省时口径：
 /// - 索引热的那一档**元数据零请求**（同一个包第二次打开只读盘；但取链许可还是要探一次）
 /// - **没配 Key 就一发都不发**：每发都会立刻撞回同一句拒绝，敲几百次门既没有新信息也只会被限流
-/// - 补元数据与探取链**共用一条 `ONLINE_BUDGET`**（见那个常量），到点收摊，
-///   已拿到的照常生效（两趟都批末落盘）
+/// - 补元数据、补端标签与探取链**共用一条 `ONLINE_BUDGET`**（见那个常量），到点收摊，
+///   已拿到的照常生效（每趟都批末落盘）
+/// - 补端标签那条腿只为本功能上线前的老索引条目存在：`env_checked` 一旦有值就永久收队
 /// - `unresolved` 在轮末**按索引现算**而不是取 `resolve_online` 的返回数：超时打断那一档
 ///   已经落盘的那部分是真补到了，报整批没补到是说谎
 ///
@@ -276,7 +305,17 @@ pub async fn ensure(
                 let (_missing, refused) =
                     resolve_online(dl, &mut index, cache_dir, &pending).await;
                 if refused {
-                    // Key 级拒绝是账号的事，与这枚模组放不放行无关：探测每一发都撞回同一句 ⇒ 收摊
+                    // Key 级拒绝是账号的事，与这枚模组放行与否无关：探测每一发都撞回同一句 ⇒ 收摊
+                    return;
+                }
+            }
+            // 老索引条目补端标签：重发一次元数据（名字/大小/sha1 原样换新，多不了什么），
+            // env_checked 从此有值，这条腿对这份索引就永久收队了
+            let need_env = env_unchecked_refs(parsed, &index);
+            if !need_env.is_empty() {
+                let (_missing, refused) =
+                    resolve_online(dl, &mut index, cache_dir, &need_env).await;
+                if refused {
                     return;
                 }
             }
@@ -292,6 +331,7 @@ pub async fn ensure(
     // enrich 不动行序，按下标对齐比一遍就知道到底改没改
     let mut renamed = false;
     let mut links_changed = false;
+    let mut env_changed = false;
     for (a, b) in out.mod_files.iter().zip(parsed.mod_files.iter()) {
         if a.file_name != b.file_name || a.size_bytes != b.size_bytes || a.sha1 != b.sha1 {
             renamed = true;
@@ -299,8 +339,11 @@ pub async fn ensure(
         if a.cf.as_ref().map(|r| r.link) != b.cf.as_ref().map(|r| r.link) {
             links_changed = true;
         }
+        if a.cf.as_ref().map(|r| r.env) != b.cf.as_ref().map(|r| r.env) {
+            env_changed = true;
+        }
     }
-    Enriched { parsed: out, unresolved, renamed, links_changed }
+    Enriched { parsed: out, unresolved, renamed, links_changed, env_changed }
 }
 
 #[cfg(test)]
@@ -316,11 +359,13 @@ mod tests {
             file_id: file_id.into(),
             required: true,
             link: CfLink::Unknown,
+            env: None,
         }
     }
 
     fn meta(file_name: &str, size_bytes: u64, sha1: Option<&str>) -> CfFileMeta {
-        CfFileMeta { file_name: file_name.into(), size_bytes, sha1: sha1.map(String::from), link: None }
+        // env: Some(None) = 端标签这一问补过了、作者没勾：老索引补齐后的常态
+        CfFileMeta { file_name: file_name.into(), size_bytes, sha1: sha1.map(String::from), env: Some(None), link: None }
     }
 
     fn row(mod_id: &str, file_id: &str) -> PackFile {
@@ -395,7 +440,7 @@ mod tests {
     #[test]
     fn unusable_meta_is_not_an_answer() {
         let mut index = CfIndex::default();
-        index.put(&cf_ref("1", "2"), CfFileMeta { file_name: "  ".into(), size_bytes: 9, sha1: None, link: None });
+        index.put(&cf_ref("1", "2"), CfFileMeta { file_name: "  ".into(), size_bytes: 9, sha1: None, env: Some(None), link: None });
         let p = pack(vec![row("1", "2")]);
         assert_eq!(pending_refs(&p, &index).len(), 1);
         assert_eq!(enrich(&p, &index).mod_files[0].file_name, "1-2.jar");
@@ -459,6 +504,39 @@ mod tests {
         assert_eq!(index.link_of(&cf_ref("1", "2")), None);
         assert_eq!(pending_refs(&p, &index).len(), 0, "元数据还活着");
         assert_eq!(unprobed_refs(&p, &index).len(), 1, "许可态清掉了才叫重探");
+    }
+
+    /// 端标签补问腿：只收**没问过**的老条目（`env` 外层 None），补过的（含「没勾」这个结论）
+    /// 永不再问；贴回行上的端标签是 classify 播种 `EnvSource::CfFile` 的来源
+    #[test]
+    fn env_refetch_targets_legacy_rows_and_enrich_pastes_sides() {
+        use crate::models::SideFlag;
+        let mut index = CfIndex::default();
+        let mut tagged = meta("oculus-1-2.jar", 10, Some("ab"));
+        tagged.env = Some(Some((SideFlag::Required, SideFlag::Unsupported)));
+        index.put(&cf_ref("1", "2"), tagged);
+        // 老条目：env 外层 None = 本功能上线前写的，端标签还没问过
+        index.put(
+            &cf_ref("9", "9"),
+            CfFileMeta {
+                file_name: "legacy-9-9.jar".into(),
+                size_bytes: 5,
+                sha1: None,
+                env: None,
+                link: None,
+            },
+        );
+        let p = pack(vec![row("1", "2"), row("9", "9")]);
+        let need = env_unchecked_refs(&p, &index);
+        assert_eq!(need.len(), 1, "只补问老条目，问过的不重问（没勾也是结论）");
+        assert_eq!(need[0].mod_id, "9");
+        // 端标签随 enrich 贴回行上；没问过的行保持 None（不是「不支持」）
+        let out = enrich(&p, &index);
+        assert_eq!(
+            out.mod_files[0].cf.as_ref().unwrap().env,
+            Some((SideFlag::Required, SideFlag::Unsupported))
+        );
+        assert_eq!(out.mod_files[1].cf.as_ref().unwrap().env, None);
     }
 
     /// 没配 Key：一轮下来名字照常贴回，但**一行缺件都不许冒出来**——那句拒绝是账号的事，

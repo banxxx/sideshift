@@ -600,6 +600,58 @@ impl Downloader {
         Ok(serde_json::from_slice(&bytes)?)
     }
 
+    /// CurseForge 专用 JSON POST（`curseforge_fingerprints` 的指纹批量反查走这里）：
+    /// 挂 `x-api-key`，与 `cf_get_json` 同一套错误语义——401/403 演成可读的 `Refused`，
+    /// 其余状态码原样进 `Http`。Key 本身不进任何错误文案
+    pub(crate) async fn cf_post_json(
+        &self,
+        url: &str,
+        body: &Value,
+    ) -> Result<Value, DownloadError> {
+        let Some(key) = self.cf_key.as_deref() else {
+            return Err(DownloadError::Refused(
+                "还没有配置 CurseForge API Key：在「设置 · 网络 · CurseForge API Key」填一把，\
+                 或在 CurseForge 官方表单免费申请"
+                    .into(),
+            ));
+        };
+        let resp = self
+            .client
+            .post(url)
+            .timeout(METADATA_TIMEOUT)
+            .header("x-api-key", key)
+            .json(body)
+            .send()
+            .await
+            .map_err(|e| DownloadError::Http {
+                url: url.to_string(),
+                status: e.status().map(|s| s.as_u16()).unwrap_or(0),
+            })?;
+        let status = resp.status();
+        if status == reqwest::StatusCode::UNAUTHORIZED
+            || status == reqwest::StatusCode::FORBIDDEN
+        {
+            return Err(DownloadError::Refused(format!(
+                "CurseForge 拒绝了这次请求（HTTP {}）：Key 已过期，或这个接口没有授权",
+                status.as_u16()
+            )));
+        }
+        if !status.is_success() {
+            return Err(DownloadError::Http {
+                url: url.to_string(),
+                status: status.as_u16(),
+            });
+        }
+        let bytes = resp
+            .bytes()
+            .await
+            .map_err(|e| DownloadError::Http {
+                url: url.to_string(),
+                status: e.status().map(|s| s.as_u16()).unwrap_or(0),
+            })?;
+        Ok(serde_json::from_slice(&bytes)?)
+    }
+
     /// CurseForge 取链探测专用的一次 HEAD：**只问「这个地址给不给字节」，一个字节都不取**。
     /// 2xx 且带正的 `Content-Length` 才算给得出。
     ///

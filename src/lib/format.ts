@@ -78,6 +78,7 @@ export function evidenceLabel(source: EnvSource = "unknown"): string {
         mrpack: t("lib.modpack-declared", "整合包声明"),
         jarMetadata: t("lib.jar-metadata", "jar 自证"),
         modrinthHash: t("lib.platform-build", "平台构建"),
+        cfFile: t("lib.cf-build", "CF 构建标签"),
         modrinthProject: t("lib.platform-project", "平台项目"),
         mirrorProject: t("lib.mirror-project", "镜像项目"),
         mcmod: t("lib.mcmod-entry", "百科声明"),
@@ -85,6 +86,153 @@ export function evidenceLabel(source: EnvSource = "unknown"): string {
         unknown: t("lib.basis", "无依据"),
     };
     return label[source];
+}
+
+/**
+ * 模组类别 → 当前语言的显示名。词表封闭（Modrinth 的 slug 与 CurseForge 的类目名两套，
+ * 小写归一后合成一张表，两家语义重合的那几格共用），按 `evidenceLabel` 同一口径：
+ * 表建在函数里、每格一条 `t(字面量)`——zh-CN 露内联中文，en-US/zh-TW 走同名键目录；
+ * 键是原文的 slug 形（语义键不许带空格）。没登记的长尾（平台偶发新增的类目）
+ * **原样返回，不是界面坏掉**；筛选永远吃后端原文（value 不经过这里，见 OnlineAddModal
+ * 的 catOpts），所以翻译错漏不影响查询条件
+ */
+export function modcatLabel(raw: string): string {
+    switch (raw.trim().toLowerCase()) {
+        case "addons":
+            return t("modcat.addons", "扩展");
+        case "adventure":
+            return t("modcat.adventure", "冒险");
+        case "adventure-and-rpg":
+            return t("modcat.adventure-and-rpg", "冒险与 RPG");
+        case "api-and-library":
+            return t("modcat.api-and-library", "API 与库");
+        case "applied-energistics-2":
+            return t("modcat.applied-energistics-2", "应用能源 2");
+        case "armor-tools-and-weapons":
+            return t("modcat.armor-tools-and-weapons", "护甲、工具与武器");
+        case "automation":
+            return t("modcat.automation", "自动化");
+        case "biomes":
+            return t("modcat.biomes", "群系");
+        case "blood-magic":
+            return t("modcat.blood-magic", "血魔法");
+        case "bug-fixes":
+            return t("modcat.bug-fixes", "错误修复");
+        case "buildcraft":
+            return t("modcat.buildcraft", "建筑（BuildCraft）");
+        case "cosmetic":
+            return t("modcat.cosmetic", "外观美化");
+        case "crafttweaker":
+            return t("modcat.crafttweaker", "CraftTweaker");
+        case "create":
+            return t("modcat.create", "机械动力");
+        case "creativemode":
+            return t("modcat.creativemode", "创造模式");
+        case "cursed":
+            return t("modcat.cursed", "猎奇");
+        case "decoration":
+            return t("modcat.decoration", "装饰");
+        case "dimensions":
+            return t("modcat.dimensions", "维度");
+        case "economy":
+            return t("modcat.economy", "经济");
+        case "education":
+            return t("modcat.education", "教育");
+        case "energy":
+            return t("modcat.energy", "能源");
+        case "energy-fluid-and-item-transport":
+            return t("modcat.energy-fluid-and-item-transport", "能量、流体与物品运输");
+        case "equipment":
+            return t("modcat.equipment", "装备");
+        case "farmer-s-delight":
+            return t("modcat.farmer-s-delight", "农夫乐事");
+        case "farming":
+            return t("modcat.farming", "农业");
+        case "food":
+            return t("modcat.food", "食物");
+        case "forestry":
+            return t("modcat.forestry", "林业");
+        case "galacticraft":
+            return t("modcat.galacticraft", "星系");
+        case "game-mechanics":
+            return t("modcat.game-mechanics", "游戏机制");
+        case "genetics":
+            return t("modcat.genetics", "遗传");
+        case "horror":
+            return t("modcat.horror", "恐怖");
+        case "industrial-craft":
+            return t("modcat.industrial-craft", "工业时代 2");
+        case "integrated-dynamics":
+            return t("modcat.integrated-dynamics", "集成动力");
+        case "kubejs":
+            return t("modcat.kubejs", "KubeJS");
+        case "library":
+            return t("modcat.library", "库");
+        case "magic":
+            return t("modcat.magic", "魔法");
+        case "management":
+            return t("modcat.management", "管理");
+        case "map-and-information":
+            return t("modcat.map-and-information", "地图与信息");
+        case "mcreator":
+            return t("modcat.mcreator", "MCreator");
+        case "minigame":
+            return t("modcat.minigame", "小游戏");
+        case "miscellaneous":
+            return t("modcat.miscellaneous", "杂项");
+        case "mobs":
+            return t("modcat.mobs", "生物");
+        case "modjam-2025":
+            return t("modcat.modjam-2025", "ModJam 2025");
+        case "optimization":
+            return t("modcat.optimization", "优化");
+        case "ores-and-resources":
+            return t("modcat.ores-and-resources", "矿物与资源");
+        case "performance":
+            return t("modcat.performance", "性能");
+        case "player-transport":
+            return t("modcat.player-transport", "玩家运输");
+        case "processing":
+            return t("modcat.processing", "加工");
+        case "redstone":
+            return t("modcat.redstone", "红石");
+        case "refined-storage":
+            return t("modcat.refined-storage", "精致存储");
+        case "server-utility":
+            return t("modcat.server-utility", "服务端实用");
+        case "skyblock":
+            return t("modcat.skyblock", "空岛");
+        case "social":
+            return t("modcat.social", "社交");
+        case "storage":
+            return t("modcat.storage", "存储");
+        case "structures":
+            return t("modcat.structures", "结构");
+        case "technology":
+            return t("modcat.technology", "科技");
+        case "thaumcraft":
+            return t("modcat.thaumcraft", "神秘时代");
+        case "thermal-expansion":
+            return t("modcat.thermal-expansion", "热力膨胀");
+        case "tinker-s-construct":
+            return t("modcat.tinker-s-construct", "匠魂");
+        case "transportation":
+            return t("modcat.transportation", "运输");
+        case "twilight-forest":
+            return t("modcat.twilight-forest", "暮色森林");
+        case "twitch-integration":
+            return t("modcat.twitch-integration", "Twitch 集成");
+        case "utility":
+            return t("modcat.utility", "实用");
+        case "utility-qol":
+            return t("modcat.utility-qol", "实用与优化");
+        case "world-gen":
+            return t("modcat.world-gen", "世界生成");
+        case "worldgen":
+            return t("modcat.worldgen", "世界生成");
+        default:
+            return raw;
+    }
 }
 
 /**

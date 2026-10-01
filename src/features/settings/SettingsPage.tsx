@@ -241,9 +241,13 @@ export function SettingsPage() {
         setSettings(next);
         try {
             await api.saveSettings(next);
-            // 这两项直接决定方案怎么判、联网那一轮还算不算在跑 ⇒ 改过就得作废转换页草稿，
+            // 这三项直接决定方案怎么判、联网那一轮还算不算在跑 ⇒ 改过就得作废转换页草稿，
             // 下次进来重算。其余设置（输出目录/主题/更新渠道…）不参与判定，不该顺手抹掉手改
-            if (p.stripClientOnly !== undefined || p.autoClassifyOnline !== undefined) {
+            if (
+                p.stripClientOnly !== undefined ||
+                p.autoClassifyOnline !== undefined ||
+                p.envLookupMcmod !== undefined
+            ) {
                 clearDraft();
             }
             return true;
@@ -552,10 +556,23 @@ export function SettingsPage() {
                         />
                     </SettingRow>
                     <SettingRow
+                        label={t("settings.mcmod-lookup", "百科补全")}
+                        desc={t(
+                            "settings.mcmod-lookup-desc",
+                            "平台各腿全答不上时查 MC百科词条的「运行环境」（非官方接口，默认关）"
+                        )}
+                    >
+                        <Toggle
+                            size="md"
+                            checked={settings.envLookupMcmod}
+                            onChange={(v) => void patch({ envLookupMcmod: v })}
+                        />
+                    </SettingRow>
+                    <SettingRow
                         label="CurseForge API Key"
                         desc={
                             settings.curseforgeApiKey
-                                ? t("settings.set-curseforge", "已配置：网络添加里的 CurseForge 搜索与构建列表可用")
+                                ? t("settings.set-curseforge", "已配置：网络添加里的 CurseForge 搜索与构建列表、端信息指纹反查可用")
                                 : t("settings.set-use", "未配置：CurseForge API Key，点「获取」填表申请")
                         }
                     >

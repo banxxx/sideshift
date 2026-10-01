@@ -637,17 +637,20 @@ export function ConvertPage() {
 
     /** 在线添加：选中某个构建版本后回写新增列表；同模组再次添加 = 就地换版本（mods/ 不允许双版本并存） */
     const addOnline = (mod: ModSearchResult, version: ModVersionEntry) => {
-        // 端标签跟着用户所选的那一份构建走：构建级 environment 精确到文件，
+        // 端标签跟着用户所选的那一份构建走：构建级 environment / CF 端标签精确到文件，
         // 项目级 client_side/server_side 只在构建没给时兜底（依据文案也随之换口径）
         const buildSides = version.clientSide || version.serverSide;
         const sides = {
             clientSide: buildSides ? version.clientSide : mod.clientSide,
             serverSide: buildSides ? version.serverSide : mod.serverSide,
-            // 源给了多少就写多少：两侧支持度只有 Modrinth 声明，CurseForge 一家不给 ⇒
-            // 这里先如实落「无依据」，行落地后由下面那趟按构建 sha1 补查，问到才换标签
+            // 源给了多少就写多少：CurseForge 的构建级端标签（gameVersions 的 Client/Server）
+            // 由版本列表解析带来，命中即标 CF 构建；没勾标签的老构建先如实落「无依据」，
+            // 行落地后由下面那趟按构建 sha1 补查。Modrinth 构建级 environment 命中标平台构建
             envSource: (
                 mod.source === "curseforge"
-                    ? "unknown"
+                    ? buildSides
+                        ? "cfFile"
+                        : "unknown"
                     : buildSides
                       ? "modrinthHash"
                       : "modrinthProject"
@@ -706,14 +709,21 @@ export function ConvertPage() {
             return next;
         });
         setTab("add");
-        // 端补查：源本身没答上两侧时（CurseForge 一家不声明；Modrinth 偶发构建级与项目级都空），
-        // 拿这份构建的 sha1 走与本地 jar 同一条取证阶梯——同一份 jar 两个平台哈希逐字相同，
-        // 问到的是 Modrinth 的构建/项目层。行先落地、答上再补标签；没答上**保持原样**，
-        // 别把已有的依据口径盖成没依据。用户在这期间换了构建 ⇒ sha1 对不上，本次结果直接丢弃
+        // 端补查：源本身没答上两侧时（CurseForge 老构建没勾端标签；Modrinth 偶发构建级与
+        // 项目级都空），拿这份构建的 sha1 走与本地 jar 同一条取证阶梯——同一份 jar 两个平台
+        // 哈希逐字相同，问到的是 Modrinth 的构建/项目层；CF 的端标签也一并传入当证据播种。
+        // 行先落地、答上再补标签；没答上**保持原样**，别把已有的依据口径盖成没依据。
+        // 用户在这期间换了构建 ⇒ sha1 对不上，本次结果直接丢弃
         const sha1 = version.sha1;
         if (!sides.clientSide && !sides.serverSide && sha1 && version.fileName) {
             void api
-                .inspectAddedBuild(sha1, version.fileName, mod.name)
+                .inspectAddedBuild(
+                    sha1,
+                    version.fileName,
+                    mod.name,
+                    version.clientSide,
+                    version.serverSide
+                )
                 .then((side) => {
                     if (side.envSource === "unknown") return;
                     setExtras((e) =>

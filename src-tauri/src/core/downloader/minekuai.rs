@@ -4,6 +4,7 @@
 //! 注意：该服务「路径不存在」以 200 + `{"code":404,…}` 返回，存活自查必须验字段。
 
 use super::client::Downloader;
+use super::mcmod::norm_name;
 use super::modrinth::ModrinthEnv;
 use super::types::DownloadError;
 use super::util::urlencoding;
@@ -88,13 +89,21 @@ impl Downloader {
     /// 时才发这一发，与端判定的阶梯/预算无关，所以不查 `mirror_health`——挂了由调用方演成一次失败提示即可。
     /// **两条入口都只认 slug**（`mc-mods/detail/AANobbMI`、`mc-cf-mods/detail/32274` 实测 404），
     /// 而 CurseForge 那边我们手上的数字 id 不是 slug ⇒ 搜索结果必须带 slug 才有这条线。
-    /// `Ok(None)` = 镜像没有这句译文：不在收录（真 404）、路径被改名（200 + `{"code":404}`）、
-    /// 或长尾 `translation_status=pending` 时两个字段都是**空串**（实测）。三种都让前端保持原文，
-    /// 绝不演成「翻译成功但内容与原文一样」
+    ///
+    /// **CF 半边缺的译文去 Modrinth 半边借**（`name` 是调用方带来的显示名，作验同形的备用锚）。
+    /// 两个快照的翻译覆盖是两本账：2026-10 实测 jei / appleskin 在 CF 半边 `title_zh` 是空串，
+    /// 同一 slug 在 Modrinth 半边有现成中文——只查来源那半边，用户就会看到「API 明明有中文，
+    /// 界面翻不出来」。借之前拿两边的英文 title 归一化验同形（`same_mod`：全等或前缀），
+    /// 对不上宁可不借——绝不把别的模组的译名挂过来。Modrinth 来源不借：它就是译文覆盖更好的
+    /// 那半边，CF 半边只会更空。
+    /// `Ok(None)` = 镜像没有译文：不在收录（真 404）、路径被改名（200 + `{"code":404}`）、
+    /// 或长尾 `translation_status=pending` 时两个字段都是**空串**（实测）。这些情况都让前端
+    /// 保持原文，绝不演成「翻译成功但内容与原文一样」
     pub(crate) async fn translate_zh(
         &self,
         source: ModSource,
         slug: &str,
+        name: Option<&str>,
     ) -> Result<Option<ModTranslation>, DownloadError> {
         let slug = slug.trim();
         if slug.is_empty() {
@@ -104,12 +113,38 @@ impl Downloader {
             ModSource::Modrinth => "mc-mods",
             ModSource::Curseforge => "mc-cf-mods",
         };
-        let url = format!("{MINEKUAI_API}/{}/detail/{}", entry, urlencoding(slug));
-        match self.get_json(&url).await {
-            Ok(v) => Ok(zh_fields(&v)),
-            Err(DownloadError::Http { status: 404, .. }) => Ok(None),
-            Err(e) => Err(e),
+        let own_url = format!("{MINEKUAI_API}/{}/detail/{}", entry, urlencoding(slug));
+        let own = match self.get_json(&own_url).await {
+            Ok(v) => Some(v),
+            // 真 404 = 不在收录，不是故障：CF 来源还有 Modrinth 半边可借
+            Err(DownloadError::Http { status: 404, .. }) => None,
+            Err(e) => return Err(e),
+        };
+        // 验同形的锚：响应自带的英文 title 优先（它就是这本在来源平台的名字），
+        // 响应没有（不在收录）退调用方带来的显示名
+        let anchor = own
+            .as_ref()
+            .and_then(|v| v["title"].as_str())
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(String::from)
+            .or_else(|| name.map(str::trim).filter(|n| !n.is_empty()).map(String::from));
+        let mut tr = own.as_ref().and_then(|v| zh_fields(v));
+        if source == ModSource::Curseforge
+            && tr
+                .as_ref()
+                .is_none_or(|t| t.title_zh.is_none() || t.description_zh.is_none())
+        {
+            if let Some(anchor) = anchor {
+                let alt_url = format!("{MINEKUAI_API}/mc-mods/detail/{}", urlencoding(slug));
+                if let Ok(alt) = self.get_json(&alt_url).await {
+                    if same_mod(&anchor, alt["title"].as_str().unwrap_or_default()) {
+                        fill_missing(&mut tr, zh_fields(&alt));
+                    }
+                }
+            }
         }
+        Ok(tr)
     }
 }
 
@@ -126,6 +161,36 @@ fn zh_fields(v: &Value) -> Option<ModTranslation> {
     let (title_zh, description_zh) = (field("title_zh"), field("description_zh"));
     (title_zh.is_some() || description_zh.is_some())
         .then_some(ModTranslation { title_zh, description_zh })
+}
+
+/// 两个平台的英文 title 是否同一个模组：归一化（剥所有格 + 只留字母数字小写，
+/// 与百科腿的 `mcmod::norm_name` 同一份）后**全等**，或**短侧是长侧的前缀且短侧
+/// 至少 5 个字符**——后者吃下 "Cloth Config API" ↔ "Cloth Config API (Fabric/Forge/
+/// NeoForge)" 这种一侧带平台注记的写法；5 个字符的门槛挡住 "JEI" ↔ "JEI (Legacy)"
+/// 这类短名衍生分支。对不上宁可不借：把别的模组的译名挂过来比不翻更糟
+fn same_mod(a: &str, b: &str) -> bool {
+    let (a, b) = (norm_name(a), norm_name(b));
+    if a.is_empty() || b.is_empty() {
+        return false;
+    }
+    a == b
+        || ((a.starts_with(&b) || b.starts_with(&a)) && a.len().min(b.len()) >= 5)
+}
+
+/// 把借来的译文填进缺的那几格：两侧都有的以来源侧为准（它才是用户所查平台自己的档案）
+fn fill_missing(base: &mut Option<ModTranslation>, alt: Option<ModTranslation>) {
+    match (base.as_mut(), alt) {
+        (Some(b), Some(a)) => {
+            if b.title_zh.is_none() {
+                b.title_zh = a.title_zh;
+            }
+            if b.description_zh.is_none() {
+                b.description_zh = a.description_zh;
+            }
+        }
+        (None, a) => *base = a,
+        _ => {}
+    }
 }
 
 #[cfg(test)]
@@ -175,5 +240,57 @@ mod tests {
         let got = zh_fields(&only_title).expect("有名就算有译文");
         assert_eq!(got.title_zh.as_deref(), Some("实体小地图"));
         assert_eq!(got.description_zh, None);
+    }
+
+    /// 同形闸：全等（含大小写与平台注记差异）或「短侧前缀且 ≥5 字符」。
+    /// 门槛挡的是 "JEI" ↔ "JEI (Legacy)" 这种短名衍生分支——借错译名比不翻更糟
+    #[test]
+    fn same_mod_accepts_equal_or_long_prefix_only() {
+        assert!(same_mod("Just Enough Items (JEI)", "Just Enough Items (JEI)"));
+        // 大小写归一
+        assert!(same_mod("AppleSkin", "appleskin"));
+        // 前缀：一侧带平台注记（实测 cloth-config 的两半边就长这样）
+        assert!(same_mod(
+            "Cloth Config API",
+            "Cloth Config API (Fabric/Forge/NeoForge)"
+        ));
+        // 所有格剥掉后同形
+        assert!(same_mod("Farmer's Delight", "Farmer's Delight"));
+        // 短名衍生分支：前缀成立但短侧只有 3 个字符 ⇒ 拒
+        assert!(!same_mod("JEI", "JEI (Legacy)"));
+        // 完全不同的两个模组
+        assert!(!same_mod("Sodium", "Just Enough Items (JEI)"));
+        // 空锚（响应没 title 也没显示名）不借
+        assert!(!same_mod("", "Sodium"));
+    }
+
+    /// 借译文只填缺的格：来源侧已有的结论是权威，借来的不许顶掉；
+    /// 来源侧整本没译文时整本接住
+    #[test]
+    fn fill_missing_takes_only_the_gaps() {
+        let mut base = Some(ModTranslation {
+            title_zh: None,
+            description_zh: Some("来源侧的简介".into()),
+        });
+        let alt = Some(ModTranslation {
+            title_zh: Some("借来的名字".into()),
+            description_zh: Some("借来的简介".into()),
+        });
+        fill_missing(&mut base, alt);
+        let b = base.expect("有借必有出");
+        assert_eq!(b.title_zh.as_deref(), Some("借来的名字"), "缺的格被填上");
+        assert_eq!(
+            b.description_zh.as_deref(),
+            Some("来源侧的简介"),
+            "来源侧已有的不许被借来的顶掉"
+        );
+        // 来源侧整本没有：整本接住
+        let mut none = None;
+        fill_missing(&mut none, Some(ModTranslation { title_zh: Some("x".into()), description_zh: None }));
+        assert_eq!(none.and_then(|t| t.title_zh).as_deref(), Some("x"));
+        // 两边都没有：仍是 None
+        let mut still = None;
+        fill_missing(&mut still, None);
+        assert!(still.is_none());
     }
 }

@@ -23,6 +23,8 @@ export const mockDefaultSettings: AppSettings = {
     autoClassifyOnline: true,
     // 与 Rust 一致：默认关。开着才能演「先自查存活 → 镜像答上 → 官方腿一条不发」这条链
     envLookupMirror: false,
+    // 与 Rust 一致：百科腿默认关（非官方行为 + HTML 解析脆弱，见类型注释）
+    envLookupMcmod: false,
     verifyAfterBuild: false,
     downloadSource: "official",
     concurrency: 6,

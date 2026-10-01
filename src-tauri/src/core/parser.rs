@@ -51,6 +51,11 @@ pub struct CfRef {
     /// 挂在这一枚上而不是 `PackFile` 的新字段：它属于"这对编号能不能拿到字节"，
     /// 与 `mod_id`/`file_id` 同生命周期，加字段就不用改六处 `PackFile` 构造点
     pub link: CfLink,
+    /// 构建级端标签（CF `gameVersions` 的 Client/Server，见 `cf_sides`）：解析层恒 `None`
+    /// （没问过），同样由 `cfpack::ensure` 从索引贴回。这是 CF 那侧最接近「模组自报端」的
+    /// 官方声明，证据层把它当 `EnvSource::CfFile` 计（rank 见 `env::rank`）。
+    /// 与 `link` 挂同一枚的理由相同：这对编号的属性，生命周期与编号一致
+    pub env: Option<(SideFlag, SideFlag)>,
 }
 
 #[derive(Debug, Clone)]

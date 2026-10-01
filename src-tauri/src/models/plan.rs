@@ -30,7 +30,8 @@ pub enum CfLink {
 }
 
 /// 端信息的证据来源（前端据此显示「依据什么判定」）。
-/// 可信度顺序见 `env::rank`：jar 自证 > 平台按构建 > 平台按项目 > 镜像项目 > 百科词条 > 整合包声明 > 名称启发
+/// 可信度顺序见 `env::rank`：jar 自证 > 平台按构建（Modrinth 哈希 / CF 端标签）> 平台按项目 >
+/// 镜像项目 > 百科词条 > 整合包声明 > 名称启发
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, Default, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub enum EnvSource {
@@ -40,6 +41,10 @@ pub enum EnvSource {
     JarMetadata,
     /// Modrinth 按文件 sha1 反查构建（POST /v2/version_files）
     ModrinthHash,
+    /// CurseForge 构建级端标签：file 对象 `gameVersions` 里的 `Client`/`Server`
+    /// （作者上传时勾的官方声明，文件级精确到这一枚 jar）。CF 清单行随元数据补取带回；
+    /// zip 包内的 CF 独占模组走 murmur2 指纹反查（`POST /v1/fingerprints`）取同一份声明
+    CfFile,
     /// Modrinth 项目级 client_side/server_side（未下载模组的回落）
     ModrinthProject,
     /// 国内镜像（麦块开放 API）的项目级声明：内容同 ModrinthProject，但它是第三方快照，

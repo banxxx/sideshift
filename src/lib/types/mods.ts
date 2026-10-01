@@ -67,6 +67,15 @@ export interface ModSearchQuery {
     page: number;
 }
 
+/** 构建的一条前置（依赖）：id 是平台侧项目标识，name/slug 是后端批量反查的显示信息，查不到就缺省 */
+export interface ModDependency {
+    id: string;
+    name?: string;
+    slug?: string;
+    /** required 必装 / optional 可选（incompatible / embedded 不会出现在表里） */
+    required: boolean;
+}
+
 /** 某模组的一个可下载构建版本（对应 Mod Detail 版本行，整行点击下载） */
 export interface ModVersionEntry {
     id: string;
@@ -85,6 +94,8 @@ export interface ModVersionEntry {
     /** 构建级 environment 换算出的两侧支持度：这一份构建要不要进服务端包；CurseForge 无此声明 → 两边都缺省 */
     clientSide?: SideFlag;
     serverSide?: SideFlag;
+    /** 该构建声明的前置（两家平台的版本列表接口本就带着这份数据，名字由后端一次批量反查补上） */
+    depends?: ModDependency[];
 }
 
 /** 「从本地添加」单个 jar 的取证返回（Rust inspect_added_mod） */

@@ -112,7 +112,7 @@ pub(super) fn cf_declared_facts(path: &Path, entry: &str) -> Result<Option<Decla
         if mod_id.is_empty() || file_id.is_empty() {
             continue;
         }
-        let r = CfRef { mod_id, file_id, required: f.required, link: CfLink::Unknown };
+        let r = CfRef { mod_id, file_id, required: f.required, link: CfLink::Unknown, env: None };
         // 去重按**坐标那一对 id**，不按整个结构体：`required` 在同一对编号的两条声明里
         // 给得不一样是真有的事（手改过清单），按整结构体比就会留下两行、同一个 jar 下两遍
         if !files.iter().any(|x| x.mod_id == r.mod_id && x.file_id == r.file_id) {

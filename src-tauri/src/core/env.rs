@@ -1,7 +1,13 @@
-//! 端判定证据采集：取证一个模组「服务端要不要」，按可信度阶梯（jar 自证 > 平台构建反查 >
-//! 平台项目声明 > 镜像项目声明 > 百科词条 > 整合包 files[].env > 名称启发兜底），不含裁决规则（裁决在 detector）。
-//! - 第 3/4 层是网络查询，结果落 `cache_dir/env-index.json`，同一模组第二次见到即离线可答。
-//! - 百科那一层是补全：只在平台各腿全答不上的行上发请求，两个平台源都跑它（见 `index::resolve_via_mcmod`）。
+//! 端判定证据采集：取证一个模组「服务端要不要」，按可信度阶梯（jar 自证 > 平台构建反查
+//! [Modrinth 哈希 / CF 构建标签] > 平台项目声明 > 镜像项目声明 > 百科词条 > 整合包 files[].env >
+//! 名称启发兜底），不含裁决规则（裁决在 detector）。
+//! - 第 3/4 层是网络查询，结果落 `cache_dir/env-index.json`，同一模组第二次见到即离线可答；
+//!   结论带 90 天保鲜期（`index::INDEX_TTL_DAYS`），过期的照常垫底但会重查刷新。
+//! - CF 那一侧两条腿：构建标签（`gameVersions` 的 Client/Server，CF 清单行随元数据补取带回；
+//!   zip 包内的 CF 独占模组走 murmur2 指纹反查 `index::resolve_via_fingerprints`）。
+//!   指纹腿凭用户自己的 CF Key，独立于「端信息反查源」设置。
+//! - 百科那一层是补全且**默认关**（`env_lookup_mcmod` 设置）：开了也只在平台各腿全答不上的
+//!   行上发请求，两个平台源都跑它（见 `index::resolve_via_mcmod`）。
 //! - Forge / NeoForge 元数据没有自证端字段，jar 自证与构建反查只覆盖 Fabric / Quilt；
 //!   字节码结构提示（`read_code_facts`）只用来按住名称关键字层的误删，不参与剔除。
 //! - 模块根（barrel）：`evidence`·`jar`·`code`·`index`·`ident` 五块，对外用 `crate::core::env::X`。
@@ -13,7 +19,7 @@ mod index;
 mod jar;
 
 pub use code::{CodeFacts, CodeMap};
-pub use evidence::{rank, Evidence, EvidenceMap};
+pub use evidence::{put, rank, Evidence, EvidenceMap};
 pub use ident::targets_for;
 pub use index::{
     apply_index, apply_probes, resolve_added_build, resolve_local_jar, resolve_online, EnvIndex,
