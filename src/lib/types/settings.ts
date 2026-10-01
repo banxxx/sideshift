@@ -6,6 +6,9 @@ export type DownloadSource = "official" | "bmclapi";
 /** 更新渠道（Settings · 外观与关于）：正式版 / Beta，对应 GitHub release 的 prerelease 标志 */
 export type UpdateChannel = "stable" | "beta";
 
+/** 端信息反查源（Settings · 端信息反查）：不发这一轮 / Modrinth 官方 / 麦块 API（国内快照镜像） */
+export type EnvLookupSource = "off" | "official" | "minekuai";
+
 /**
  * 界面语言档位（Settings · 外观与关于；Rust: AppSettings.locale，serde camelCase 同源）。
  *
@@ -26,23 +29,24 @@ export interface AppSettings {
     verifyAfterBuild: boolean;
     /** 下载源：版本表与加载器 jar 的镜像档位（模组文件与端信息反查都在 Modrinth，这一档管不到它们） */
     downloadSource: DownloadSource;
-    /** 并发下载数 1–16（同时决定反查端信息的并发请求数） */
+    /** 并发下载数 1–16（只管模组/服务端文件的并行下载；端信息反查用的是 Rust 侧固定的并发） */
     concurrency: number;
-    /** 自动分类时允许联网反查端信息（关掉了只剩包内自证 + 本地索引 + 名称兜底） */
-    autoClassifyOnline: boolean;
     /**
-     * 联网那一轮改问国内镜像（麦块开放 API 的 Modrinth 项目快照，Rust: `env_lookup_mirror`）。
-     * 默认关：判据来自一个无 SLA 的第三方快照，实测收录也不全。
-     * **单一源**：开着时只发麦块，官方三条腿（含它没有对应端点的 sha1 批量那条）一条都不发，
-     * 存活自查不过就如实报「联网反查未全部完成」；关掉时零镜像流量。
+     * 端信息反查那一轮「问谁」（Rust: `env_lookup_source`）：关闭 / Modrinth 官方 / 麦块 API。
+     * 三档互斥，所以是一枚下拉：原来「联网反查」总闸与「反查走镜像」开关管的是同一条链，
+     * 分开摆就能出现「总闸关了、子项还亮着」这种界面自己答不出自己该问谁的状态。
+     * 默认 `official`。`minekuai` ⇒ 那一轮**只发麦块**，官方三条腿（含它没有对应端点的
+     * sha1 批量那条）一条都不发，存活自查不过就如实报「未全部完成」；
+     * `off` ⇒ 零请求，只剩包内自证 + 本地索引 + 名称兜底。
      * （CF 构建标签 / 指纹腿独立于本档：问的是 CurseForge、凭用户自己的 Key。）
      */
-    envLookupMirror: boolean;
+    envLookupSource: EnvLookupSource;
     /**
      * 端判定的百科补全腿（MC百科词条的「运行环境」，Rust: `env_lookup_mcmod`）。
      * **默认关**：它不是官方行为——没有公开 API，靠解析两页 HTML，对方一次改版或一次
      * 人机验证就能让整条腿哑掉；结论也是社区编辑的第二手声明。开着时它只补平台各腿
-     * （Modrinth 官方/镜像 + CF 构建/指纹）全答不上的那几行，且名字严格同形才采信。
+     * （官方三条 / 麦块两条 + CF 构建/指纹）全答不上的那几行，且名字严格同形才采信。
+     * `envLookupSource === "off"` 时它没有生效对象（那一轮压根不发），界面跟着灰掉。
      */
     envLookupMcmod: boolean;
     /**
@@ -54,6 +58,8 @@ export interface AppSettings {
      * Modrinth 的 API 查询优先走 mcimirror（`mod.mcimirror.top`）、官方自动兜底（Rust: `modrinth_mirror`）。
      * **默认开**：透明反向代理，没有快照正确性风险；唯一风险是可用性，官方兜底消化它。
      * CurseForge 的数据**始终**经 mcimirror 获取（免 Key，不受本档控制）。
+     * 生效范围是**取数与查询**（网络添加的搜索/详情/版本/译文、构建时的 Modrinth 请求）；
+     * 端信息反查那一轮不看它——那一轮的源由 `envLookupSource` 定。
      */
     modrinthMirror: boolean;
     /**

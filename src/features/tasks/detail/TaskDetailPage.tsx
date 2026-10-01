@@ -52,6 +52,7 @@ import {
     ToneChip,
 } from "@/components/ui";
 import { useLogFollow } from "@/lib/log-view";
+import { useScrollResetOn } from "@/lib/page-scroll";
 import { CARD_RISE, PAGE_RISE, TAB_SWEEP } from "@/lib/page-motion";
 import { cn } from "@/lib/utils";
 
@@ -111,6 +112,9 @@ export function TaskDetailPage() {
      *  它只是给动画读的旁证，改它不该单独触发一次渲染。 */
     const tabDir = useRef(0);
     useLogFollow(logRef);
+    // 换签 = 换一整块内容 ⇒ 滚动归顶（挂在所有提前返回之前：这一页有「无 task」那条出口，
+    // 挂在其后的话 hook 数量会随分支变）。判据用 `tab` 而不是 `active`：后者只在签本身消失时不同。
+    useScrollResetOn(tab);
 
     const succeeded = task?.status === "success";
 

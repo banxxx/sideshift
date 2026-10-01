@@ -1,5 +1,5 @@
-//! 第 3/4 层：在线反查（按设置只走 Modrinth 官方或麦块镜像那一家）+ `cache_dir/env-index.json`
-//! 本地索引（离线即答）+ CF 指纹腿（官方平台、凭用户自己的 Key）。
+//! 第 3/4 层：在线反查（按 `env_lookup_source` 那一档只走 Modrinth 官方或麦块镜像那一家）
+//! + `cache_dir/env-index.json` 本地索引（离线即答）+ CF 指纹腿（官方平台、凭用户自己的 Key）。
 
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
@@ -9,7 +9,7 @@ use futures::stream::{self, StreamExt};
 use serde::{Deserialize, Serialize};
 
 use crate::core::downloader::{mcmod_confident, Downloader, McmodPage, ModrinthEnv};
-use crate::models::{EnvSource, SideFlag};
+use crate::models::{EnvLookupSource, EnvSource, SideFlag};
 use super::evidence::{evidence_from_modrinth, put, rank, Evidence, EvidenceMap};
 use super::ident::{is_slug, slugs_from_file_name};
 use super::jar::JarProbe;
@@ -284,8 +284,10 @@ fn mirror_project_queue(
 
 /// 在线反查：**设置里选了哪个源就只问那个源**，不再「先镜像、答不上回落官方」——
 /// 那样两家的钱都付一遍，选了国内源反而比纯官方更慢（镜像 0.2s + 官方 2.2s 串在一行上）。
-/// `mirror=true` ⇒ 平台那条链只发 `api.minekuai.cn`（含 sha1 批量那条 Modrinth-only 接口也不发，
-/// 见 `resolve_via_mirror` 的代价说明）；`mirror=false` ⇒ 官方三条腿照旧，镜像连存活自查都不做。
+/// `Minekuai` ⇒ 平台那条链只发 `api.minekuai.cn`（含 sha1 批量那条 Modrinth-only 接口也不发，
+/// 见 `resolve_via_mirror` 的代价说明）；`Official` ⇒ 官方三条腿照旧，镜像连存活自查都不做。
+/// `Off` 不进这里：调用方（`resolve_local_jar` 与 `classify_pack`）在派轮之前就用 `is_off()`
+/// 拦掉了，这里真收到 `Off` 也只按官方那一档走。
 /// 两档末尾都挂着同一条收尾（`shared_tail`）：CF 指纹腿（官方平台、凭用户自己的 Key，
 /// 与「端信息反查源」那档设置无关——cfpack 的 CF 补取同口径）与百科补全腿（看 `mcmod` 开关）。
 /// 结果同时写回 out 与索引，并且分批落盘。
@@ -297,10 +299,10 @@ pub async fn resolve_online(
     targets: &[Target],
     pending: &[usize],
     out: &mut EvidenceMap,
-    mirror: bool,
+    source: EnvLookupSource,
     mcmod: bool,
 ) -> bool {
-    if mirror {
+    if source.is_minekuai() {
         return resolve_via_mirror(dl, index, cache_dir, targets, pending, out, mcmod).await;
     }
     let mut ok = true;
@@ -826,7 +828,8 @@ fn store_mcmod(
 }
 
 /// 单个本地 jar 的端取证阶梯（用户手动添加的行走这条路），口径与整包分类完全一致：
-/// jar 自证 → 本地索引（离线即答）→ 联网按设置选定的那一个源反查并落盘（见 `resolve_online`）。
+/// jar 自证 → 本地索引（离线即答）→ 联网按 `source` 那一档选定的**唯一一个源**反查并落盘
+/// （见 `resolve_online`；`source=Off` 时这一层整个跳过）。
 /// `cf` = 这枚 jar 的 CF 构建级端标签（版本列表带来的官方声明，本地添加恒 None）：
 /// 在 jar 自证与索引结论**之后**播种，`put` 只认等档或更好，真正更优的旧结论压不过它。
 /// 返回 `None` = 各层都没结论（前端标「需人工确认」，绝不猜）
@@ -836,8 +839,7 @@ pub async fn resolve_local_jar(
     file_name: &str,
     probe: &JarProbe,
     cf: Option<(SideFlag, SideFlag)>,
-    online: bool,
-    mirror: bool,
+    source: EnvLookupSource,
     mcmod: bool,
 ) -> Option<Evidence> {
     let key = file_name.to_string();
@@ -869,9 +871,9 @@ pub async fn resolve_local_jar(
             },
         );
     }
-    if online && !pending.is_empty() {
+    if !source.is_off() && !pending.is_empty() {
         resolve_online(
-            dl, &mut index, cache_dir, &targets, &pending, &mut out, mirror, mcmod,
+            dl, &mut index, cache_dir, &targets, &pending, &mut out, source, mcmod,
         )
         .await;
     }
@@ -892,8 +894,7 @@ pub async fn resolve_added_build(
     sha1: Option<&str>,
     title: Option<&str>,
     cf: Option<(SideFlag, SideFlag)>,
-    online: bool,
-    mirror: bool,
+    source: EnvLookupSource,
     mcmod: bool,
 ) -> Option<Evidence> {
     let probe = JarProbe {
@@ -903,7 +904,7 @@ pub async fn resolve_added_build(
         title: title.map(|s| s.trim().to_string()).filter(|s| !s.is_empty()),
         ..Default::default()
     };
-    resolve_local_jar(dl, cache_dir, file_name, &probe, cf, online, mirror, mcmod).await
+    resolve_local_jar(dl, cache_dir, file_name, &probe, cf, source, mcmod).await
 }
 
 /// 结论挂在哪些键下：返回项目的 slug/id + 本次查询用的键，下次离线即答
@@ -1061,12 +1062,12 @@ mod tests {
     }
 
     #[tokio::test]
-    #[ignore = "真联网：镜像两条腿 + 官方回落各发几发请求"]
+    #[ignore = "真联网：`Minekuai` 档只发镜像两条腿，答不上的行留空（不回落官方）"]
     async fn mirror_round_answers_labels_itself_and_404_is_not_a_failure() {
         // 这一条测的是「加速件」的全部契约，少一条都不算通：
         // ① 存活自查过后，在册的行由镜像答上（来源标 MirrorProject，不冒充平台项目）
-        // ② 镜像答上的行不再发官方腿（不然这一档白加）
-        // ③ 两边都查不到的行留空，且 `complete` 仍然是 true——404 不是故障
+        // ② 选了麦块就一条官方请求都不发（含它没有对应端点的 sha1 批量那条），否则这一档白加
+        // ③ 镜像查不到的行留空，且 `complete` 仍然是 true——404 不是故障
         let dir = std::env::temp_dir().join(format!(
             "sideshift-env-mirror-{}",
             std::process::id()
@@ -1095,7 +1096,7 @@ mod tests {
             &targets,
             &all,
             &mut out,
-            true,
+            EnvLookupSource::Minekuai,
             false,
         )
         .await;
@@ -1222,8 +1223,7 @@ displayName = "Obscure Lib"
             "obscure-lib-1.0.jar",
             &probe_local_jar(&path),
             None,
-            false,
-            false,
+            EnvLookupSource::Off,
             false,
         )
         .await;
@@ -1327,8 +1327,7 @@ displayName = "Obscure Lib"
             Some(&sha1.to_uppercase()),
             Some("Just Enough Items (JEI)"),
             None,
-            false,
-            false,
+            EnvLookupSource::Off,
             false,
         )
         .await
@@ -1362,8 +1361,7 @@ displayName = "Obscure Lib"
                 Some(bad),
                 None,
                 None,
-                false,
-                false,
+                EnvLookupSource::Off,
                 false,
             )
             .await;

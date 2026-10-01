@@ -29,6 +29,7 @@ import { cn, prefersReducedMotion } from "@/lib/utils";
 import { REFLOW } from "@/lib/springs";
 import { abortAllFlights, startFlight, type Flight } from "./delete-flight";
 import { entryStepMs, playEntry } from "@/lib/entry-curve";
+import { useScrollResetOn } from "@/lib/page-scroll";
 
 type Filter = "all" | "running" | "success" | "failed";
 
@@ -126,6 +127,8 @@ export function TasksPage() {
      * 首屏不跑（交给卡片挂载时 motion 自己的 initial 淡入）。
      */
     const bodyRef = useRef<HTMLDivElement | null>(null);
+    // 换档是一次换页 ⇒ 滚动跟着归顶（容器归 App 的 main 常驻，不清就会带着上一档的行数进来）
+    useScrollResetOn(filter);
     const firstPaint = useRef(true);
     useLayoutEffect(() => {
         if (firstPaint.current) {

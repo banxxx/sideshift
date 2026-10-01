@@ -11,6 +11,7 @@ import {
 } from "@/lib/format";
 import { t, useT } from "@/lib/i18n";
 import { notify } from "@/lib/notify";
+import { useScrollResetOn } from "@/lib/page-scroll";
 import type { ModDisposition, PlanMod } from "@/lib/types";
 import {
     Btn,
@@ -235,6 +236,9 @@ export function PlanListModal({
     /** 刚复制过的那一行（图标换 Check 的绿色回执）；一次只记一行 */
     const [copiedId, setCopiedId] = useState<string | null>(null);
     const copyTimer = useRef(0);
+    /** 这一档的滚动盒（弹窗不在 `main` 里，够不着页面那个容器）：换筛选档时归顶 */
+    const listRef = useRef<HTMLDivElement | null>(null);
+    useScrollResetOn(tagFilter, listRef);
 
     // 每次打开重建暂存、搜索与筛选（上次未应用的草稿不带入）
     useEffect(() => {
@@ -418,7 +422,7 @@ export function PlanListModal({
                 读成「列表被重刷了」。Swap 自带 relative 外壳，所以这层滚动容器不用再加定位。
                 list-scroll：内容宽度必须恒定，否则从行少的档切走时底部会闪一条横向滚动条
                 （退场层带的是切换前量好的 px 宽度，口径见 App.css 的 .list-scroll）。 */}
-            <div className="list-scroll -mx-1 flex min-h-0 flex-1 flex-col overflow-auto px-1">
+            <div ref={listRef} className="list-scroll -mx-1 flex min-h-0 flex-1 flex-col overflow-auto px-1">
                 <Swap swapKey={tagFilter} className="gap-0.5">
                     {filtered.map((m) => {
                         const checked = checkedOf(m);

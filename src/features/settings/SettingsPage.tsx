@@ -1,5 +1,5 @@
 /**
- * 设置页：四个分组（转换选项 / 存储与缓存 / 网络 / 外观与关于），每组 = 等宽小标题 + 一张无内边距卡片，行用 divide-y 分隔。
+ * 设置页：五个分组（转换选项 / 存储与缓存 / 下载与查询 / 端信息反查 / 外观与关于），每组 = 等宽小标题 + 一张无内边距卡片，行用 divide-y 分隔。
  * 读写走 @/lib/api 门面；主题走 @/lib/theme 单一真源（侧栏按钮同步）。
  * 设置是「改一处即持久化」：写盘失败必须外显并从后端重读，让界面与真正常量的那份一致。
  */
@@ -78,13 +78,23 @@ const localeOptions = (t: TranslateFn): SelectOption[] =>
     LOCALE_TABS.map((o) => (o.value === "auto" ? { ...o, label: t("settings.system-default", "跟随系统") } : o));
 
 /**
- * 端信息反查的两档源。**只是「先问谁」**：选麦块时查不到的行照旧回落官方，一档都没答上才算无依据。
+ * 端信息反查那一轮「问谁」的三档（互斥 ⇒ 一枚下拉，不再用「总闸 + 子开关」两颗控件管同一条链）。
+ * `off` 就是原来那颗「联网反查」开关关上的效果；`minekuai` **只发麦块**、不悄悄回落官方
+ * （见 Rust `env::index::resolve_online`：存活自查不过就如实报「未全部完成」）。
  * 表建在函数里、每档一条 `t(字面量)`，否则切语言不跟着换、`i18n check` 也扫不到。
  */
 const envLookupOptions = (t: TranslateFn): SelectOption[] => [
+    { value: "off", label: t("settings.lookup-off", "不反查") },
     // 「官方源」与上面「下载源」那档用的是同一个键：同一份中文只登记一次，译文也不会两处岔开
     { value: "official", label: t("backend.official-source", "官方源") },
     { value: "minekuai", label: t("settings.source-minekuai", "麦块 API") },
+];
+
+/** Modrinth 查询的两档（同一份数据、两条路线，所以也是下拉而不是开关）：
+ *  mcimirror 是透明反向代理，官方是兜底那一条；CurseForge 的数据始终经 mcimirror，不看这一档 */
+const modrinthQueryOptions = (t: TranslateFn): SelectOption[] => [
+    { value: "mirror", label: t("settings.query-prefer-mirror", "优先镜像") },
+    { value: "official", label: t("settings.query-only-official", "只用官方") },
 ];
 
 /** 生效档 → 自称（「跟随系统」那行的说明要说出现在实际是哪一档） */
@@ -236,11 +246,11 @@ export function SettingsPage() {
         setSettings(next);
         try {
             await api.saveSettings(next);
-            // 这三项直接决定方案怎么判、联网那一轮还算不算在跑 ⇒ 改过就得作废转换页草稿，
-            // 下次进来重算。其余设置（输出目录/主题/更新渠道…）不参与判定，不该顺手抹掉手改
+            // 这三项直接决定方案怎么判、联网那一轮还发不发 ⇒ 改过就得作废转换页草稿，
+            // 下次进来重算。其余设置（输出目录/主题/更新渠道/Modrinth 镜像…）不参与判定，不该顺手抹掉手改
             if (
                 p.stripClientOnly !== undefined ||
-                p.autoClassifyOnline !== undefined ||
+                p.envLookupSource !== undefined ||
                 p.envLookupMcmod !== undefined
             ) {
                 clearDraft();
@@ -512,8 +522,8 @@ export function SettingsPage() {
                     </SettingRow>
                 </Section>
 
-                {/* ---- 网络 ---- */}
-                <Section title={t("settings.network", "网络")}>
+                {/* ---- 下载与查询：拉文件与问平台接口走哪条路线，全是「选一条路」的档位 ---- */}
+                <Section title={t("settings.download-query", "下载与查询")}>
                     <SettingRow label={t("settings.download-source", "下载源")} desc={t("settings.prefer-cn", "版本表与加载器 jar 优先走国内镜像，不通自动回落官方")}>
                         <SearchSelect
                             plain
@@ -524,56 +534,23 @@ export function SettingsPage() {
                         />
                     </SettingRow>
                     <SettingRow
-                        label={t("settings.env-lookup-source", "端信息反查源")}
-                        desc={t("settings.env-lookup-source-desc", "联网查询模组端信息的来源")}
+                        label={t("settings.modrinth-query", "Modrinth 查询")}
+                        desc={t(
+                            "settings.modrinth-mirror-desc",
+                            "网络添加的搜索/详情/版本/译文优先走 mcimirror 镜像、官方自动兜底；CurseForge 数据始终经 mcimirror 获取（无需 API Key）"
+                        )}
                     >
                         <SearchSelect
                             plain
-                            value={settings.envLookupMirror ? "minekuai" : "official"}
-                            options={envLookupOptions(t)}
-                            onChange={(v) => void patch({ envLookupMirror: v === "minekuai" })}
+                            value={settings.modrinthMirror ? "mirror" : "official"}
+                            options={modrinthQueryOptions(t)}
+                            onChange={(v) => void patch({ modrinthMirror: v === "mirror" })}
                             className="w-[196px]"
                         />
                     </SettingRow>
                     <SettingRow
-                        label={t("settings.mcmod-lookup", "百科补全")}
-                        desc={t(
-                            "settings.mcmod-lookup-desc",
-                            "平台各腿全答不上时查 MC百科词条的「运行环境」（非官方接口，默认关）"
-                        )}
-                    >
-                        <Toggle
-                            size="md"
-                            checked={settings.envLookupMcmod}
-                            onChange={(v) => void patch({ envLookupMcmod: v })}
-                        />
-                    </SettingRow>
-                    <SettingRow
-                        label={t("settings.modrinth-mirror", "Modrinth 镜像")}
-                        desc={t(
-                            "settings.modrinth-mirror-desc",
-                            "Modrinth 的查询优先走 mcimirror 镜像、官方自动兜底；CurseForge 数据始终经 mcimirror 获取（无需 API Key）"
-                        )}
-                    >
-                        <Toggle
-                            size="md"
-                            checked={settings.modrinthMirror}
-                            onChange={(v) => void patch({ modrinthMirror: v })}
-                        />
-                    </SettingRow>
-                    <SettingRow
-                        label={t("settings.online-side", "联网反查端信息")}
-                        desc={t("settings.query-modrinth", "包内证据不足时，按 sha1 向 Modrinth 查该构建的端支持度并本地缓存")}
-                    >
-                        <Toggle
-                            size="md"
-                            checked={settings.autoClassifyOnline}
-                            onChange={(v) => void patch({ autoClassifyOnline: v })}
-                        />
-                    </SettingRow>
-                    <SettingRow
                         label={t("settings.parallel-downloads", "并发下载数")}
-                        desc={t("settings.threads-mod", "同时拉取模组 jar 与反查端信息的线程数（1–16）")}
+                        desc={t("settings.threads-mod", "同时拉取模组与服务端文件的线程数（1–16）；端信息反查用的是固定的并发")}
                     >
                         <Stepper
                             plain
@@ -581,6 +558,45 @@ export function SettingsPage() {
                             max={16}
                             value={settings.concurrency}
                             onChange={(v) => void patch({ concurrency: v })}
+                        />
+                    </SettingRow>
+                </Section>
+
+                {/* ---- 端信息反查：一条链的两个档位——问谁，以及它答不上时补不补 ---- */}
+                <Section title={t("settings.env-lookup", "端信息反查")}>
+                    <SettingRow
+                        label={t("settings.lookup-source", "反查源")}
+                        desc={
+                            settings.envLookupSource === "off"
+                                ? t("settings.lookup-off-desc", "不发联网请求，只用包内自证、本地索引与名称兜底")
+                                : t("settings.env-lookup-source-desc", "包内证据不足时联网反查该构建的端支持度并本地缓存；选一个源，不会两个都问")
+                        }
+                    >
+                        <SearchSelect
+                            plain
+                            value={settings.envLookupSource}
+                            options={envLookupOptions(t)}
+                            onChange={(v) => void patch({ envLookupSource: v as AppSettings["envLookupSource"] })}
+                            className="w-[196px]"
+                        />
+                    </SettingRow>
+                    <SettingRow
+                        label={t("settings.mcmod-lookup", "百科补全")}
+                        desc={
+                            // 关掉反查时这一档压根没有生效对象：灰掉 + 把理由写在同一行，不再另起气泡
+                            settings.envLookupSource === "off"
+                                ? t("settings.mcmod-lookup-inert", "反查关掉时这一档不起作用")
+                                : t(
+                                      "settings.mcmod-lookup-desc",
+                                      "平台各腿全答不上时查 MC百科词条的「运行环境」（非官方接口，默认关）"
+                                  )
+                        }
+                    >
+                        <Toggle
+                            size="md"
+                            disabled={settings.envLookupSource === "off"}
+                            checked={settings.envLookupMcmod}
+                            onChange={(v) => void patch({ envLookupMcmod: v })}
                         />
                     </SettingRow>
                 </Section>
@@ -686,9 +702,10 @@ function Section({ title, children }: { title: string; children: ReactNode }) {
 function SettingsSkeleton() {
     const t = useT();
     const groups: Array<[string, number]> = [
-        [t("settings.conversion-options", "转换选项"), 2],
+        [t("settings.conversion-options", "转换选项"), 5],
         [t("settings.storage-cache", "存储与缓存"), 3],
-        [t("settings.network", "网络"), 5],
+        [t("settings.download-query", "下载与查询"), 3],
+        [t("settings.env-lookup", "端信息反查"), 2],
         [t("settings.appearance-about", "外观与关于"), 4],
     ];
     return (

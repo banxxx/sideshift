@@ -90,7 +90,7 @@ pub async fn classify_pack(
     // 拿着一份旧的名字去建方案（第一屏一排编号），而且 reuse 那条短路会把补取整个跳过
     let cf_rows = cf_enrich(&state, force).await;
     // 快照 inputs：guard 必须在这个块里结束，否则 MutexGuard 跨 await 让命令 future 不 Send
-    let (parsed, file_name, strip, online, mirror, mcmod, cache_dir, concurrency, cached) = {
+    let (parsed, file_name, strip, env_source, mcmod, cache_dir, concurrency, cached) = {
         let inner = lock(&state);
         let empty = env::EvidenceMap::new();
         match last_parsed_of(&inner) {
@@ -120,8 +120,7 @@ pub async fn classify_pack(
                     p,
                     inner.last_file.clone().unwrap_or_default(),
                     inner.settings.strip_client_only,
-                    inner.settings.auto_classify_online,
-                    inner.settings.env_lookup_mirror,
+                    inner.settings.env_lookup_source,
                     inner.settings.env_lookup_mcmod,
                     PathBuf::from(&inner.settings.cache_dir),
                     inner.settings.concurrency.max(1) as usize,
@@ -140,7 +139,7 @@ pub async fn classify_pack(
     if let Some((plan, online_running)) = cached {
         return Ok(PlanClassification {
             plan,
-            online_pending: online && online_running,
+            online_pending: !env_source.is_off() && online_running,
             cf_rows,
         });
     }
@@ -214,7 +213,7 @@ pub async fn classify_pack(
 
     let plan = detector::build_plan(&parsed, strip, &ev, &code);
     // 离线那次推送：还有在线层要跑就说明本轮没结束（done=false，前端继续转圈）
-    let offline_final = !online || pending.is_empty();
+    let offline_final = env_source.is_off() || pending.is_empty();
     // 这一包是否已经有一轮联网反查在飞。**必须在下面立标记之前读**——那个标记写的就是
     // 「本轮还要联网」，先写后读会永远读到「有人在跑」，于是第二轮起不来、剩下的行再没人查。
     let round_running = !offline_final && online_running_of(&lock(&state));
@@ -238,7 +237,7 @@ pub async fn classify_pack(
     );
 
     // 在线层：只查离线没答上的那些行
-    if online && !pending.is_empty() {
+    if !env_source.is_off() && !pending.is_empty() {
         // 同一包的联网轮不叠第二个：上一轮还在跑就把这一轮的收尾交给它。
         // 叠轮不只是多几条提示——两三轮查的是同一批行，白付一遍请求和时间，
         // 而每一轮各推一次收尾，前端就把同一句结论报好几遍。
@@ -296,7 +295,7 @@ pub async fn classify_pack(
                     &targets,
                     &pending,
                     &mut ev,
-                    mirror,
+                    env_source,
                     mcmod,
                 ),
             )
@@ -308,7 +307,7 @@ pub async fn classify_pack(
             let answered = touched.iter().filter(|p| ev.contains_key(p.as_str())).count();
             println!(
                 "[env] 源={} 待查 {} 行 → 有结论 {} 行 · 完整={} · 用时 {}ms",
-                if mirror { "麦块" } else { "官方" },
+                if env_source.is_minekuai() { "麦块" } else { "官方" },
                 pending.len(),
                 answered,
                 complete,

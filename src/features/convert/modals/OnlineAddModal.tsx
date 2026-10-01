@@ -83,6 +83,9 @@ export function OnlineAddModal({
     const [zh, setZh] = useState<{ slug: string; tr: ModTranslation } | null>(null);
     const [zhOn, setZhOn] = useState(false);
     const [zhLoading, setZhLoading] = useState(false);
+    /** 「复制名称」的就地回执（图标换 Check）；只记当前这一本，1.8s 后复位 */
+    const [nameCopied, setNameCopied] = useState(false);
+    const copyTimer = useRef(0);
     const [result, setResult] = useState<{ total: number; results: ModSearchResult[] }>({
         total: 0,
         results: [],
@@ -290,6 +293,23 @@ export function OnlineAddModal({
             });
     };
 
+    /** 复制平台原名（`name`），不是标题栏那枚显示名——显示名会被内置词典的中文名和机翻盖过，
+     *  而平台搜索、方案对账认的都是原名。反馈照逐行复制那口径：就地换图标、不发全局提示，
+     *  只有剪贴板本身不可用这一种失败值得占提示区 */
+    const copySourceName = async () => {
+        const mod = detail;
+        if (!mod) return;
+        try {
+            await navigator.clipboard.writeText(mod.name);
+        } catch {
+            notify(t("common.copy-failed", "复制失败：剪贴板不可用"), "error");
+            return;
+        }
+        window.clearTimeout(copyTimer.current);
+        setNameCopied(true);
+        copyTimer.current = window.setTimeout(() => setNameCopied(false), 1800);
+    };
+
     const close = () => {
         onClose();
         setDetailStack([]);
@@ -419,6 +439,21 @@ export function OnlineAddModal({
                             options={loOpts}
                             onChange={(v) => setLoSel(v as LoaderKind | "")}
                         />
+                        {/* 复制的是平台原名（`name`）：标题栏那枚显示名会被内置词典的中文名和右边的
+                            「翻译」盖过，而粘回平台搜索、和方案对账认的都是原名。回执沿用「复制方案」
+                            那颗的字面互换，不另加图标 */}
+                        <Btn
+                            size="xs"
+                            onClick={() => void copySourceName()}
+                            className={cn(
+                                "rounded-md bg-surface px-2 text-text-1",
+                                nameCopied && "text-emerald hover:text-emerald"
+                            )}
+                        >
+                            {nameCopied
+                                ? t("common.copied", "已复制")
+                                : t("convert-modals.copy-name", "复制名称")}
+                        </Btn>
                         {canTranslate && (
                             <Btn
                                 size="xs"

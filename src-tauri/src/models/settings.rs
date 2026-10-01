@@ -27,6 +27,42 @@ impl DownloadSource {
     }
 }
 
+/// 端信息反查那一轮「问谁」（Settings · 端信息反查）。三档互斥，所以收成一枚下拉：
+/// 原来 `Off` 是独立的「联网反查」总闸、`Minekuai` 是「反查走镜像」开关，两个控件管同一条链，
+/// 于是能出现「总闸关了、子项还亮着」这种界面自己都不知道答案的状态
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum EnvLookupSource {
+    /// 不发联网反查：只剩包内自证 + 本地索引 + 名称兜底
+    Off,
+    /// Modrinth 官方那三条腿（默认）
+    #[default]
+    Official,
+    /// 麦块开放 API 的 Modrinth 项目快照。选中它时那一轮**只发麦块**、不悄悄回落官方
+    Minekuai,
+    /// 手改 settings.json 写进无效值时认成占位，不能让整份设置因为一个坏枚举全丢（同 DownloadSource）
+    #[serde(other)]
+    Unspecified,
+}
+
+impl EnvLookupSource {
+    pub fn is_off(self) -> bool {
+        self == Self::Off
+    }
+
+    pub fn is_minekuai(self) -> bool {
+        self == Self::Minekuai
+    }
+
+    /// 占位值归位官方：写坏了来源时「多问一次官方」比「整轮不发」保守
+    pub fn normalized(self) -> Self {
+        match self {
+            Self::Off | Self::Minekuai => self,
+            _ => Self::Official,
+        }
+    }
+}
+
 #[derive(Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct AppSettings {
@@ -36,22 +72,16 @@ pub struct AppSettings {
     pub verify_after_build: bool,
     pub download_source: DownloadSource,
     pub concurrency: u32,
-    /// 方案自动分类时允许联网反查 Modrinth（sha1 批量 + 项目级端声明）。
-    /// 旧 settings.json 无此字段 → default_fn 补 true，不能让整体反序列化失败丢用户设置
-    #[serde(default = "default_online_classify")]
-    pub auto_classify_online: bool,
-    /// 端信息反查走国内镜像（麦块开放 API 的 Modrinth 项目快照）而不是 Modrinth 官方。
-    /// **默认关**：判据来自一个无 SLA 的第三方快照，覆盖率实测也不是满的（收录外的 slug 返回 404）。
-    /// 开着时联网那一轮**只发麦块**：官方三条腿（含它没有对应端点的 sha1 批量那条）一条都不发，
-    /// 存活自查不过就直接记「这一轮没跑完」，不再悄悄回落官方。
-    /// （CF 指纹腿独立于本档：它问的是 CurseForge、凭用户自己的 Key，见 `cfpack`。）
+    /// 端信息反查那一轮问谁（关闭 / Modrinth 官方 / 麦块 API），三档语义见 `EnvLookupSource`。
+    /// 旧 settings.json 无此字段 → `Official`，不能让缺一个字段把整份设置抹掉
     #[serde(default)]
-    pub env_lookup_mirror: bool,
+    pub env_lookup_source: EnvLookupSource,
     /// 端判定的百科补全腿（MC百科词条的「运行环境」）。
     /// **默认关**：它不是官方行为——没有公开 API，靠解析两页 HTML（搜索页 + 词条页），
     /// 对方一次改版、一次人机验证就能让整条腿哑掉；结论也是社区编辑的第二手声明。
-    /// 开着时它只补平台各腿（Modrinth 官方/镜像 + CF 构建/指纹）全答不上的那几行，
-    /// 且名字严格同形才采信（见 `env::index::resolve_via_mcmod`）。
+    /// 它是**补全**而不是选源：只在 `env_lookup_source` 那一档的平台各腿（官方三条 / 麦块两条）
+    /// 加 CF 构建/指纹全答不上的行才发请求，且名字严格同形才采信（见 `env::index::resolve_via_mcmod`）。
+    /// 反查关掉（`Off`）时这一档无从生效，设置页要跟着灰掉。
     #[serde(default)]
     pub env_lookup_mcmod: bool,
     /// 更新渠道。`None` 不是"没选过"的临时状态而是真语义：**跟随这一枚包自己的版本号**——
@@ -63,6 +93,9 @@ pub struct AppSettings {
     /// **默认开**：它是透明反向代理（同一份数据原样转发，没有快照正确性风险），唯一风险是
     /// 可用性，而候选链的官方兜底把这一点也消化了。CurseForge 的数据**始终**经 mcimirror
     /// 获取（免 Key，那是无 Key 世界里唯一能应答的源），不受本档控制——见 `source::candidates`。
+    /// 生效范围是**取数与查询**（网络添加模组的搜索/详情/版本/译文、构建时的 Modrinth 请求）；
+    /// 端信息反查那一轮不看它——那一轮的源由 `env_lookup_source` 定
+    /// （反查用的是默认 `Downloader`，镜像档位没挂上去）。
     /// 旧 settings.json 无此字段 → default_fn 补 true。
     #[serde(default = "default_modrinth_mirror")]
     pub modrinth_mirror: bool,
@@ -147,10 +180,6 @@ pub struct UpdateInfo {
     pub latest: Option<String>,
     /// latest 严格新于 current 才算有更新：同版本、更老都不提示
     pub has_update: bool,
-}
-
-fn default_online_classify() -> bool {
-    true
 }
 
 /// Modrinth 镜像默认开：见字段注释
@@ -240,9 +269,7 @@ impl Default for AppSettings {
             verify_after_build: false,
             download_source: DownloadSource::Official,
             concurrency: 6,
-            auto_classify_online: true,
-            // 第三方镜像默认关：见字段注释（覆盖率与新鲜度都不由我们保证）
-            env_lookup_mirror: false,
+            env_lookup_source: EnvLookupSource::Official,
             // 百科补全腿默认关：非官方行为（HTML 解析 + 社区二手声明），见字段注释
             env_lookup_mcmod: false,
             update_channel: None,
@@ -277,6 +304,7 @@ impl AppSettings {
         self.output_dir = native_path(&self.output_dir);
         self.cache_dir = native_path(&self.cache_dir);
         self.download_source = self.download_source.normalized();
+        self.env_lookup_source = self.env_lookup_source.normalized();
         // 只在"选过"的时候归位；None 是"跟随当前构建"，不能被当成无效值顶成正式版
         self.update_channel = self.update_channel.map(UpdateChannel::normalized);
         // 语言档位写坏了顶成"跟随系统"：否则设置页的下拉会显示成一个不存在的选项，

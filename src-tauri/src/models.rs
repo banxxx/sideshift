@@ -51,7 +51,7 @@ mod tests {
     #[test]
     fn settings_without_update_channel_still_load() {
         let legacy = r#"{"outputDir":"o","cacheDir":"c","stripClientOnly":true,"verifyAfterBuild":false,
-            "downloadSource":"official","concurrency":6,"autoClassifyOnline":true}"#;
+            "downloadSource":"official","concurrency":6}"#;
         let s: AppSettings = serde_json::from_str(legacy).expect("旧设置应能加载");
         assert_eq!(s.update_channel, None);
 
@@ -65,7 +65,7 @@ mod tests {
     #[test]
     fn settings_without_modrinth_mirror_still_load() {
         let legacy = r#"{"outputDir":"o","cacheDir":"c","stripClientOnly":true,"verifyAfterBuild":false,
-            "downloadSource":"official","concurrency":6,"autoClassifyOnline":true}"#;
+            "downloadSource":"official","concurrency":6}"#;
         let s: AppSettings = serde_json::from_str(legacy).expect("旧设置应能加载");
         assert!(s.modrinth_mirror, "缺字段补默认开");
         // 老 settings.json 里残留的 curseforge_api_key 字段（已退役）不该拖垮反序列化
@@ -75,13 +75,47 @@ mod tests {
         assert!(s.modrinth_mirror);
     }
 
+    /// 端信息反查源是**三值**枚举（关 / 官方 / 麦块），不是原来那两颗布尔：
+    /// 缺字段落官方（新设置没有老用户，但整个文件反序列化失败会抹掉别的档）；
+    /// `off` 是唯一会关掉联网轮的档位，读不出来就等于「待查行永远不查」；
+    /// 值写坏了只能归位成官方，不能连带失败（同 DownloadSource / UpdateChannel / AppLocale）。
+    #[test]
+    fn env_lookup_source_loads_off_and_normalizes_bad_value() {
+        let without = r#"{"outputDir":"o","cacheDir":"c","stripClientOnly":true,"verifyAfterBuild":false,
+            "downloadSource":"official","concurrency":6}"#;
+        let s: AppSettings = serde_json::from_str(without).expect("缺这一档不该拖垮整份设置");
+        assert_eq!(s.env_lookup_source, EnvLookupSource::Official, "缺字段落官方源");
+        assert!(!s.env_lookup_source.is_off(), "默认档不该悄悄关掉联网轮");
+
+        let off: AppSettings = serde_json::from_str(
+            r#"{"outputDir":"o","cacheDir":"c","stripClientOnly":true,"verifyAfterBuild":false,
+            "downloadSource":"official","concurrency":6,"envLookupSource":"off"}"#,
+        )
+        .expect("关闭档应能加载");
+        assert!(off.env_lookup_source.is_off());
+        // 「关」优先于百科补全那一档：调用方按 is_off() 拦掉了联网轮，mcmod 也轮不到发请求
+        assert!(!off.env_lookup_source.is_minekuai());
+
+        let minekuai: AppSettings = serde_json::from_str(
+            r#"{"outputDir":"o","cacheDir":"c","stripClientOnly":true,"verifyAfterBuild":false,
+            "downloadSource":"official","concurrency":6,"envLookupSource":"minekuai"}"#,
+        )
+        .expect("麦块档应能加载");
+        assert!(minekuai.env_lookup_source.is_minekuai());
+
+        let broken = r#"{"outputDir":"o","cacheDir":"c","stripClientOnly":true,"verifyAfterBuild":false,
+            "downloadSource":"official","concurrency":6,"envLookupSource":"curseforge"}"#;
+        let s: AppSettings = serde_json::from_str(broken).expect("无效源值不该拖垮整份设置");
+        assert_eq!(s.normalized().env_lookup_source, EnvLookupSource::Official);
+    }
+
     /// 旧 settings.json / 旧任务存档都没有装 Loader 那三颗开关：必须加载成功，且默认值不能反过来——
     /// 本机安装与复用都默认**开**（一次装好的服务端 100–160 MB，不该让老用户从此每次重下重装；
     /// 而「产物上传即开服」这条主路径也不该对老用户隐身）。关掉才等价于旧产物那份行为。
     #[test]
     fn loader_switch_defaults_hold_for_legacy_payloads() {
         let legacy = r#"{"outputDir":"o","cacheDir":"c","stripClientOnly":true,"verifyAfterBuild":false,
-            "downloadSource":"official","concurrency":6,"autoClassifyOnline":true}"#;
+            "downloadSource":"official","concurrency":6}"#;
         let s: AppSettings = serde_json::from_str(legacy).expect("旧设置应能加载");
         assert!(s.install_loader_locally, "本机安装默认必须开");
         assert!(s.reuse_loader_installs, "复用默认必须开");
@@ -100,7 +134,7 @@ mod tests {
     #[test]
     fn settings_without_locale_still_load_and_bad_value_normalizes() {
         let legacy = r#"{"outputDir":"o","cacheDir":"c","stripClientOnly":true,"verifyAfterBuild":false,
-            "downloadSource":"official","concurrency":6,"autoClassifyOnline":true}"#;
+            "downloadSource":"official","concurrency":6}"#;
         let s: AppSettings = serde_json::from_str(legacy).expect("旧设置应能加载");
         assert_eq!(s.locale, AppLocale::Auto, "缺字段必须落跟随系统");
 

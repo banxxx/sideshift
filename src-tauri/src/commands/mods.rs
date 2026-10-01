@@ -5,12 +5,11 @@ use super::*;
 /// 读文件 + 可能解几千个 class，不能占住 async 运行时
 #[tauri::command]
 pub async fn inspect_added_mod(state: S<'_>, path: String) -> Result<AddedModSide, String> {
-    let (cache_dir, online, mirror, mcmod, concurrency) = {
+    let (cache_dir, lookup, mcmod, concurrency) = {
         let inner = lock(&state);
         (
             PathBuf::from(&inner.settings.cache_dir),
-            inner.settings.auto_classify_online,
-            inner.settings.env_lookup_mirror,
+            inner.settings.env_lookup_source,
             inner.settings.env_lookup_mcmod,
             inner.settings.concurrency.max(1) as usize,
         )
@@ -34,8 +33,7 @@ pub async fn inspect_added_mod(state: S<'_>, path: String) -> Result<AddedModSid
         &file_name,
         &probe,
         None, // 本地 jar 没有 CF 构建坐标，端标签无从谈起
-        online,
-        mirror,
+        lookup,
         mcmod,
     )
     .await;
@@ -78,12 +76,11 @@ pub async fn inspect_added_build(
     cf_client: Option<SideFlag>,
     cf_server: Option<SideFlag>,
 ) -> Result<AddedModSide, String> {
-    let (cache_dir, online, mirror, mcmod, concurrency) = {
+    let (cache_dir, lookup, mcmod, concurrency) = {
         let inner = lock(&state);
         (
             PathBuf::from(&inner.settings.cache_dir),
-            inner.settings.auto_classify_online,
-            inner.settings.env_lookup_mirror,
+            inner.settings.env_lookup_source,
             inner.settings.env_lookup_mcmod,
             inner.settings.concurrency.max(1) as usize,
         )
@@ -100,8 +97,7 @@ pub async fn inspect_added_build(
         Some(&sha1),
         title.as_deref(),
         cf,
-        online,
-        mirror,
+        lookup,
         mcmod,
     )
     .await;
