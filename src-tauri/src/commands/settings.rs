@@ -38,66 +38,6 @@ pub fn list_download_sources() -> Vec<VersionOption> {
     ]
 }
 
-/// 检查更新（Rust: check_update -> 该渠道的最新版本与是否有更新）。
-///
-/// 端点是 `/releases`（列表）而**不是** `/releases/latest`：官方定义 latest 只返回
-/// "most recent non-prerelease, non-draft release"，所以 Beta 包在那条线上永远看不见自己该收的版本。
-/// 渠道优先用用户在设置页选的；没选过时看这一枚包自己的版本号带不带预发布位——
-/// 新装用户一个设置都没动也不会站错队。
-/// 比较走 semver：`1.0.0-beta.2` 比 `1.0.0-beta.10` 新，字符串比较正好比反。
-#[tauri::command]
-pub async fn check_update(app: AppHandle, state: S<'_>) -> Result<UpdateInfo, String> {
-    let picked = lock(&state).settings.update_channel;
-    let current = app.package_info().version.to_string();
-    let cur = semver::Version::parse(current.trim_start_matches('v'))
-        .map_err(|e| format!("本地版本号不是合法 semver（{current}）：{e}"))?;
-    let want_prerelease = picked.map(|c| c == UpdateChannel::Beta).unwrap_or(!cur.pre.is_empty());
-
-    let dl = downloader_of(&state);
-    // 与前端 `api.REPO_URL` 同指一个仓库，迁移仓库时两处一起改
-    const UPDATE_URL: &str = "https://api.github.com/repos/banxxx/sideshift/releases?per_page=30";
-    let v = dl
-        .client
-        .get(UPDATE_URL)
-        .send()
-        .await
-        .map_err(|e| reqwest_code(&e, UPDATE_URL))?
-        .json::<serde_json::Value>()
-        .await
-        .map_err(|e| reqwest_code(&e, UPDATE_URL))?;
-    // 仓库还没有任何 release 时 GitHub 回的是 `{"message": "Not Found"}` 对象，不是数组。
-    // 失败这件事要原样递到界面上（不能装作"已是最新版本"），但它那句英文不用：按同一口径归类，
-    // 前端出「GitHub 上没有找到对应内容」。限流单独归 `busy`——两者给用户的下一动作不一样
-    let list = v.as_array().ok_or_else(|| {
-        let msg = v["message"].as_str().unwrap_or("");
-        net_code(UPDATE_URL, if msg.contains("rate limit") { 429 } else { 404 })
-    })?;
-
-    let mut best: Option<semver::Version> = None;
-    for r in list {
-        if r["draft"].as_bool().unwrap_or(false) {
-            continue;
-        }
-        // 渠道对不上的一律跳过：正式版用户不该被推测试包，反之亦然
-        if r["prerelease"].as_bool().unwrap_or(false) != want_prerelease {
-            continue;
-        }
-        let Some(tag) = r["tag_name"].as_str() else { continue };
-        let Ok(ver) = semver::Version::parse(tag.trim_start_matches('v')) else {
-            continue;
-        };
-        if best.as_ref().map_or(true, |b| &ver > b) {
-            best = Some(ver);
-        }
-    }
-
-    Ok(UpdateInfo {
-        has_update: best.as_ref().is_some_and(|b| b > &cur),
-        latest: best.map(|b| b.to_string()),
-        current,
-    })
-}
-
 /* ---------------- 缓存占用与清理 ---------------- */
 
 /// 缓存是否正在被用。运行中的流水线在往 `files` 写、往 `tasks` 暂存，排队的随时会被调度起来，

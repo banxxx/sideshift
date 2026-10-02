@@ -69,8 +69,8 @@ export async function openExternal(url: string): Promise<void> {
 }
 
 /**
- * 项目仓库地址（设置页 GitHub 按钮）。
- * 后端 `check_update` 打的 releases API 是同一个仓库的另一条地址（`commands/settings.rs` 的
- * `UPDATE_URL`），仓库改名/迁移时两处要一起改。
+ * 项目仓库地址（设置页 GitHub 按钮、「打开发布页」都从这一份拼）。
+ * 后端 `check_update` 打的是同一仓库的 releases API（`core/update/mod.rs` 的 `REPO_SLUG`）——
+ * 跨语言没法单源，迁仓库时两处一起改。
  */
 export const REPO_URL = "https://github.com/banxxx/sideshift";

@@ -68,11 +68,25 @@ pub fn net_code(url: &str, status: u16) -> String {
     format!("net:{kind}:{host}")
 }
 
+/// 「那边连着，但不回了」：超时单独一格，不与 `net:http:*` 混——前者的下一动作是等一等再试，
+/// 后者是「这条路本身不对」。下载侧两个地方报它（reqwest 超时、以及收流中途停滞），
+/// 所以出口放在这里，而不是各处自己拼一次前缀
+pub fn net_timeout_code(url: &str) -> String {
+    format!("net:timeout:{}", host_of(url))
+}
+
 /// 不经 `Downloader` 的那几条 reqwest 调用（`check_update` 直连 GitHub）走同一套代码，
 /// 否则界面会露出 reqwest 自己那句英文 `error sending request for url (...)`。
 /// 分类只有 `net_err` 一个出口：两条路径不会说出两种话
 pub fn reqwest_code(e: &reqwest::Error, url: &str) -> String {
     net_err(url, e).ipc_msg()
+}
+
+/// 本机侧的失败码（`app:种类`）：与 `net:种类:主机` 同一条套路，后端只出种类，
+/// 给人看的那句话在前端 `src/lib/errors.ts` 里挑。
+/// 命令层与 core 都用这一颗，`app:` 前缀不会有第二种拼法。
+pub fn app_code(kind: &str) -> String {
+    format!("app:{kind}")
 }
 
 /// reqwest 的错误 → `DownloadError`：超时单独成一档，其余仍按「有没有状态码」分
@@ -104,7 +118,7 @@ impl DownloadError {
     pub fn net_code(&self) -> Option<String> {
         Some(match self {
             DownloadError::Http { url, status } => net_code(url, *status),
-            DownloadError::Timeout { url } => format!("net:timeout:{}", host_of(url)),
+            DownloadError::Timeout { url } => net_timeout_code(url),
             // `NotFound` 的 payload 有两种形状：一条 URL（client.rs 的「候选链全部没拿到」）
             // 和一个模组名/中文短语（`cloth-config`、「CurseForge 构建 x/y 的下载链接」）。
             // 只有前者能说出「是谁没找到」；把短语当主机名喂给界面会吐出一句乱码 ⇒ 归不了类，原句照旧

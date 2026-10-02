@@ -22,7 +22,13 @@ pub(crate) use mcmod::{mcmod_confident, McmodPage};
 // 名字归一化两份账共用：联网那条百科腿的「同形」判据与内置词典的中文键必须是同一个算法
 pub(crate) use mcmod::norm_name;
 pub use types::{
-    DownloadError, Fetch, FetchSource, ItemSpec, TransferProgress, net_code, reqwest_code,
+    DownloadError, Fetch, FetchSource, ItemSpec, TransferProgress, app_code, net_code,
+    net_timeout_code, reqwest_code,
 };
 // 缓存布局的两个事实交给清理侧用（core::cleanup）：目录名与半成品判据，写与删共用一份
 pub use util::{is_partial_name, CACHE_FILES_DIR};
+// 应用更新那条链借三件现成的事实：同一个 UA（GitHub 侧认的是同一个应用）、
+// 半成品后缀与种类码出口。它自己不走 Downloader——那个客户端设了整请求 120s 上限，
+// 十几 MB 的包在弱网下本来就该跑几分钟（见 core::update::fetch）
+pub(crate) use client::USER_AGENT;
+pub(crate) use util::PART_MARKER;

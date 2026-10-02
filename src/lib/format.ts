@@ -2,7 +2,7 @@
  * 展示格式化工具：文件体积、时钟、耗时、进度条百分比、加载器/输出名口径。
  * 多页复用，统一走这里，避免各页各写一份导致文案格式漂移。
  */
-import type { EnvSource, LoaderKind, PlanMod } from "./types";
+import type { EnvSource, LoaderKind, PlanMod, UpdateChannel } from "./types";
 import { t } from "@/lib/i18n";
 
 /** 84.0 MB / 512 MB / 1.2 GB —— ≥1024 才进阶单位，保留一位小数 */
@@ -66,6 +66,14 @@ export function formatRate(bytesPerSec: number): string {
 /** 加载器显示名：fabric → Fabric（芯片/下拉/弹窗副标题统一口径） */
 export function loaderLabel(loader: LoaderKind): string {
     return { fabric: "Fabric", forge: "Forge", neoforge: "NeoForge" }[loader];
+}
+
+/**
+ * 更新渠道的中文说法：设置页那一行的说明与「发现新版本」弹窗的标签共用一口径，
+ * 免得一处写「Beta」、一处写「测试版」——同一枚芯片在两个地方长两个名字。
+ */
+export function channelLabel(c: UpdateChannel): string {
+    return c === "beta" ? t("settings.beta", "测试版（Beta）") : t("settings.stable", "正式版");
 }
 
 /** 端判定依据的直白说法：Convert 卡行与「查看全部」弹窗共用同一口径，别两处各写一份 */

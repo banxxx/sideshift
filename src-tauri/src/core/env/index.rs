@@ -95,6 +95,14 @@ impl EnvIndex {
     fn record(&mut self, key: String, ev: Evidence) {
         self.map.insert(key, StoredEvidence { ev, ts: Some(now_secs()) });
     }
+
+    /// 只把 `ts` 刷到现在，值一个字不动。盖章不是重新判定：结论要变只走 `record`
+    /// （见 `stamp_stale`：本轮重问过、平台还是那份 ⇒ 盖个时间戳，下一轮别再白问）
+    fn touch(&mut self, key: &str) {
+        if let Some(s) = self.map.get_mut(key) {
+            s.ts = Some(now_secs());
+        }
+    }
 }
 
 /// 一个待反查的模组行
@@ -138,44 +146,77 @@ pub fn apply_probes(probes: &HashMap<String, JarProbe>, targets: &mut [Target]) 
     }
 }
 
-/// 用本地索引填空缺（不发请求）；返回仍需联网的 target 下标。
+/// 用本地索引填空缺（不发请求）；返回仍需联网的行，以及其中「盘上有结论、只是过期」的那一部分。
 /// 命中的行里**过期的结论照常垫底**（在线轮被掐时它不至于裸奔），但仍进反查队列争取刷新：
 /// 作者修正过声明、镜像快照滞后的旧结论不会因为索引热就永远压着新的真话。
-pub fn apply_index(index: &EnvIndex, targets: &[Target], out: &mut EvidenceMap) -> Vec<usize> {
-    let mut pending = Vec::new();
+pub fn apply_index(index: &EnvIndex, targets: &[Target], out: &mut EvidenceMap) -> Pending {
+    let mut rows = Vec::new();
+    let mut stale = HashMap::new();
     for (i, t) in targets.iter().enumerate() {
         // jar 自证已答上的行不进反查队列：那是最高可信层，再查一遍只会更差
         if out.contains_key(&t.path) {
             continue;
         }
-        let by_proj = t
-            .project_id
-            .as_deref()
-            .into_iter()
-            .chain(t.slugs.iter().map(|s| s.as_str()))
-            .chain(t.title.as_deref())
-            .find_map(|p| index.stored(&project_key(p)));
-        let stored = t
-            .sha1
-            .as_deref()
-            .and_then(|h| index.stored(&sha1_key(h)))
-            .or(by_proj);
-        match stored {
-            Some(s) => {
+        match locate(index, t) {
+            Some((key, s)) => {
                 put(out, &t.path, s.ev);
                 if !s.fresh() {
-                    pending.push(i);
+                    stale.insert(i, key);
+                    rows.push(i);
                 }
             }
-            None => pending.push(i),
+            None => rows.push(i),
         }
     }
-    pending
+    Pending { rows, stale }
+}
+
+/// 索引里这一行的落点：先按哈希（精确到字节），再按项目键（权威 id → slug → 显示名逐个试）。
+/// 要把**命中的那个键**一起带出去：盖章只刷 `ts`、不碰值，事后重新推一遍键会和落盘时不是同一个
+fn locate<'a>(index: &'a EnvIndex, t: &Target) -> Option<(String, &'a StoredEvidence)> {
+    if let Some(h) = t.sha1.as_deref() {
+        let key = sha1_key(h);
+        if let Some(s) = index.stored(&key) {
+            return Some((key, s));
+        }
+    }
+    for p in t
+        .project_id
+        .iter()
+        .chain(t.slugs.iter())
+        .chain(t.title.iter())
+        .map(|s| s.as_str())
+    {
+        let key = project_key(p);
+        if let Some(s) = index.stored(&key) {
+            return Some((key, s));
+        }
+    }
+    None
+}
+
+/// `apply_index` 的返回，两份分开是因为修法完全不同：
+/// - `rows` = 仍需联网的行下标；
+/// - `stale` = 其中「盘上**有**结论、只是 `ts` 空或过了 90 天」的行 → 命中的索引键。
+///   这些行本轮重问过、平台还是没有新答案 ⇒ 收尾时给它盖个 `ts`（`stamp_stale`），下轮不再重问；
+///   不在这里的那些是「索引压根没这一行」，要省它得靠「问过且没有」的负记录（那一条另议）。
+///
+/// `stale` 的归属只能在这一层判：命令层那侧若改从「`ev` 里有没有这一行」倒推，就必须卡在
+/// CF 端标签播种之前，晚一步会把刚贴上的官方声明数成「过期结论」
+pub struct Pending {
+    pub rows: Vec<usize>,
+    pub stale: HashMap<usize, String>,
+}
+
+impl Pending {
+    pub fn is_empty(&self) -> bool {
+        self.rows.is_empty()
+    }
 }
 
 /// 逐行项目/搜索反查的请求上限：超大包剩下的行留未判定（方案照出，不为一轮跑上几分钟）。
 /// **它挡的不是 429**：2026-09-27 实测 `X-Ratelimit-Limit: 300` 配 1 秒窗口（连发十几发才看得见
-/// `Remaining` 从 300 往下掉，隔秒再发就回满），而我们只有 4 路并发，离那条线差两个数量级。
+/// `Remaining` 从 300 往下掉，隔秒再发就回满），而我们最宽那档 16 路并发，离那条线还差一个数量级。
 /// 真正会被顶到的是 `ONLINE_BUDGET` 那 60 秒和「一次进页打几百发」的时间账。
 const MAX_LOOKUP_REQUESTS: usize = 150;
 
@@ -184,9 +225,17 @@ const MAX_LOOKUP_REQUESTS: usize = 150;
 /// 取 500：请求数是旧写法（200）的五分之二，失败半径只到接口顶的一半。
 const SHA1_BATCH: usize = 500;
 
-/// 项目/搜索反查的并发宽度：这些行互不依赖，串行时一个慢请求就拖住整队（整轮慢的主因）。
-/// 4 路对齐 jar 扫描的线程数，也够把上限内的 150 次查询从分钟级压到十秒级。
-const LOOKUP_CONCURRENCY: usize = 4;
+/// 官方档的并发宽度：这些行互不依赖，串行时一个慢请求就拖住整队（整轮慢的主因）。
+/// 2026-10-02 实测一枚 mrpack「待查 46 行 · 用时 12976ms」≈ 单请求一秒、4 路消化，抬到 8 路
+/// 减半（他实测回到约 7 秒）；再抬到 16 路是同一笔账的再一半，且不撞限流：官方实测
+/// `X-Ratelimit-Limit: 300`/秒（见 `MAX_LOOKUP_REQUESTS` 的注释），16 路按 ~0.5 秒一发作是
+/// 三十多发每秒，离那条线还差一个数量级。它压不动的只有队首那发哈希批量与串行的百科腿
+const OFFICIAL_CONCURRENCY: usize = 16;
+
+/// 麦块档**不跟着抬**，留在 4：对方公布 600 次/分钟，而 `MIRROR_*_BUDGET` 那两条额度当初就是
+/// 按「一轮最多 2（自检）+150+150=302 发，留一半余量给同一轮的模组下载」定的。抬到 16 路按 ~1 秒
+/// 一发算是 960 次/分钟，直接越过那条公布额度——这一档慢一点换来的是额度可预测，不是白等
+const MIRROR_CONCURRENCY: usize = 4;
 
 /// 第 4 层每这么多行跑一批：批内并发、**批末落一次盘**。整轮随时可能被命令层的墙钟预算
 /// 掐掉，攒到最后才写 `env-index.json` 等于那一截白查（下次进来又从零要请求）。
@@ -255,14 +304,16 @@ fn project_queue(
 
 /// 镜像项目层的行队列：与 `project_queue` 同口径（整条候选链一起预留、装不下的行本轮不派），
 /// 但**只喂 slug 候选**——实测镜像只认 slug，官方那套 `project_id` 形式回 404。
-/// 这里刻意不报「撞顶」：预算上限是设计里的，剩下的行本轮没有结论、下轮再查，不算失败。
+/// 这里刻意不把「撞顶」当**故障**报（预算上限是设计里的，剩下的行本轮没结论、下轮再查），
+/// 但要把这个事实带出去：盖章那条闸门靠它分清「问过了、确实没有」与「压根没派出去」
 fn mirror_project_queue(
     targets: &[Target],
     unresolved: &[usize],
     max: usize,
-) -> Vec<(usize, Vec<String>)> {
+) -> (Vec<(usize, Vec<String>)>, bool) {
     let mut queue = Vec::new();
     let mut used = 0usize;
+    let mut cut = false;
     for &i in unresolved {
         let slugs = &targets[i].slugs;
         if slugs.is_empty() {
@@ -270,16 +321,62 @@ fn mirror_project_queue(
         }
         let room = max.saturating_sub(used);
         if room == 0 {
+            cut = true;
             break;
         }
         let take = slugs.len().min(room);
         used += take;
         queue.push((i, slugs.iter().take(take).cloned().collect()));
         if take < slugs.len() {
+            cut = true;
             break;
         }
     }
-    queue
+    (queue, cut)
+}
+
+/// 「过期重排」的行本轮重问过、平台还是给不出新答案 ⇒ 把盘上那份原结论盖个新 `ts`。
+/// `StoredEvidence` 的注释一直写着「下一轮重查一次并补上时间戳」，可 `record` 的调用点
+/// 全挂在「拿到证据」那支 ⇒ `ts:null` 的老条目每轮进队、每轮重问、每轮不盖章，
+/// 自动分类的时长就长期钉在这批行上。
+///
+/// **三道闸，缺一条都不盖**（盖章等于「信它一个 TTL」，把「没问到」当成「问了没有」是最贵的误判）：
+/// - 调用方只在整轮 `ok` 时进来：到点被掐、请求报错、额度掐顶的行那是「没问到」
+/// - `out` 里仍是索引那一份：本轮答上了的行值已经变了（那种行自己也 `record` 过新 `ts`），
+///   拿旧值再写一次会把更好的结论落回盘上
+/// - 本轮真派了请求出去问过它：官方档带哈希的行由批量腿覆盖（`sha1_asked`），其余行要手里
+///   有任何一条身份候选（权威 id / slug / 显示名）才算问到过。三种都没有的行连请求都没发出去，
+///   那是「没问」不是「问了没有」
+fn stamp_stale(
+    index: &mut EnvIndex,
+    targets: &[Target],
+    pending: &Pending,
+    out: &EvidenceMap,
+    sha1_asked: bool,
+) {
+    for (&i, key) in &pending.stale {
+        let t = &targets[i];
+        let asked = (sha1_asked && t.sha1.is_some())
+            || t.project_id.is_some()
+            || !t.slugs.is_empty()
+            || t.title.is_some();
+        if !asked {
+            continue;
+        }
+        // 本轮答上过的行已经带着新 ts `record` 过了，与盖章无关
+        let Some(stored) = index.stored(key) else {
+            continue;
+        };
+        if stored.fresh() {
+            continue;
+        }
+        // `out` 里仍是索引那一份 ⇒ 「重问过、还是它」。值一不同就说明本轮拿到了别的结论，
+        // 那份归它自己的 `record` 落盘，别拿旧值盖回去
+        if out.get(&t.path) != Some(&stored.ev) {
+            continue;
+        }
+        index.touch(key);
+    }
 }
 
 /// 在线反查：**设置里选了哪个源就只问那个源**，不再「先镜像、答不上回落官方」——
@@ -291,13 +388,13 @@ fn mirror_project_queue(
 /// 两档末尾都挂着同一条收尾（`shared_tail`）：CF 指纹腿（官方平台、凭用户自己的 Key，
 /// 与「端信息反查源」那档设置无关——cfpack 的 CF 补取同口径）与百科补全腿（看 `mcmod` 开关）。
 /// 结果同时写回 out 与索引，并且分批落盘。
-/// 返回 false = 有请求失败、超出请求上限，或被整轮预算掐掉（前端提示「联网反查未全部完成」）。
+/// 返回是否跑完整轮：false = 有请求失败或超出额度上限（前端提示「联网反查未全部完成」）
 pub async fn resolve_online(
     dl: &Downloader,
     index: &mut EnvIndex,
     cache_dir: &Path,
     targets: &[Target],
-    pending: &[usize],
+    pending: &Pending,
     out: &mut EvidenceMap,
     source: EnvLookupSource,
     mcmod: bool,
@@ -309,6 +406,7 @@ pub async fn resolve_online(
 
     // 第 3 层：按 sha1 批量反查构建（接口上限 1000 个哈希，分批见 `SHA1_BATCH`）
     let hashes: Vec<String> = pending
+        .rows
         .iter()
         .filter_map(|i| targets[*i].sha1.clone())
         .map(|h| h.to_lowercase())
@@ -321,7 +419,7 @@ pub async fn resolve_online(
         }
     }
     let mut unresolved = Vec::new();
-    for i in pending {
+    for i in &pending.rows {
         let t = &targets[*i];
         let by_hash = t
             .sha1
@@ -351,6 +449,7 @@ pub async fn resolve_online(
     if capped {
         ok = false;
     }
+    // 一行的候选链**链内串行**（命中即 break）
     for chunk in queue.chunks(LOOKUP_CHUNK) {
         // `to_vec()`：让流走拥有值。按引用喂 `buffer_unordered` 会把 `map` 的 closure 绑死在
         // 一个寿命上，`spawn` 那条链上报 `FnOnce is not general enough`
@@ -381,7 +480,7 @@ pub async fn resolve_online(
                     }
                     (i, got, failed)
                 })
-                .buffer_unordered(LOOKUP_CONCURRENCY)
+                .buffer_unordered(OFFICIAL_CONCURRENCY)
                 .collect()
                 .await;
         // 完成序不保证：排回行序，同一项目键被两行命中时落盘的结论才不随网络抖
@@ -443,7 +542,7 @@ pub async fn resolve_online(
                         Err(_) => (i, None, true),
                     }
                 })
-                .buffer_unordered(LOOKUP_CONCURRENCY)
+                .buffer_unordered(OFFICIAL_CONCURRENCY)
                 .collect()
                 .await;
         done.sort_by_key(|(i, _, _)| *i);
@@ -465,6 +564,11 @@ pub async fn resolve_online(
     // 收尾：CF 指纹腿（官方平台补全）+ 百科补全腿（看设置开关）。均为补全，失败不改 `ok`
     shared_tail(dl, index, cache_dir, targets, pending, out, mcmod).await;
 
+    // 过期重排的行本轮**成功**重问过还是没有新答案 ⇒ 盖章，下一轮不再重问（`ok=false` 时
+    // 一行都不盖：那意味着有请求报错或额度掐顶，剩下的「没答案」是「没问到」，不能当结论存）
+    if ok {
+        stamp_stale(index, targets, pending, out, true);
+    }
     index.save(cache_dir);
     ok
 }
@@ -489,17 +593,21 @@ async fn resolve_via_mirror(
     index: &mut EnvIndex,
     cache_dir: &Path,
     targets: &[Target],
-    pending: &[usize],
+    pending: &Pending,
     out: &mut EvidenceMap,
     mcmod: bool,
 ) -> bool {
+    // 存活自查：两条入口各一发（这一档没有官方链兜着，验不过就等于这一轮没跑完）
     let health = dl.mirror_health().await;
     let mut ok = health.project && health.search;
+    // 镜像两条腿的额度掐顶**不报 ok**（那是设计上限，不是故障）⇒ 盖章要单独知道它发生过
+    let mut capped = false;
     let mut answered: HashSet<usize> = HashSet::new();
 
     // 项目腿：候选全是猜的（镜像没有权威 id 那条路），所以一律要名字对得上才算采信
     if health.project {
-        let queue = mirror_project_queue(targets, pending, MIRROR_PROJECT_BUDGET);
+        let (queue, cut) = mirror_project_queue(targets, &pending.rows, MIRROR_PROJECT_BUDGET);
+        capped |= cut;
         for chunk in queue.chunks(LOOKUP_CHUNK) {
             let mut done: Vec<(usize, Option<(Vec<String>, Evidence)>, bool)> =
                 stream::iter(chunk.to_vec())
@@ -527,7 +635,7 @@ async fn resolve_via_mirror(
                         }
                         (i, got, failed)
                     })
-                    .buffer_unordered(LOOKUP_CONCURRENCY)
+                    .buffer_unordered(MIRROR_CONCURRENCY)
                     .collect()
                     .await;
             // 完成序不保证：排回行序，同一项目键被两行命中时落盘的结论才不随网络抖
@@ -554,6 +662,7 @@ async fn resolve_via_mirror(
     if health.search {
         let rest: Vec<usize> = {
             let mut v: Vec<usize> = pending
+                .rows
                 .iter()
                 .copied()
                 .filter(|i| !answered.contains(i))
@@ -573,6 +682,7 @@ async fn resolve_via_mirror(
             .collect();
         // 装不下的行本轮不查：这一档没有第二个源可回落，但预算掐顶是设计上限、不是故障，不报 ok=false
         let run = queries.len().min(MIRROR_SEARCH_BUDGET);
+        capped |= run < queries.len();
         for chunk in queries[..run].chunks(LOOKUP_CHUNK) {
             let mut done: Vec<(usize, Option<(Vec<String>, Evidence)>, bool)> =
                 stream::iter(chunk.to_vec())
@@ -591,7 +701,7 @@ async fn resolve_via_mirror(
                             failed,
                         )
                     })
-                    .buffer_unordered(LOOKUP_CONCURRENCY)
+                    .buffer_unordered(MIRROR_CONCURRENCY)
                     .collect()
                     .await;
             done.sort_by_key(|(i, _, _)| *i);
@@ -614,19 +724,26 @@ async fn resolve_via_mirror(
     // 指纹腿与「选了麦块就只问麦块」的口径不冲突——破的只是「Modrinth 官方一条不发」那句
     shared_tail(dl, index, cache_dir, targets, pending, out, mcmod).await;
 
+    // 盖章的闸门比官方档多一条：这一档两条腿撞顶是**静默**的（设计上限，不报 ok=false），
+    // 所以撞过顶就连环都不盖——没派出去的行不能按「问过了没有」存进索引。
+    // `sha1_asked=false`：镜像没有「按哈希批量反查构建」那条端点，光有哈希的行在这档没被问过
+    if ok && !capped {
+        stamp_stale(index, targets, pending, out, false);
+    }
+
     index.save(cache_dir);
     ok
 }
 
 /// 两条平台档（官方 / 镜像）共用的收尾：CF 指纹腿 + 百科补全腿。
 /// 都是补全——请求失败不改调用方的 `ok`；百科腿还要看设置开关（默认关，
-/// 它是社区二手声明 + HTML 解析，见 `resolve_via_mcmod` 的纪律说明）
+/// 它是社区二手声明 + HTML 解析，见 `resolve_via_mcmod` 的纪律说明）。
 async fn shared_tail(
     dl: &Downloader,
     index: &mut EnvIndex,
     cache_dir: &Path,
     targets: &[Target],
-    pending: &[usize],
+    pending: &Pending,
     out: &mut EvidenceMap,
     mcmod: bool,
 ) {
@@ -657,10 +774,11 @@ async fn resolve_via_fingerprints(
     index: &mut EnvIndex,
     cache_dir: &Path,
     targets: &[Target],
-    pending: &[usize],
+    pending: &Pending,
     out: &mut EvidenceMap,
 ) {
     let rows: Vec<usize> = pending
+        .rows
         .iter()
         .copied()
         .filter(|&i| {
@@ -677,6 +795,9 @@ async fn resolve_via_fingerprints(
         .collect();
     uniq.sort_unstable();
     uniq.dedup();
+    // 指纹只可能出自「清单没给哈希、包内扫描现算字节」那批行：`files[]` 自带哈希的行不重算字节
+    // ⇒ 纯 mrpack 包这腿 0 发；`overrides/` 里没进清单的 jar、裸 .zip 与手动塞入的 jar 才有
+    // （CF 来源的包靠 cfpack 那一趟贴端标签）
     if uniq.is_empty() {
         return;
     }
@@ -752,13 +873,14 @@ async fn resolve_via_mcmod(
             index.save(cache_dir);
         }
         if blocked {
-            return;
+            break;
         }
     }
 }
 
 /// 一行的百科问答：搜索页找名字对得上的词条，再进词条页取「运行环境」。
-/// 返回 `(结论, 被拦)`；`被拦` 只有那一段跳首页的人机验证脚本会置，作用是让上面那条腿当场收队。
+/// 返回 `(结论, 被拦)`；`被拦` 只有那一段跳首页的人机验证脚本会置，
+/// 作用是让上面那条腿当场收队。
 ///
 /// **两条反直觉的口径，改之前先读**：
 /// - 别给这条链挂浏览器 User-Agent：实测同一个 `key=sodium`，我们的默认 UA 回带 30 条结果的页面，
@@ -872,8 +994,15 @@ pub async fn resolve_local_jar(
         );
     }
     if !source.is_off() && !pending.is_empty() {
-        resolve_online(
-            dl, &mut index, cache_dir, &targets, &pending, &mut out, source, mcmod,
+        let _ = resolve_online(
+            dl,
+            &mut index,
+            cache_dir,
+            &targets,
+            &pending,
+            &mut out,
+            source,
+            mcmod,
         )
         .await;
     }
@@ -1042,23 +1171,24 @@ mod tests {
     }
 
     #[test]
-    fn mirror_queue_only_takes_slug_candidates_and_never_complains() {
+    fn mirror_queue_only_takes_slug_candidates_and_reports_truncation() {
         // 镜像只认 slug：project_id 那条权威候选压根不在这一步的输入里（Target 也没带）
         let targets = vec![row(&["a", "b"]), row(&[]), row(&["c"])];
         let all: Vec<usize> = vec![0, 1, 2];
+        let (queue, cut) = mirror_project_queue(&targets, &all, 150);
         assert_eq!(
-            mirror_project_queue(&targets, &all, 150),
+            queue,
             vec![
                 (0usize, vec!["a".to_string(), "b".to_string()]),
                 (2usize, vec!["c".to_string()])
             ],
             "没候选的行跳过就行：它照旧走官方，不算镜像的失败"
         );
+        assert!(!cut, "跳过没候选的行不算撞顶：那是这一行压根没得问");
         // 预算只够第 0 行的第一个候选 ⇒ 该行只派一发，后面的行本轮一条不发
-        assert_eq!(
-            mirror_project_queue(&targets, &all, 1),
-            vec![(0usize, vec!["a".to_string()])]
-        );
+        let (tight, cut) = mirror_project_queue(&targets, &all, 1);
+        assert_eq!(tight, vec![(0usize, vec!["a".to_string()])]);
+        assert!(cut, "候选链被额度截断、后面的行一条没派 ⇒ 必须报出去（盖章那条闸门吃它）");
     }
 
     #[tokio::test]
@@ -1089,12 +1219,16 @@ mod tests {
         let mut index = EnvIndex::load(&dir);
         let mut out = EvidenceMap::new();
         let dl = Downloader::new(dir.clone(), 4);
+        let pending = Pending {
+            rows: all,
+            stale: HashMap::new(),
+        };
         let ok = resolve_online(
             &dl,
             &mut index,
             &dir,
             &targets,
-            &all,
+            &pending,
             &mut out,
             EnvLookupSource::Minekuai,
             false,
@@ -1274,14 +1408,87 @@ displayName = "Obscure Lib"
         let mut out = EvidenceMap::new();
         let pending = apply_index(&index, &targets, &mut out);
         assert!(out.contains_key("mods/x.jar"), "过期结论照常垫底，在线轮被掐也不裸奔");
-        assert_eq!(pending, vec![0], "过期的仍进反查队列争取刷新");
-        // record 刚写的（ts = now）才是新鲜结论：照旧离队
+        assert_eq!(pending.rows, vec![0], "过期的仍进反查队列争取刷新");
+        assert!(pending.stale.contains_key(&0), "它同时得是可盖章的那一类");
+        // record 刚写的（ts = now）才是新鲜结论：照旧离队，也没有可盖的键
         let mut fresh = EnvIndex::default();
         fresh.record(key, ev);
         let mut out2 = EvidenceMap::new();
         let pending2 = apply_index(&fresh, &targets, &mut out2);
         assert!(pending2.is_empty(), "新鲜结论不该重查");
+        assert!(pending2.stale.is_empty());
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 盖章那条闸门（`stamp_stale`）：过期行本轮真被问过、平台还是给不出新答案 ⇒ 只刷 `ts`、
+    /// 值原样不动，下一轮它就不进反查队列了。三条反例各挡一种「其实没问到」——
+    /// 手里没身份的行（连请求都没发出去）、值已被更好结论改写的行（拿旧值盖回去＝倒退）、
+    /// 以及镜像档那侧「只有哈希、没有那条批量端点」的行
+    #[test]
+    fn stale_rows_are_stamped_only_when_the_reask_was_clean() {
+        let h = |c: char| c.to_string().repeat(40);
+        let ev = evidence_from_modrinth(
+            &env_of(SideFlag::Required, SideFlag::Unsupported),
+            EnvSource::ModrinthHash,
+        )
+        .expect("required/unsupported 有区分度");
+        let mut index = EnvIndex::default();
+        // ts = 0（1970）：三行全部按过期处理
+        for c in ['a', 'b', 'c'] {
+            index
+                .map
+                .insert(sha1_key(&h(c)), StoredEvidence { ev, ts: Some(0) });
+        }
+        let target = |path: &str, c: char, slug: Option<&str>| Target {
+            path: path.into(),
+            sha1: Some(h(c)),
+            cf_fingerprint: None,
+            project_id: None,
+            slugs: slug.into_iter().map(String::from).collect(),
+            title: None,
+        };
+        let targets = vec![
+            target("mods/asked.jar", 'a', Some("asked")),
+            target("mods/nameless.jar", 'b', None),
+            target("mods/answered.jar", 'c', Some("answered")),
+        ];
+        let mut out = EvidenceMap::new();
+        let pending = apply_index(&index, &targets, &mut out);
+        assert_eq!(pending.stale.len(), 3, "三行都是「盘上有结论、只是过期」");
+        // 第三行本轮被更高的层答上了（jar 自证）：`out` 里已经不是索引那一份
+        out.insert(
+            "mods/answered.jar".to_string(),
+            Evidence {
+                client: Some(SideFlag::Required),
+                server: Some(SideFlag::Required),
+                source: EnvSource::JarMetadata,
+            },
+        );
+
+        stamp_stale(&mut index, &targets, &pending, &out, false);
+        assert!(
+            index.stored(&sha1_key(&h('a'))).unwrap().fresh(),
+            "有 slug 候选 ⇒ 本轮派过请求 ⇒ 该盖"
+        );
+        assert!(
+            !index.stored(&sha1_key(&h('b'))).unwrap().fresh(),
+            "没身份的行连请求都没发出去，那是「没问」不是「问了没有」"
+        );
+        assert!(
+            !index.stored(&sha1_key(&h('c'))).unwrap().fresh(),
+            "值已变 ⇒ 新结论归它自己的 record 落盘，别拿旧值盖回去"
+        );
+        // 同一行在官方档就该盖章：sha1 批量那条腿确实问了它
+        stamp_stale(&mut index, &targets, &pending, &out, true);
+        assert!(
+            index.stored(&sha1_key(&h('b'))).unwrap().fresh(),
+            "官方档有按哈希批量反查那条腿 ⇒ 算问到过"
+        );
+        assert_eq!(
+            index.stored(&sha1_key(&h('a'))).unwrap().ev,
+            ev,
+            "盖章只刷时间戳，结论一个字都不动"
+        );
     }
 
     #[test]

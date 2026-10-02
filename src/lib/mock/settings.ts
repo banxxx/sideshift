@@ -6,6 +6,7 @@ import type {
     CleanReport,
     UpdateChannel,
     UpdateInfo,
+    UpdateStatus,
     VersionOption,
 } from "@/lib/types";
 
@@ -41,10 +42,87 @@ export const mockDefaultSettings: AppSettings = {
 /**
  * 检查更新（浏览器 dev）：造一条"比本地新"的 release，让「发现新版本」这条界面路径在没后端时也能演。
  * 返回哪一档跟着渠道走，所以设置页里切渠道能立刻看出区别；真实实现比的是 GitHub releases 列表。
+ *
+ * `downloadable` 跟着产物配齐与否走（与 Rust 那张真值表同判据）：取件那一轮已经接上，
+ * dev 里就得演得出「点得动」这一态，否则进度与取消那两条路径在浏览器里永远看不见。
  */
 export function mockCheckUpdate(current: string, channel: UpdateChannel | null): UpdateInfo {
     const beta = channel === "beta" || (channel === null && current.includes("-"));
-    return { current, latest: beta ? "1.0.0-beta.2" : "1.0.1", hasUpdate: true };
+    const latest = beta ? "1.0.0-beta.2" : "1.0.1";
+    const tag = `v${latest}`;
+    return {
+        current,
+        latest,
+        tag,
+        hasUpdate: true,
+        channel: beta ? "beta" : "stable",
+        releaseUrl: `https://github.com/OWNER/REPO/releases/tag/${tag}`,
+        publishedAt: "2026-01-01T00:00:00Z",
+        notes: "- Mock release notes line one\n- 第二行说明",
+        assets: [
+            { name: `SideShift-${tag}-setup.nsis.zip`, size: 8_388_608, kind: "package", trusted: true },
+            { name: `SideShift-${tag}-setup.nsis.zip.sig`, size: 412, kind: "signature", trusted: true },
+            { name: `SideShift-${latest}-portable-x64.zip`, size: 12_582_912, kind: "portable", trusted: true },
+        ],
+        downloadable: true,
+        blocked: null,
+    };
+}
+
+/* ================= 取件这一轮的 dev 假象 =================
+ * 浏览器里既没后端也没事件总线，所以在 mock 侧自备一只进程内订阅表 + 一条自己走完的假轮次。
+ * 档位与 Rust 同序（downloading → verifying → ready），字段照抄 `UpdateStatus`，
+ * 免得 dev 演的是另一套状态机。
+ */
+type StatusListener = (s: UpdateStatus) => void;
+
+const mockIdle: UpdateStatus = { stage: "idle", version: null, downloaded: 0, total: 0, error: null };
+let mockStatus: UpdateStatus = mockIdle;
+const mockListeners = new Set<StatusListener>();
+let mockTimer: ReturnType<typeof setInterval> | undefined;
+
+function emitMock(s: UpdateStatus) {
+    mockStatus = s;
+    for (const l of mockListeners) l(s);
+}
+
+/** 订阅假进度（对应真实侧的 `update://progress`） */
+export function onMockUpdateProgress(cb: StatusListener): () => void {
+    mockListeners.add(cb);
+    return () => void mockListeners.delete(cb);
+}
+
+export function mockUpdateStatus(): UpdateStatus {
+    return mockStatus;
+}
+
+/**
+ * 假取件：200ms 一跳走完下载，再停一拍演「正在验签」，最后落 ready。
+ * 字节数与 `mockCheckUpdate` 那两个产物对齐（包 + 同名签名），界面里的「x / y MB」才不会自相矛盾
+ */
+export function mockPrepareUpdate(version: string): UpdateStatus {
+    const total = 8_388_608 + 412;
+    clearInterval(mockTimer);
+    let down = 0;
+    emitMock({ stage: "downloading", version, downloaded: 0, total, error: null });
+    mockTimer = setInterval(() => {
+        down = Math.min(total, down + total / 25);
+        emitMock({ stage: "downloading", version, downloaded: down, total, error: null });
+        if (down < total) return;
+        clearInterval(mockTimer);
+        emitMock({ stage: "verifying", version, downloaded: total, total, error: null });
+        mockTimer = setTimeout(() => {
+            emitMock({ stage: "ready", version, downloaded: total, total, error: null });
+        }, 600);
+    }, 200);
+    return mockStatus;
+}
+
+/** 假取消：与 Rust 同口径——正在跑就只立旗（那一轮自己把半截收走），没在跑就当场回 idle */
+export function mockCancelUpdate(): UpdateStatus {
+    clearInterval(mockTimer);
+    emitMock({ ...mockIdle });
+    return mockStatus;
 }
 
 /** 下载源下拉（Settings · 网络）：与 Rust `list_download_sources` 同序同文案 */

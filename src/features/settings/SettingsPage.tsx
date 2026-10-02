@@ -7,15 +7,16 @@ import { FlaskConical, Folder, Monitor, Moon, RefreshCw, Sun, Trash2 } from "luc
 import { useCallback, useEffect, useState, type ReactNode } from "react";
 import { motion } from "motion/react";
 import * as api from "@/lib/api";
-import { formatSize } from "@/lib/format";
+import { channelLabel, formatSize } from "@/lib/format";
 import { notify, type NoticeKind } from "@/lib/notify";
 import { CARD_RISE, PAGE_RISE } from "@/lib/page-motion";
 import { usePackStore } from "@/lib/pack-store";
 import { switchTheme, useTheme, type Theme } from "@/lib/theme";
 import { LOCALE_OPTIONS, LOCALE_TO_WIRE, applyLocaleChoice, systemLocale, t, useT, type AppLocale, type Locale, type TranslateFn } from "@/lib/i18n";
 import { errOf } from "@/lib/errors";
-import type { AppSettings, CacheUsage, CleanReport, UpdateChannel } from "@/lib/types";
+import type { AppSettings, CacheUsage, CleanReport, UpdateChannel, UpdateInfo } from "@/lib/types";
 import { cn } from "@/lib/utils";
+import { UpdateDialog } from "@/features/update/UpdateDialog";
 import {
     Btn,
     Collapse,
@@ -132,11 +133,6 @@ const junkBytes = (u: CacheUsage) => u.partsBytes + u.orphanBytes;
 /** 设置里没选过时该收哪条更新线：与后端 check_update 用同一条判据（见 api.AUTO_UPDATE_CHANNEL） */
 const channelOf = (s: AppSettings) => s.updateChannel ?? api.AUTO_UPDATE_CHANNEL;
 
-/** 渠道的中文说法，行说明与确认弹窗共用，免得一处写「Beta」一处写「测试版」 */
-function channelLabel(c: UpdateChannel): string {
-    return c === "beta" ? t("settings.beta", "测试版（Beta）") : t("settings.stable", "正式版");
-}
-
 /** 结果播报按真实回收量说话；删不动的要显出来，不能混在成功里 */
 function cleanNotice(kind: CleanKind, r: CleanReport): { text: string; kind: NoticeKind } {
     const name = cleanLabel(kind);
@@ -189,6 +185,8 @@ export function SettingsPage() {
     const [update, setUpdate] = useState<UpdateState>("idle");
     /** 切到 Beta 的二次确认：改动的是"以后会装上什么包"，点一下就换太轻率 */
     const [confirmBeta, setConfirmBeta] = useState(false);
+    /** 「发现新版本」弹窗吃的那一份后端结论；null = 没开。弹窗而不是横幅：版本差异要看的字段一件横幅装不下 */
+    const [updateInfo, setUpdateInfo] = useState<UpdateInfo | null>(null);
 
     useEffect(() => {
         void api
@@ -316,20 +314,17 @@ export function SettingsPage() {
     };
 
     /**
-     * 检查更新。结论（有没有更新）由后端 semver 比出来，这里只负责播报，
-     * 播报必带完整版本号：Beta 用户要看得见收到的是 1.1.0-beta.2 还是 1.1.0。
+     * 检查更新。结论（有没有更新、能不能一键装）全部由后端算完，这里只负责把它摊开：
+     * 有新版本走弹窗——版本号、订阅的渠道、release 正文、产物配齐没有是一套判断的全部依据，
+     * 侧栏那条一句话的横幅装不下；没有更新或查失败才回落到横幅。
      */
     const checkUpdate = async () => {
         setUpdate("checking");
         try {
             const r = await api.checkUpdate();
             setUpdate(r.hasUpdate ? "available" : "latest");
-            notify(
-                r.hasUpdate
-                    ? t("settings.new-version", "发现新版本 v{{latest}}（当前 v{{current}}）", { latest: r.latest, current: r.current })
-                    : t("settings.already-date", "已是最新版本 v{{current}}", { current: r.current }),
-                r.hasUpdate ? "info" : "success"
-            );
+            if (r.hasUpdate) setUpdateInfo(r);
+            else notify(t("settings.already-date", "已是最新版本 v{{current}}", { current: r.current }), "success");
         } catch (e) {
             // 网络不通、仓库还没发过 release 都会走到这里：只报错，不许顶着一个假的"已是最新"
             notify(t("settings.update-check", "检查更新失败：{{reason}}", { reason: errOf(e) }), "error");
@@ -679,6 +674,10 @@ export function SettingsPage() {
                     )}
                 </p>
             </ModalShell>
+
+            {/* 发现新版本：这一版只给「打开发布页」，应用内换文件那条链路还没接上，
+                所以不传 onInstall，那颗必然失败的按钮就不出现 */}
+            <UpdateDialog info={updateInfo} onClose={() => setUpdateInfo(null)} />
         </motion.div>
     );
 }

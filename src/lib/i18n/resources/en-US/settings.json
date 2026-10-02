@@ -55,7 +55,6 @@
   "settings.modrinth-query": "Modrinth queries",
   "settings.name-count_one": "{{name}}: {{count}} item cleaned · {{size}}",
   "settings.name-count_other": "{{name}}: {{count}} items cleaned · {{size}}",
-  "settings.new-version": "New version v{{latest}} available (current v{{current}})",
   "settings.nothing-clean": "Nothing to clean up ({{name}})",
   "settings.parallel-downloads": "Parallel downloads",
   "settings.parts-partial": "{{parts}} partial · {{orphan}} leftover · {{empty}} empty dirs",

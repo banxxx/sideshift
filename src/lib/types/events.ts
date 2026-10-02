@@ -19,4 +19,6 @@ export const EVENTS = {
     progress: "conversion://progress",
     done: "conversion://done",
     classified: "plan://classified",
+    /** 应用更新取件进度（阶段 + 字节数同一个载荷，见 `types/update.ts` 的 `UpdateStatus`） */
+    updateProgress: "update://progress",
 } as const;

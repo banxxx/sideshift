@@ -55,6 +55,9 @@ pub struct ProbeReq {
     pub want_code: bool,
 }
 
+/// 一个待探测条目：包内条目下标 + 包内路径 + 两条「要不要跑这条腿」的闸门
+type JarTarget = (usize, String, bool, bool);
+
 /// 离线扫描源包内指定 jar 条目。读不到一律静默跳过（交上下层）。
 pub fn probe_jars(pack: &Path, want: &[ProbeReq]) -> HashMap<String, JarProbe> {
     let mut out = HashMap::new();
@@ -65,10 +68,10 @@ pub fn probe_jars(pack: &Path, want: &[ProbeReq]) -> HashMap<String, JarProbe> {
     let Ok(file) = File::open(pack) else {
         return out;
     };
-    let Ok(archive) = zip::ZipArchive::new(file) else {
+    let Ok(mut archive) = zip::ZipArchive::new(file) else {
         return out;
     };
-    let targets: Vec<(usize, String, bool, bool)> = archive
+    let targets: Vec<JarTarget> = archive
         .file_names()
         .enumerate()
         .filter_map(|(i, name)| {
@@ -81,16 +84,19 @@ pub fn probe_jars(pack: &Path, want: &[ProbeReq]) -> HashMap<String, JarProbe> {
     if targets.is_empty() {
         return out;
     }
+    // 重量取条目自己的解压后字节数（`by_index` 只定位到本条、不解压），零额外读字节成本
+    let sized = targets
+        .into_iter()
+        .map(|t| (archive.by_index(t.0).map(|e| e.size()).unwrap_or(0), t))
+        .collect();
 
-    let per = targets.len().div_ceil(JAR_THREADS).max(1);
     let mut results: Vec<Vec<(String, JarProbe)>> = Vec::new();
     std::thread::scope(|s| {
-        let handles: Vec<_> = targets
-            .chunks(per)
-            .map(|chunk| {
+        let handles: Vec<_> = pack_bins(sized, JAR_THREADS)
+            .into_iter()
+            .map(|bin| {
                 let pack = pack.to_path_buf();
-                let chunk: Vec<(usize, String, bool, bool)> = chunk.to_vec();
-                s.spawn(move || jar_chunk(&pack, &chunk))
+                s.spawn(move || jar_chunk(&pack, &bin))
             })
             .collect();
         for h in handles {
@@ -99,16 +105,40 @@ pub fn probe_jars(pack: &Path, want: &[ProbeReq]) -> HashMap<String, JarProbe> {
             }
         }
     });
-    for chunk in results {
-        for (path, probe) in chunk {
+    for bin in results {
+        for (path, probe) in bin {
             out.insert(path, probe);
         }
     }
     out
 }
 
-/// 一个分片：重开包句柄，逐个 jar 探测（线程内串行，跨线程并行）
-fn jar_chunk(pack: &Path, chunk: &[(usize, String, bool, bool)]) -> Vec<(String, JarProbe)> {
+/// 把条目按解压后字节数装进 `threads` 个箱：字节数**降序**依次进当前最轻的一箱（LPT 贪心）。
+///
+/// 原来按清单顺序连续切片 ⇒ 谁摊上 Create 那种大块头谁就是整条关键路径，其余线程早早收工干等
+/// （实测 76 行四段合计 6042ms、墙钟却 3559ms ⇒ 四条线程平均只跑出 1.7 条）。装箱后墙钟≈合计 ÷ 线程数
+fn pack_bins(sized: Vec<(u64, JarTarget)>, threads: usize) -> Vec<Vec<JarTarget>> {
+    let mut sized = sized;
+    sized.sort_unstable_by(|a, b| b.0.cmp(&a.0));
+    // `.max(1)`：线程数被拧成 0 时这里会开出零个箱，于是每条都进不了箱——**整层静默不扫**，
+    // 读起来像「缓存生效、秒回」，比崩掉难查得多
+    let mut bins: Vec<(u64, Vec<JarTarget>)> =
+        (0..threads.max(1).min(sized.len()))
+            .map(|_| (0u64, Vec::new()))
+            .collect();
+    for (size, target) in sized {
+        // 箱数 ≥1（上面那道 `max(1)`），线性找最轻：条目 ≤400、箱个位数
+        let lightest = bins.iter_mut().min_by_key(|(total, _)| *total);
+        if let Some((total, bin)) = lightest {
+            *total += size;
+            bin.push(target);
+        }
+    }
+    bins.into_iter().map(|(_, bin)| bin).collect()
+}
+
+/// 一个箱：重开包句柄，逐个 jar 探测（箱内串行，箱间并行）
+fn jar_chunk(pack: &Path, chunk: &[JarTarget]) -> Vec<(String, JarProbe)> {
     let mut out = Vec::new();
     let Ok(file) = File::open(pack) else {
         return out;
@@ -134,7 +164,8 @@ fn jar_probe<R: Read + std::io::Seek>(
     let mut probe = JarProbe::default();
     if entry.size() <= JAR_MAX_UNCOMPRESSED {
         let mut buf = Vec::with_capacity(entry.size() as usize);
-        if entry.read_to_end(&mut buf).is_err() {
+        let read_ok = entry.read_to_end(&mut buf).is_ok();
+        if !read_ok {
             return None;
         }
         if want_sha1 {
@@ -370,6 +401,26 @@ displayName = 'GeckoLib'
         assert_eq!(cf_fingerprint(b"a b\nc\td\re"), 3469237630);
         assert_eq!(cf_fingerprint(b"abcde"), 3469237630);
         assert_eq!(cf_fingerprint(b""), 1540447798);
+    }
+
+    /// 装箱按字节数配平，不再按清单顺序连续切：同一批「大在前、小在后」的条目，连续切三箱
+    /// 最重那箱 21，装箱后压到 13（合计 36 ÷ 3 = 12 是理想下界）
+    #[test]
+    fn bins_balance_by_size_not_by_list_order() {
+        // 借条目下标那一格存字节数，事后按它把每箱重量加回来
+        let sized = [8u64, 7, 6, 5, 4, 3, 2, 1]
+            .into_iter()
+            .map(|size| (size, (size as usize, String::new(), false, false)))
+            .collect();
+        let bins = pack_bins(sized, 3);
+        assert_eq!(bins.iter().map(|b| b.len()).sum::<usize>(), 8);
+        assert!(bins.iter().all(|b| !b.is_empty()), "八条三箱不该有空箱");
+        let heaviest = bins
+            .iter()
+            .map(|b| b.iter().map(|t| t.0 as u64).sum::<u64>())
+            .max()
+            .unwrap();
+        assert_eq!(heaviest, 13);
     }
 
     #[test]

@@ -169,19 +169,6 @@ impl UpdateChannel {
     }
 }
 
-/// 检查更新的结果（Rust: check_update）。结论在 Rust 侧算，前端不再自己比字符串：
-/// `1.0.0-beta.2` 与 `1.0.0-beta.10` 这种号，字符串比较一定比反。
-#[derive(Serialize, Clone, Debug)]
-#[serde(rename_all = "camelCase")]
-pub struct UpdateInfo {
-    /// 本地版本（取自 tauri 的 package_info，与前端注入的 __APP_VERSION__ 同一个源）
-    pub current: String,
-    /// 该渠道下最新的那条 release；仓库还没发过 release、或本渠道一条都没有时为 null
-    pub latest: Option<String>,
-    /// latest 严格新于 current 才算有更新：同版本、更老都不提示
-    pub has_update: bool,
-}
-
 /// Modrinth 镜像默认开：见字段注释
 fn default_modrinth_mirror() -> bool {
     true
@@ -220,6 +207,9 @@ pub struct CacheUsage {
     /// 注册表里已无此任务 id 的暂存目录（个数按目录算，不是一个文件算一个）
     pub orphan_count: usize,
     pub orphan_bytes: u64,
+    /// 应用更新的暂存（`cache\update\{版本}`）：个数按**版本目录**算，一个版本 = 安装包 + 它的签名
+    pub update_count: usize,
+    pub update_bytes: u64,
     /// 空壳目录：零字节，但要让用户看见"清理确实收尾了"
     pub empty_dirs: usize,
     /// 有任务正在排队或运行：前端据此禁掉缓存清理，并把 parts 那一栏改口径说明

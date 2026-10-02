@@ -46,6 +46,7 @@ base64 = { version = "0.22", default-features = false, features = ["std"] }
 semver = "1"
 # 内置词典（core::mcmod_names）运行时解 build.rs 压出来的那块 blob；与 zip 取同一后端，不新增编译单元
 flate2 = { version = "1", default-features = false, features = ["rust_backend"] }
+minisign-verify = "0.3"
 
 # 数据根预选要读每个盘的剩余空间（GetDiskFreeSpaceExW）；锁在 windows 目标里，
 # 其他平台编译不到这行，data_root 那边直接返回空候选、回落用户目录

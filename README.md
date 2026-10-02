@@ -95,11 +95,13 @@ $b.GetPixel(0, 0).A; $b.GetPixel(16, 6); $b.GetPixel(16, 20)
 - [ ] 走上面三步出包，确认三个产物都还在（见「Defender」那条）。
 - [ ] 仓库是 **public**。私有仓下匿名请求 `api.github.com/repos/banxxx/sideshift/releases` 回的是 404（本机实测：`git ls-remote` 有 master，但网页和 API 都 404 ⇒ 当前是私有），于是所有人的「检查更新」都会报 `Not Found`。
 - [ ] GitHub Release 的 tag 用 `v{版本}`（`check_update` 会去掉开头的 `v` 再按 semver 解析）。
-- [ ] **发 beta 必须勾 `pre-release`**。整套方案里只有这一步能真伤到用户：漏勾的那条 release 会被当成「最新版」，把测试包推给正式版用户。
+- [ ] **发 beta 的 tag 必须带预发布位**（`v1.1.0-beta.1`）。渠道是按 **tag 的 semver 预发布位**分的，不看 release 那个 `pre-release` 勾选（它只是 GitHub 的显示标志）——写成纯号 tag 就把测试包推到正式版那条线上了。
 - [ ] **重发同一个 beta 必须递增序号**（`beta.1` → `beta.2`）。已装旧版的人比出「相同」就永远收不到更新。
 - [ ] 顺手记下安装包 SHA256，贴到分发页。
 
-应用内「检查更新」读的是 `GET /repos/banxxx/sideshift/releases`（**不是** `/releases/latest`，那条官方定义就排除了 prerelease），按 `prerelease` 标志过滤、semver 比大小。用户在设置页「更新渠道」里手动选正式版 / Beta；没选过时跟随这枚包自己的版本号。
+应用内「检查更新」读的是 `GET /repos/banxxx/sideshift/releases`（**不是** `/releases/latest`，那条官方定义就排除了 prerelease），按 tag 版本号分档（带预发布位 = Beta）、semver 比大小。用户在设置页「更新渠道」里手动选正式版 / Beta；没选过时跟随这枚包自己的版本号。
+
+**应用内「立即更新」还没接上**：现在只给「打开发布页」。要让那颗钮出现，需要在本机生成 minisign 密钥对、公钥填进 `tauri.conf.json` 的 `plugins.updater.pubkey`、私钥只进 CI secret，并开 `bundle.windows.createUpdaterArtifacts`（产出 `*-setup.nsis.zip` 与同名 `.sig`）。产物缺这两件时，弹窗会照实说「这条发布没有签名安装包」而不是给一个必失败的按钮。
 
 **预发布版本号在打包链上已实测通过**（`1.0.0-beta.1` 走完整 CLI 出包）：NSIS 产物名 `SideShift_1.0.0-beta.1_x64-setup.exe` 正常；主 exe / 壳 / 安装包 / 包内 exe 四处的 Win32 `FileVersion` 与 `ProductVersion` 都是 `1.0.0-beta.1`；壳的 `build.rs` 按字典序挑包这次选对了新版（见「安装壳挑包」那条）。**仍未实测**：真实安装与升级路径（要写用户机器，按惯例由开发者自测）、私有仓改成 public 之后 `check_update` 的真实返回。
 

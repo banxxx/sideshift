@@ -194,6 +194,11 @@ pub async fn classify_pack(
     env::apply_probes(&probes, &mut targets);
     // 离线层 2：上次联网查到的本地索引（有则免去在线请求）
     let pending = env::apply_index(&index, &targets, &mut ev);
+    // 待查行的两个来源，`apply_index` 当场就分开了（不再靠「`ev` 里有没有这一行」倒推——那种数法
+    // 必须卡在下面 CF 端标签播种**之前**，晚一步就把「新贴上的官方声明」误报成「索引里的过期结论」）：
+    // - 过期重排 = 盘上有结论、只是 `ts` 空或超过 90 天，为了刷新时间戳又问一遍（结论照常垫底）。
+    //   本轮重问过、平台还是给不出新答案 ⇒ `resolve_online` 收尾给它盖个新 `ts`，下一轮不再重问
+    // - 无结论 = 索引压根没这一行，平台答不上也就没得记，下次进来原样再问（那要另立负记录）
     // CF 构建级端标签（cfpack 从 cf-files-index.json 贴回行上的那枚）：作者上传时勾的
     // 官方声明，是 CF 清单行在 Modrinth 之外唯一的构建级证据。播种排在 jar 自证与索引
     // 结论之后——`put` 只认等档或更好，真正更优的旧结论不会被这枚新标签压掉
@@ -212,7 +217,6 @@ pub async fn classify_pack(
     }
 
     let plan = detector::build_plan(&parsed, strip, &ev, &code);
-    // 离线那次推送：还有在线层要跑就说明本轮没结束（done=false，前端继续转圈）
     let offline_final = env_source.is_off() || pending.is_empty();
     // 这一包是否已经有一轮联网反查在飞。**必须在下面立标记之前读**——那个标记写的就是
     // 「本轮还要联网」，先写后读会永远读到「有人在跑」，于是第二轮起不来、剩下的行再没人查。
@@ -228,6 +232,7 @@ pub async fn classify_pack(
             inner.env_online_file = Some(file_name.clone());
         }
     }
+    // 离线那次推送：还有在线层要跑就说明本轮没结束（done=false，前端继续转圈）
     emit_classified(
         &app,
         &file_name,
@@ -275,18 +280,16 @@ pub async fn classify_pack(
                 .unwrap_or_default();
             // 本轮会改写哪些行：收尾时按这份清单增量并回，不整表覆盖
             let touched: Vec<String> = pending
+                .rows
                 .iter()
                 .map(|i| targets[*i].path.clone())
                 .collect();
-            // 联网轮的读数（诊断用）：一次真请求至少一两百毫秒，所以"待查 N 行 + 用时几毫秒"
-            // 就是"这一轮一条请求都没发出去"的铁证。发请求那条链在 Rust 进程里（不是 webview），
-            // 前端的 Network 面板永远看不到，只能从这里出。
-            let started = std::time::Instant::now();
             // 整轮墙钟预算：单次请求已经各掐 10s（downloader::client::METADATA_TIMEOUT），
             // 这一档掐的是"一百多个各慢一点"累出来的总账。到点就掐——`resolve_online` 按批
             // 落盘、结论又是就地写进 `ev` 的，所以已拿到的那部分照常生效（`out` 借用留在原地），
-            // 只是不再有第二次机会补剩下的行；complete=false 让前端说「可重新自动分类」。
-            let complete = match tokio::time::timeout(
+            // 只是不再有第二次机会补剩下的行；`unwrap_or_default` 到点给 false，
+            // complete=false 让前端说「可重新自动分类」。
+            let complete = tokio::time::timeout(
                 env::ONLINE_BUDGET,
                 env::resolve_online(
                     &dl,
@@ -300,19 +303,7 @@ pub async fn classify_pack(
                 ),
             )
             .await
-            {
-                Ok(ok) => ok,
-                Err(_) => false,
-            };
-            let answered = touched.iter().filter(|p| ev.contains_key(p.as_str())).count();
-            println!(
-                "[env] 源={} 待查 {} 行 → 有结论 {} 行 · 完整={} · 用时 {}ms",
-                if env_source.is_minekuai() { "麦块" } else { "官方" },
-                pending.len(),
-                answered,
-                complete,
-                started.elapsed().as_millis()
-            );
+            .unwrap_or_default();
             let (plan, file) = {
                 let mut g = lock(&state);
                 // 本轮收尾：只摘自己的标记。必须在下面换包那道闸门**之前**清——换包时这一趟会

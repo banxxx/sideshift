@@ -52,7 +52,6 @@
   "settings.mod-files": "還沒有下載過模組檔案",
   "settings.modrinth-query": "Modrinth 查詢",
   "settings.name-count": "已清理{{name}} {{count}} 項 · {{size}}",
-  "settings.new-version": "發現新版本 v{{latest}}（當前 v{{current}}）",
   "settings.nothing-clean": "沒有需要清理的{{name}}",
   "settings.parallel-downloads": "併發下載數",
   "settings.parts-partial": "半截下載 {{parts}} 個 · 殘留暫存 {{orphan}} 個 · 空殼目錄 {{empty}} 個",

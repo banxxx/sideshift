@@ -8,6 +8,7 @@ mod pack;
 mod plan;
 mod settings;
 mod task;
+mod update;
 
 pub use java::*;
 pub use mods::*;
@@ -16,6 +17,7 @@ pub use pack::*;
 pub use plan::*;
 pub use settings::*;
 pub use task::*;
+pub use update::*;
 
 #[cfg(test)]
 mod tests {

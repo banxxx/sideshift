@@ -77,19 +77,6 @@ export interface AppSettings {
 }
 
 /**
- * 检查更新的结果（Rust: check_update）。有没有更新是后端用 semver 比出来的，
- * 前端不拿字符串自己比：`1.0.0-beta.2` 与 `1.0.0-beta.10` 这种号字符串一定比反。
- */
-export interface UpdateInfo {
-    /** 本地版本，与前端注入的 APP_VERSION 同源 */
-    current: string;
-    /** 该渠道最新的一条 release；仓库还没发过 release 时为 null */
-    latest: string | null;
-    /** latest 严格新于 current 才算有更新 */
-    hasUpdate: boolean;
-}
-
-/**
  * 缓存占用报表（Rust: cache_usage）。计数来自一次真实目录扫描，
  * 与「清理」用的是同一套分类判据——界面说的数和实际回收的量必须对得上。
  */

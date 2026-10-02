@@ -14,5 +14,6 @@ export * from "./task";
 export * from "./report";
 export * from "./mods";
 export * from "./settings";
+export * from "./update";
 export * from "./events";
 export * from "./about";

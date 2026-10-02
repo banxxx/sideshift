@@ -72,7 +72,11 @@ export function netText(code: string): string | null {
 /** `app:种类` → 界面那句话。命令层兜底码（阻塞任务崩了、系统程序没打开那个路径），同样不带路径 */
 export function appText(code: string): string | null {
     if (!code.startsWith("app:")) return null;
-    switch (code.slice(4)) {
+    const kind = code.slice(4);
+    // 更新那一轮的码先单走一张表：它的下一动作各不相同（等一等 / 重开一次 / 只能去发布页），
+    // 混在兜底那句「本机操作没能完成」里，用户就只会一遍遍点同一个必失败的按钮
+    if (kind.startsWith("update-")) return updateText(kind);
+    switch (kind) {
         case "panic":
             return t("lib.app-panic", "本机处理没能完成，重试一次");
         case "open":
@@ -81,6 +85,48 @@ export function appText(code: string): string | null {
             return t("lib.app-reveal", "没能定位到那个文件，可能它已经不在原来的位置");
         default:
             return t("lib.app-generic", "本机操作没能完成，稍后重试");
+    }
+}
+
+/**
+ * 取件（下载 + 验签）那一段的降级句。措辞分工是刻意的：
+ * 说「去发布页」的四条是**发布侧或本机形态**的问题，用户在这扇窗里做什么都没用；
+ * 说「重试」的是这条链自己的抖动，同一颗按钮再点一次就是正解。
+ */
+function updateText(kind: string): string {
+    switch (kind) {
+        case "tag":
+            return t("update.fail-tag", "这一版的编号对不上格式，没能开始下载");
+        case "version":
+            return t("update.fail-version", "这条发布的版本号读不懂，请在发布页手动下载");
+        case "busy":
+            return t("update.fail-busy", "已经有一次更新在跑了，先等它结束");
+        case "downgrade":
+            return t("update.fail-downgrade", "本机已经是这一版或更新，不需要下载");
+        case "channel-mismatch":
+            return t("update.fail-channel", "这条发布不在你订阅的渠道里，没能下载");
+        case "incomplete":
+            return t("update.fail-incomplete", "这条发布缺安装包或签名，请在发布页手动下载");
+        case "host-denied":
+            return t("update.fail-host", "下载地址不在可信的站点，没能下载");
+        case "io":
+            return t("update.fail-io", "本机没能把安装包写下来，磁盘可能满了");
+        case "canceled":
+            return t("update.fail-canceled", "这次下载已经取消");
+        case "short":
+            return t("update.fail-short", "下载没取满就断了，重试一次");
+        case "name":
+            return t("update.fail-name", "这条发布的产物文件名不合规矩，没能下载");
+        case "key-missing":
+            return t("update.fail-key-missing", "这个构建没内置校验公钥，请在发布页手动下载");
+        case "key-invalid":
+            return t("update.fail-key-invalid", "内置的校验公钥读不懂，这一版没法验签");
+        case "sig-format":
+            return t("update.fail-sig-format", "签名文件读不懂，没能校验");
+        case "sig-mismatch":
+            return t("update.fail-sig-mismatch", "签名与安装包对不上，没能校验");
+        default:
+            return t("update.fail-generic", "这次更新没能完成，稍后重试");
     }
 }
 

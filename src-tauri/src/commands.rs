@@ -12,7 +12,7 @@ use crate::core::ack::{self, AckList};
 use crate::core::cfpack;
 use crate::core::cleanup;
 use crate::core::detector;
-use crate::core::downloader::{Downloader, net_code, reqwest_code};
+use crate::core::downloader::{Downloader, app_code, reqwest_code};
 use crate::core::env;
 use crate::core::java;
 use crate::core::parser;
@@ -24,14 +24,6 @@ type S<'a> = State<'a, Arc<AppState>>;
 
 fn lock(state: &AppState) -> std::sync::MutexGuard<'_, task_engine::Inner> {
     state.inner.lock().unwrap()
-}
-
-/// 命令层兜底错误码（`app:种类`）：与 `net:种类:主机` 同一套路，后端只出种类，
-/// 给人看的那句话在前端 `src/lib/errors.ts` 里。
-/// `panic` = 阻塞任务整个崩了（JoinError，真正的 panic 内容由 Rust 打到 stderr）；
-/// `open` / `reveal` = 系统程序没能打开或定位那个路径。
-fn app_code(kind: &str) -> String {
-    format!("app:{kind}")
 }
 
 fn last_parsed(state: &S<'_>) -> Option<Arc<ParsedPack>> {
@@ -102,6 +94,7 @@ mod settings;
 mod system;
 mod task;
 mod templates;
+mod update;
 
 pub use about::*;
 pub use mods::*;
@@ -111,3 +104,4 @@ pub use settings::*;
 pub use system::*;
 pub use task::*;
 pub use templates::*;
+pub use update::*;

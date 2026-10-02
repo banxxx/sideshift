@@ -8,7 +8,7 @@ use crate::core::downloader::ModrinthEnv;
 use crate::models::{EnvSource, SideFlag};
 
 /// 一条两侧支持度证据及其出处
-#[derive(Clone, Copy, Debug, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Evidence {
     pub client: Option<SideFlag>,

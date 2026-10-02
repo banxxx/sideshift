@@ -17,7 +17,9 @@ use super::types::{
 use super::util::{cache_path_for, mark_used, verify_cache_for, PART_MARKER};
 use crate::models::DownloadSource;
 
-const USER_AGENT: &str = "SideShift/0.1 (desktop pack converter)";
+/// 出去的每一发都带同一句 UA：应用更新那条链也用它（见 `core::update::fetch`），
+/// 别让 GitHub 侧看见同一个应用的两张脸
+pub(crate) const USER_AGENT: &str = "SideShift/0.1 (desktop pack converter)";
 const RETRIES: u32 = 3;
 /// 元数据查询（JSON / `.sha1`）的单次请求上限。客户端那个 120s 是**整条下载**的预算
 /// （几十 MB 的模组包合理，端判定反查不合理）：那一路一次只取几 KB，挂住一个请求

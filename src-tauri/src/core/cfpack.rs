@@ -20,7 +20,8 @@ use crate::models::CfLink;
 const INDEX_FILE: &str = "cf-files-index.json";
 
 /// 一次在线轮里同时发几发。CF 门口有限流（经镜像同样存在），并发拉高只是把 429 提前；
-/// 与 env 那侧的联网轮同一个手感（4）。实测 495 行连发（并发 6）**零 429**，所以这一档有余量
+/// 与 env 那侧的麦块档同宽（4）；官方反查那档已经抬到 16，这一档不跟着抬——它撞的是 CF 门口
+/// 那条限流，不是 Modrinth 的宽额度。实测 495 行连发（并发 6）**零 429**，所以这一档有余量
 const CONCURRENCY: usize = 4;
 
 /// 一批多少行落一次盘：到点就写，超时/换包时已拿到的那部分不白要（env 侧同口径）
@@ -198,8 +199,8 @@ pub fn env_unchecked_refs(parsed: &ParsedPack, index: &CfIndex) -> Vec<CfRef> {
     out
 }
 
-/// 在线探测：逐枚问一次「拿不拿得到字节」，批末落盘。返回**探出结论的行数**（读数用，
-/// 与 `env` 那侧的 `[env]` 探针同一手感）。没有结论的那些（网络抖动）原样留白，下次再探
+/// 在线探测：逐枚问一次「拿不拿得到字节」，批末落盘。返回**探出结论的行数**。
+/// 没有结论的那些（网络抖动）原样留白，下次再探
 async fn probe_online(
     dl: &Downloader,
     index: &mut CfIndex,
