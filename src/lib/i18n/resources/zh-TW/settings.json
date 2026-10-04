@@ -84,6 +84,7 @@
   "settings.update-check": "檢查更新失敗：{{reason}}",
   "settings.update-downloading": "下載中 · {{pct}}%",
   "settings.update-found": "發現新版本",
+  "settings.update-install": "沒能開始安裝：{{reason}}",
   "settings.update-ready": "已驗籤 · 待安裝",
   "settings.update-start": "沒能開始下載：{{reason}}",
   "settings.update-verifying": "校驗中…",

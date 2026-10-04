@@ -59,6 +59,10 @@ struct Session {
     status: UpdateStatus,
     running: bool,
     cancel: Arc<AtomicBool>,
+    /// 定稿那一刻盘上的安装包路径。**只有 `Ready` 档才不是 None**（`settle` 每次换档都清它）。
+    /// 装那一跳读的就是这一格，而不是去扫目录猜文件名：扫出来的那套判据会和下载侧分叉，
+    /// 分叉的结果是「下载得下来、装不了」，而那句在界面上一句都修不了
+    package: Option<PathBuf>,
 }
 
 impl Session {
@@ -67,6 +71,7 @@ impl Session {
             status: UpdateStatus::idle(),
             running: false,
             cancel: Arc::new(AtomicBool::new(false)),
+            package: None,
         }
     }
 }
@@ -95,11 +100,13 @@ pub fn cancel(cache_dir: &Path) -> UpdateStatus {
         s.cancel.store(true, Ordering::Relaxed);
         s.status.stage = UpdateStage::Canceled;
         s.status.error = None;
+        s.package = None;
         return s.status.clone();
     }
     // 没在跑：这一句「取消」说的是把这一版从盘上收掉，状态回 idle
     let version = s.status.version.clone();
     s.status = UpdateStatus::idle();
+    s.package = None;
     drop(s);
     if let Some(v) = version {
         discard(cache_dir, &v);
@@ -107,22 +114,53 @@ pub fn cancel(cache_dir: &Path) -> UpdateStatus {
     UpdateStatus::idle()
 }
 
-/// 删掉某个版本的暂存目录。删不动不报错：那是缓存，不是账本，留着下次清理照样收得走
-fn discard(cache_dir: &Path, version: &str) {
+/// 删掉某个版本的暂存目录。删不动不报错：那是缓存，不是账本，留着下次清理照样收得走。
+/// 装成功后的下一次启动也用它（`install::take_outcome` 那一跳）：那一对字节这时候已经变成
+/// 装进机器里的程序，留在缓存里只是白占 4–20 MB
+pub fn discard(cache_dir: &Path, version: &str) {
     let dir = cache_dir.join(CACHE_UPDATE_DIR).join(version);
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-/// 写状态并广播。阶段与错误都从这里走，界面看到的与实际发生的是同一条
+/// 写状态并广播。阶段与错误都从这里走，界面看到的与实际发生的是同一条。
+/// 换档即撤掉 `package`：那一格说的是「盘上这一份已经验过」，一旦不再是 Ready 就不能再有人拿它去装
 fn settle(app: &AppHandle, stage: UpdateStage, error: Option<String>) -> UpdateStatus {
     let st = {
         let mut s = session().lock().unwrap();
         s.status.stage = stage;
         s.status.error = error;
+        s.package = None;
         s.status.clone()
     };
     let _ = app.emit(EVENT_PROGRESS, &st);
     st
+}
+
+/// 定稿：钉在 `Ready`，并把「装的是盘上哪一个文件」一起记进这一轮。
+/// 与 `settle` 分开写，是因为 `Ready` 是唯一带产物的一档——两处共用就会在每个阶段都得想一遍
+/// 「这一档到底该不该有路径」
+fn landed(app: &AppHandle, pkg_path: &Path) -> UpdateStatus {
+    let st = {
+        let mut s = session().lock().unwrap();
+        s.package = Some(pkg_path.to_path_buf());
+        s.status.stage = UpdateStage::Ready;
+        s.status.error = None;
+        s.status.clone()
+    };
+    let _ = app.emit(EVENT_PROGRESS, &st);
+    st
+}
+
+/// 已验签、等着被装的那一对（版本号, 安装包路径）。`None` = 现在没有可装的东西
+/// （没定稿、或这一轮已经被取消/失败撤掉）。装那一跳的唯一入口读它
+pub fn ready_package() -> Option<(String, PathBuf)> {
+    let s = session().lock().unwrap();
+    if s.status.stage != UpdateStage::Ready {
+        return None;
+    }
+    let version = s.status.version.clone()?;
+    let pkg = s.package.clone()?;
+    Some((version, pkg))
 }
 
 /// 失败出口：状态钉在 `failed`、事件发出去，错误码原样回给调用方（命令层把它交给 `guard`）
@@ -223,6 +261,7 @@ pub async fn prepare(
             total: 0,
             error: None,
         };
+        s.package = None;
         s.cancel.clone()
     };
 
@@ -279,7 +318,7 @@ async fn run(
     if pkg_path.exists() && sig_path.exists() {
         settle(app, UpdateStage::Verifying, None);
         match landed_ok(&pkg_path, &sig_path) {
-            Ok(()) => return Ok(settle(app, UpdateStage::Ready, None)),
+            Ok(()) => return Ok(landed(app, &pkg_path)),
             Err(_) => {
                 // 对不上就是被人动过、或上次是半截：这一对已经废了，删掉重取。
                 // 留着它，用户每点一次都是同一句「验签没过」，而那一句在界面上谁也修不了
@@ -309,11 +348,13 @@ async fn run(
         let _ = std::fs::remove_file(&sig_path);
         fail(app, c)
     })?;
-    Ok(settle(app, UpdateStage::Ready, None))
+    Ok(landed(app, &pkg_path))
 }
 
-/// 落地的那一对自不自洽（签名解得开 + 包的哈希验得过）。错误码由 `verify` 那两侧给
-fn landed_ok(pkg_path: &Path, sig_path: &Path) -> Result<(), String> {
+/// 落地的那一对自不自洽（签名解得开 + 包的哈希验得过）。错误码由 `verify` 那两侧给。
+/// `install` 在 spawn 前用同一句再验一次：从「已就位」到「点了安装」之间隔的是用户的手，
+/// 那段时间里盘上那两个字节属于本机任何进程
+pub(crate) fn landed_ok(pkg_path: &Path, sig_path: &Path) -> Result<(), String> {
     let raw = std::fs::read_to_string(sig_path).map_err(|_| app_code("update-io"))?;
     let sig = verify::decode_signature(&raw)?;
     verify::verify_file(pkg_path, &sig)
@@ -459,8 +500,8 @@ mod tests {
     fn asset_names_carry_their_own_directory() {
         let dir = Path::new("cache/update/1.0.0");
         assert_eq!(
-            staged_path(dir, "SideShift_1.0.0_x64-setup.nsis.zip").unwrap(),
-            dir.join("SideShift_1.0.0_x64-setup.nsis.zip")
+            staged_path(dir, "SideShift_1.0.0_x64-setup.exe").unwrap(),
+            dir.join("SideShift_1.0.0_x64-setup.exe")
         );
         for bad in ["", ".", "..", "a/b.zip", "..\\..\\x.zip", "c:\\x.zip", "x\ny.zip"] {
             assert_eq!(staged_path(dir, bad).err(), Some(app_code("update-name")));
@@ -474,8 +515,8 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         let v = dir.join(CACHE_UPDATE_DIR).join("1.2.3");
         std::fs::create_dir_all(&v).unwrap();
-        std::fs::write(v.join("SideShift_1.2.3_x64-setup.nsis.zip"), b"zip").unwrap();
-        std::fs::write(v.join("SideShift_1.2.3_x64-setup.nsis.zip.part1"), b"half").unwrap();
+        std::fs::write(v.join("SideShift_1.2.3_x64-setup.exe"), b"zip").unwrap();
+        std::fs::write(v.join("SideShift_1.2.3_x64-setup.exe.part1"), b"half").unwrap();
 
         discard(&dir, "1.2.3");
         assert!(!v.exists(), "半截与定稿一起收走");

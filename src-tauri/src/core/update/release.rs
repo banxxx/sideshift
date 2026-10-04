@@ -25,8 +25,9 @@ pub struct Release {
 }
 
 impl Release {
-    /// 签名安装包产物（`*-setup.nsis.zip`）。`createUpdaterArtifacts` 出的就是它，
-    /// 签名覆盖的也是它——不是 exe、不是 portable zip
+    /// 签名安装包产物（`*-setup.exe`）。`createUpdaterArtifacts` 出的就是它与同名 `.sig`，
+    /// 签名覆盖的也是它——不是 portable zip（本机 2026-10-04 真构建实测：CLI 2.11.4 只产
+    /// `SideShift_{版本}_x64-setup.exe` 与 `.exe.sig`，**没有** 文档里那层 `.nsis.zip`）
     fn package(&self) -> Option<&Asset> {
         self.assets.iter().find(|a| a.kind == UpdateAssetKind::Package)
     }
@@ -84,11 +85,16 @@ pub struct Asset {
 }
 
 /// 只按文件名分种类：GitHub 不给产物类型，而产物名由构建链定死（见 `pnpm portable` 与
-/// `createUpdaterArtifacts`）。认不出的一律 `Other`，宁可不给一键更新也不猜。
+/// `createUpdaterArtifacts` 那两条实测）。认不出的一律 `Other`，宁可不给一键更新也不猜。
+///
+/// **这里只留一条 Package 形态**：本机真构建（CLI 2.11.4 + `targets: nsis` + 开关已翻）产的是
+/// `-setup.exe` 与同名 `.exe.sig`，官方文档里那层 `-setup.nsis.zip` **没有产出**。别把两档并存写进来
+/// ——`package()` 是 `find` 第一个命中，两种形态同时在 release 上时选谁取决于 GitHub 的资产顺序，
+/// 那是一条没人能复现的分支。真哪天改成产 zip，按当期的实测名换掉这一档，而不是加一档。
 fn classify(name: &str) -> UpdateAssetKind {
-    if name.ends_with("-setup.nsis.zip.sig") {
+    if name.ends_with("-setup.exe.sig") {
         UpdateAssetKind::Signature
-    } else if name.ends_with("-setup.nsis.zip") {
+    } else if name.ends_with("-setup.exe") {
         UpdateAssetKind::Package
     } else if name.ends_with("-portable-x64.zip") || name.ends_with("-portable-arm64.zip") {
         UpdateAssetKind::Portable
@@ -329,8 +335,8 @@ mod tests {
             false,
             false,
             &[
-                ("SideShift_1.1.0_x64-setup.nsis.zip", true),
-                ("SideShift_1.1.0_x64-setup.nsis.zip.sig", true),
+                ("SideShift_1.1.0_x64-setup.exe", true),
+                ("SideShift_1.1.0_x64-setup.exe.sig", true),
             ],
         );
         let r = parse(&both, "u").unwrap();
@@ -352,7 +358,7 @@ mod tests {
                 "v1.1.0",
                 false,
                 false,
-                &[("SideShift_1.1.0_x64-setup.nsis.zip", true)],
+                &[("SideShift_1.1.0_x64-setup.exe", true)],
             ),
             "u",
         )
@@ -387,8 +393,8 @@ mod tests {
                 false,
                 false,
                 &[
-                    ("SideShift_1.1.0_x64-setup.nsis.zip", true),
-                    ("SideShift_1.1.0_x64-setup.nsis.zip.sig", false),
+                    ("SideShift_1.1.0_x64-setup.exe", true),
+                    ("SideShift_1.1.0_x64-setup.exe.sig", false),
                 ],
             ),
             "u",
@@ -460,8 +466,8 @@ mod tests {
             false,
             false,
             &[
-                ("SideShift_1.1.0_x64-setup.nsis.zip", true),
-                ("SideShift_1.1.0_x64-setup.nsis.zip.sig", true),
+                ("SideShift_1.1.0_x64-setup.exe", true),
+                ("SideShift_1.1.0_x64-setup.exe.sig", true),
             ],
         );
         // 端点回的是数组（比如把列表端点的响应误递过来）⇒ 不是单条

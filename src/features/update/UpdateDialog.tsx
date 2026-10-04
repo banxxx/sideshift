@@ -81,7 +81,7 @@ export function UpdateDialog({
     /** 开始取件（下载 + 验签）；没传就不亮那颗「立即更新」 */
     onStart?: () => void;
     onCancel?: () => void;
-    /** 应用内换文件的那条链路（P2）：没接上时「重启并安装」画定形但禁用 */
+    /** 换文件那一跳（静默跑官方安装器，然后这个进程就退出）。没传时那颗钮画定形但禁用 */
     onInstall?: () => void;
 }) {
     const t = useT();

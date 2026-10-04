@@ -10,16 +10,30 @@ const EXIT_MS = 100;
 
 let dismissing = false;
 
+/** 启动页真的不挡屏了的那一刻（收场动画走完）。
+ *  冷启动要挂全局提示的调用方等这个，别自己抄一份 `MIN_SHOW_MS`：提示卡的停留时间是挂载那一拍
+ *  就开始走的，遮罩底下走完大半的话，用户看到的是一个正在消失、甚至已经消失的卡 */
+let settle: () => void = () => {};
+export const splashGone = new Promise<void>((resolve) => {
+  settle = resolve;
+});
+
 export function dismissSplash() {
   if (dismissing) return;
   dismissing = true;
 
   const el = document.getElementById("splash");
-  if (!el) return;
+  if (!el) {
+    settle();
+    return;
+  }
 
   const hold = Math.max(0, MIN_SHOW_MS - performance.now());
   window.setTimeout(() => {
     el.classList.add("sp-out");
-    window.setTimeout(() => el.remove(), EXIT_MS);
+    window.setTimeout(() => {
+      el.remove();
+      settle();
+    }, EXIT_MS);
   }, hold);
 }

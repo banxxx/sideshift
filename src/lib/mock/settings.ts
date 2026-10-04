@@ -6,6 +6,7 @@ import type {
     CleanReport,
     UpdateChannel,
     UpdateInfo,
+    UpdateOutcome,
     UpdateStatus,
     VersionOption,
 } from "@/lib/types";
@@ -60,8 +61,8 @@ export function mockCheckUpdate(current: string, channel: UpdateChannel | null):
         publishedAt: "2026-01-01T00:00:00Z",
         notes: "- Mock release notes line one\n- 第二行说明",
         assets: [
-            { name: `SideShift-${tag}-setup.nsis.zip`, size: 8_388_608, kind: "package", trusted: true },
-            { name: `SideShift-${tag}-setup.nsis.zip.sig`, size: 412, kind: "signature", trusted: true },
+            { name: `SideShift_${latest}_x64-setup.exe`, size: 4_636_711, kind: "package", trusted: true },
+            { name: `SideShift_${latest}_x64-setup.exe.sig`, size: 428, kind: "signature", trusted: true },
             { name: `SideShift-${latest}-portable-x64.zip`, size: 12_582_912, kind: "portable", trusted: true },
         ],
         downloadable: true,
@@ -123,6 +124,20 @@ export function mockCancelUpdate(): UpdateStatus {
     clearInterval(mockTimer);
     emitMock({ ...mockIdle });
     return mockStatus;
+}
+
+/**
+ * 假安装：浏览器里没有安装器可跑、也不会重启，所以这一句**刻意失败**。
+ * 那颗钮要能看出「接线是通的」，而不是点下去什么都不发生；真那条链只在打包后的程序里测。
+ * 交回去的是种类码而不是中文整句，与真实侧同一口径（渲染只在 `errors.ts` 一处）
+ */
+export function mockInstallUpdate(): Promise<void> {
+    return Promise.reject("app:update-browser");
+}
+
+/** 假结论：浏览器里那次安装没发生 ⇒ 永远没有账可报（与真实侧「从没试过安装」同形） */
+export function mockUpdateOutcome(): UpdateOutcome | null {
+    return null;
 }
 
 /** 下载源下拉（Settings · 网络）：与 Rust `list_download_sources` 同序同文案 */

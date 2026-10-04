@@ -79,6 +79,8 @@ pub fn run() {
             commands::prepare_update,
             commands::cancel_update,
             commands::update_status,
+            commands::install_update,
+            commands::update_outcome,
             commands::ack_snapshot,
             commands::ack_refresh,
             commands::ack_skins,

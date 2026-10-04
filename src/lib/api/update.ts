@@ -1,6 +1,6 @@
-/** 应用版本、更新检查，以及取件（下载 / 验签 / 取消）那四颗 IPC */
+/** 应用版本、更新检查，以及取件（下载 / 验签 / 取消）与装（安装 / 回读上次结论）那六颗 IPC */
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
-import { EVENTS, type UpdateChannel, type UpdateInfo, type UpdateStatus } from "@/lib/types";
+import { EVENTS, type UpdateChannel, type UpdateInfo, type UpdateOutcome, type UpdateStatus } from "@/lib/types";
 import * as mock from "@/lib/mock";
 import { invokeOrMock, isTauri } from "./client";
 
@@ -64,6 +64,35 @@ export async function cancelUpdate(): Promise<UpdateStatus> {
 export function updateStatus(): Promise<UpdateStatus> {
     if (!isTauri) return Promise.resolve(mock.mockUpdateStatus());
     return invokeOrMock<UpdateStatus>("update_status", undefined, () => mock.mockUpdateStatus());
+}
+
+/**
+ * 装（Rust: install_update）：静默跑官方安装器换回原目录，然后这个进程就没了。
+ *
+ * **成功那一路不会回来**——窗口当场消失，所以调用方只该准备失败那一句提示（await + catch 就够）。
+ * 成败要等下次启动 `updateOutcome()`：安装器会先杀掉正在运行的我们，那一刻起没有当场回执这种东西。
+ */
+export async function installUpdate(): Promise<void> {
+    if (!isTauri) return mock.mockInstallUpdate();
+    return invokeOrMock<void>("install_update", undefined, () => mock.mockInstallUpdate());
+}
+
+/**
+ * 上一次「重启并安装」的结论（Rust: update_outcome）。
+ * 后端读一次就把账本收走 ⇒ 这一颗在本进程里**只问一次**，结果留着给所有问它的人：
+ * 不缓存的话，挂载两次（StrictMode）就会有一次把账读走、另一次拿到 null，
+ * 而那本账正是用户想知道的唯一一件事。
+ */
+let outcome: Promise<UpdateOutcome | null> | null = null;
+export function updateOutcome(): Promise<UpdateOutcome | null> {
+    if (!outcome) {
+        outcome = isTauri
+            ? invokeOrMock<UpdateOutcome | null>("update_outcome", undefined, () =>
+                  mock.mockUpdateOutcome()
+              )
+            : Promise.resolve(mock.mockUpdateOutcome());
+    }
+    return outcome;
 }
 
 /** 订阅取件进度（Rust 侧 `update://progress`，与 `update_status` 同一个载荷） */

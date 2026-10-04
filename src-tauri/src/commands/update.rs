@@ -1,4 +1,5 @@
-//! 应用更新（设置 · 外观与关于）。检测与取件都在 `core::update`，这里只管取本地事实与组装。
+//! 应用更新（设置 · 外观与关于）。检测、取件与装的本事都在 `core::update`，这里只管取本地事实、
+//! 上那道只有拿得到全局状态的层才上的闸门，以及组装返回值。
 
 use super::*;
 use crate::core::{data_root, update};
@@ -99,4 +100,37 @@ pub fn cancel_update(state: S<'_>) -> UpdateStatus {
 #[tauri::command]
 pub fn update_status() -> UpdateStatus {
     update::fetch::status()
+}
+
+/// 装（Rust: install_update）：静默跑官方安装器换回原目录，然后退出本进程。
+///
+/// 命令层只补「现在能不能装」这两问（有没有转换在跑、配置目录拿不拿得到）；
+/// 「怎么装」与它那些承重约束（`/UPDATE`、账本先落盘）全在 `core::update::install` 一处。
+/// 成功那一路不会回到调用方：这个进程马上就要没了，所以前端只该准备失败那一句。
+#[tauri::command]
+pub fn install_update(app: AppHandle, state: S<'_>) -> Result<(), String> {
+    // 硬退会把跑一半的任务存档停在「运行中」，下次启动它就是一条永远不动的任务。不给强制档：
+    // 等一条转换跑完是几十秒，而设置被清掉是回不来的那种
+    if task_engine::has_active_tasks(&state) {
+        return Err(app_code("update-tasks-busy"));
+    }
+    let current = app.package_info().version.to_string();
+    let config_dir = task_engine::config_dir(&app).ok_or_else(|| app_code("update-config-dir"))?;
+    update::install::install(&app, &config_dir, &current)
+}
+
+/// 上一次「重启并安装」的结论（Rust: update_outcome）。账本读一次即收走 ⇒ 第二次调它是 null。
+///
+/// 顺带把装成功那一版的暂存收掉：那两个字节此刻已经变成装进机器里的程序，
+/// 留在缓存里只是白占几 MB；没装成的那一对**留着**——重下一轮靠它直接跳过下载。
+#[tauri::command]
+pub fn update_outcome(app: AppHandle, state: S<'_>) -> Option<UpdateOutcome> {
+    let current = app.package_info().version.to_string();
+    let config_dir = task_engine::config_dir(&app)?;
+    let outcome = update::install::take_outcome(&config_dir, &current)?;
+    if outcome.kind == UpdateOutcomeKind::Done {
+        let cache_dir = PathBuf::from(&lock(&state).settings.cache_dir);
+        update::fetch::discard(&cache_dir, &outcome.attempted);
+    }
+    Some(outcome)
 }

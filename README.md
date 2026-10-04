@@ -85,25 +85,59 @@ $b.GetPixel(0, 0).A; $b.GetPixel(16, 6); $b.GetPixel(16, 20)
 
 - `vite.config.ts` 在构建期读它并注入 `__APP_VERSION__` → 前端 `api.APP_VERSION`。
 - 两份 `tauri.conf.json` 的 `version` 写成 `"../package.json"`。**这个相对路径是按 conf 文件所在目录解析的**（CLI 加载配置时 cwd 就是 `src-tauri/` / `installer/`），两边都正好指回根 `package.json`；写错会直接报 `failed to parse config: ... must be a semver string`，不会静默装错版本。
-- 两份 `Cargo.toml` 手抄同一串，只为让 `CARGO_PKG_VERSION` 不说假话。
+- **三份** `Cargo.toml` 手抄同一串（`src-tauri/`、`installer/`、`uninstaller/`），只为让 `CARGO_PKG_VERSION` 不说假话。改版本时三处一起动，漏一份不会报错、只会安静地露假号。
 
 版本号语义：`主.次.修订[-预发布位]`，例 `1.0.0-beta.1`。带 `-beta.N` 的包在侧栏品牌行显示 BETA 徽章（`rc` 显示 RC，纯号不显示），左下角只显示短号 `v1.0.0`，完整版本串在设置页。
 
 ## 发版 checklist
 
 - [ ] 改 `package.json` 的 `version`，并同步两份 `Cargo.toml`。
+- [ ] **自测更新链要把号加一档**：本机已装 `1.0.0-beta.1` 时发同名 tag，比出来是「相同」，「立即更新」那颗钮根本不会亮 —— 那是判错了对象，不是链没通。
 - [ ] 走上面三步出包，确认三个产物都还在（见「Defender」那条）。
+- [ ] **签名钥只在这一拍出现**：`TAURI_SIGNING_PRIVATE_KEY` 给的是私钥**内容本身**（官方明说给路径或 URL 不工作、`.env` 文件也不工作），`TAURI_SIGNING_PRIVATE_KEY_PASSWORD` 给口令，同一次跑 `pnpm tauri build --bundles nsis`。**两样都别当字面量敲进命令行** —— PowerShell 5.1 会把每一行存进 `%APPDATA%\Microsoft\Windows\PowerShell\PSReadLine\ConsoleHost_history.txt`；钥匙内容走 `Get-Clipboard`、口令走 `Read-Host -AsSecureString`。出完包 `Remove-Item Env:...` 撤掉，且**不要设成永久环境变量**。
+      - 忘了带 env 的表现（实测）：**不是静默跳过**，而是在编译和 makensis **全部跑完（本机 5m45s）之后**才报 `A public key has been found, but no private key.` ⇒ 目录里只剩一个没签名的 `-setup.exe`。先确认 env 在再按回车。
+- [ ] **产物成对**：`SideShift_{版本}_x64-setup.exe` 与同名 `.exe.sig`（本机真构建实测的名字）。`.sig` 的文件名必须逐字等于包名加 `.sig`（比对是字符串全等，见 `core/update/release.rs` 的 `signature_for`），上传时改名等于自毁。**按文件判不按退出码判**：目录里没有 `.sig` 就是没签上。官方文档还写过一层 `-setup.nsis.zip` 更新产物，**本机 CLI 2.11.4 不产它**，别在目录里找半天。
+- [ ] 便携包另跑 `pnpm portable`（它读上一步的 exe）；它**没有** `.sig`，应用内更新不吃它，也不该因为它缺件而报错。
 - [ ] 仓库是 **public**。私有仓下匿名请求 `api.github.com/repos/banxxx/sideshift/releases` 回的是 404（本机实测：`git ls-remote` 有 master，但网页和 API 都 404 ⇒ 当前是私有），于是所有人的「检查更新」都会报 `Not Found`。
 - [ ] GitHub Release 的 tag 用 `v{版本}`（`check_update` 会去掉开头的 `v` 再按 semver 解析）。
 - [ ] **发 beta 的 tag 必须带预发布位**（`v1.1.0-beta.1`）。渠道是按 **tag 的 semver 预发布位**分的，不看 release 那个 `pre-release` 勾选（它只是 GitHub 的显示标志）——写成纯号 tag 就把测试包推到正式版那条线上了。
 - [ ] **重发同一个 beta 必须递增序号**（`beta.1` → `beta.2`）。已装旧版的人比出「相同」就永远收不到更新。
+- [ ] release 正文按下面「更新日志」那节的规矩写（纯文本、≤4 行、行首不带符号）。
 - [ ] 顺手记下安装包 SHA256，贴到分发页。
 
 应用内「检查更新」读的是 `GET /repos/banxxx/sideshift/releases`（**不是** `/releases/latest`，那条官方定义就排除了 prerelease），按 tag 版本号分档（带预发布位 = Beta）、semver 比大小。用户在设置页「更新渠道」里手动选正式版 / Beta；没选过时跟随这枚包自己的版本号。
 
-**应用内「立即更新」还没接上**：现在只给「打开发布页」。要让那颗钮出现，需要在本机生成 minisign 密钥对、公钥填进 `tauri.conf.json` 的 `plugins.updater.pubkey`、私钥只进 CI secret，并开 `bundle.windows.createUpdaterArtifacts`（产出 `*-setup.nsis.zip` 与同名 `.sig`）。产物缺这两件时，弹窗会照实说「这条发布没有签名安装包」而不是给一个必失败的按钮。
+**下载址不吃这份列表**：资产只记 name/kind/size，点「立即更新」时按 tag 再打一次 `/releases/tags/{tag}` 现取 `browser_download_url`。两个理由——列表有 `per_page=30` 的窗口（用户点的可能是窗口外那条），以及那个址带 GitHub 侧时效，隔几分钟再用可能半路 403。宿主还要过 `ALLOWED_HOSTS`（`core/update/mod.rs`），列表之外一律判 `untrusted-host`。
 
-**预发布版本号在打包链上已实测通过**（`1.0.0-beta.1` 走完整 CLI 出包）：NSIS 产物名 `SideShift_1.0.0-beta.1_x64-setup.exe` 正常；主 exe / 壳 / 安装包 / 包内 exe 四处的 Win32 `FileVersion` 与 `ProductVersion` 都是 `1.0.0-beta.1`；壳的 `build.rs` 按字典序挑包这次选对了新版（见「安装壳挑包」那条）。**仍未实测**：真实安装与升级路径（要写用户机器，按惯例由开发者自测）、私有仓改成 public 之后 `check_update` 的真实返回。
+## 更新日志（release 正文）怎么写
+
+弹窗里那块「说明」取的是 release 的 `body` **原文**（`core/update/release.rs`），渲染档是 `whitespace-pre-wrap` + `line-clamp-4` 的**纯文本**（`src/features/update/UpdateDialog.tsx`）：
+
+- **不解析 markdown**：`**粗体**`、`- 列表`、`#` 会原样露出符号。
+- **只显示前 4 行**，超出给省略号，且**没有展开出口**（这是「窗高不跟着跳」换来的，别为它加折叠件）。
+- 正文空或纯空白 ⇒ 那块整块不渲染，不是渲染一个空段落。
+
+所以规矩是：每条一行、最多 4 行、行首不带符号、第一行放最重要的；完整 changelog 走弹窗那颗「打开发布页」（`releaseUrl` 在契约里）。模板：
+
+```
+新增：×××
+修复：×××
+注意：×××（可选，一句就够）
+```
+
+## 应用内更新的实态
+
+公钥在**两处**，各吃各的：运行期验签读的是 `src-tauri/src/core/update/mod.rs` 的 `UPDATER_PUBKEY` 常量；`tauri.conf.json` 顶层的 `plugins.updater.pubkey` **只是喂给 CLI 构建器的**——`bundle.createUpdaterArtifacts: true` 要求那个段存在，否则 bundler 阶段当场失败（实测原话 `failed to get updater configuration: plugins > updater doesn't exist`，且 `bundle/` 目录根本不会建）。我们没注册官方 updater 插件，所以运行期既不读它也不校验它。两处必须同串，`core/update` 里有一条测试钉着；**换钥要同时改两处、并连发一版只为改钥的包**，否则老包读不懂新钥签出的名。
+
+走通到哪一步：**出包 → 签名 → 用内置公钥验真产物**已实测通（`1.0.0-beta.2` 那次，`verify_file` 吃的是 exe 的实际字节）。**检测 → 下载 → 「已就位」**此前用本地假端点跑过真链，还差「对着 GitHub 上的真 release 走一遍」。**「重启并安装」已接线**（`core/update/install.rs`）：先判便携形态与在跑的任务 → 再验一遍盘上那一对（就位到点钮之间隔的是用户的手，也隔着一次清理缓存）→ 往配置目录落一份 journal（`update-journal.json`，`sync_all` 之后才 spawn：安装器会强杀正在运行的我们，`utils.nsh` 的 `CheckIfAppIsRunning` 在 silent 分支里 `KillProcess` + `Abort`，所以当场不存在回执这一说）→ 静默跑安装器 → `app.exit(0)`。下次冷启动把账本读一次即收走，按「attempted 与本机版本号是否相等」报「已更新到 vX」或「没成功，本机仍是 vY」（`main.tsx`，走 `notify()`；不在组件 effect 里报，切语言会把子树重挂）。
+
+**传给安装器的三条参数，缺一条就出事**（判据来自本机生成的 `target/release/nsis/x64/installer.nsi`，不是文档转述）：
+
+- `/S` —— 无界面，且模板里没有 run-after：**装完不会自动拉起**，「点钮 → 窗口消失 → 自己重开」是这条链的观感。
+- `/UPDATE` —— 置 `$UpdateMode=1`：跳过调起老卸载器，并且让 `nsis/hooks.nsh` 的 `RMDir /r /REBOOTOK "$INSTDIR\appdata"` 不执行。**少了它，应用内升级会把设置、任务存档、鸣谢快照与 WebView profile 全删掉**（安装版的数据根就是 `{exe}\appdata`），`output\` 也在这道闸后面。
+- `/D=<当前 exe 所在目录>` —— 必须是**最后一个**参数，NSIS 从等号取到行尾当字面量。装回原目录的判据用 `current_exe()` 而不是注册表的 `InstallLocation`：前者就是本次覆盖的目标本身。
+
+**预发布版本号在打包链上已实测通过**（`1.0.0-beta.1` 与 `1.0.0-beta.2` 各走一遍完整 CLI 出包）：NSIS 产物名 `SideShift_1.0.0-beta.2_x64-setup.exe` 正常；beta.2 那次带私钥，**同名 `.exe.sig` 也产出了**，并用我们自己的 `verify_file` 对内置公钥验过那份 exe 的字节。**仍未实测**：真实安装与升级路径（要写用户机器，按惯例由开发者自测）、私有仓改成 public 之后 `check_update` 的真实返回。
 
 ## 已知坑
 
@@ -115,6 +149,7 @@ $b.GetPixel(0, 0).A; $b.GetPixel(16, 6); $b.GetPixel(16, 20)
 - **`productName` 曾是小写 `sideshift`**：改成 `SideShift` 后，老用户机器上「添加或删除程序」里会同时留着旧的 `sideshift` 卸载项（新卸载器只清自己的注册键），需提醒手动卸载一次。
 - **元数据仍缺**：`publisher`（现在回落 identifier 第二段 `poso`）、`shortDescription` / `category` / `license` / `homepage` 都没配；`fileAssociations` 挂 `.mrpack` 也还没做。
 - **安装壳挑包靠文件名字典序**（`installer/build.rs` 的 `find_setup`）：现在够用，但版本号进到会出两位小数的月份（例如 `0.9.0` 与 `0.10.0` 并存）时它会挑错，届时改成按 semver 或 mtime 选。
+- **安装壳对已装目录做「重装」时会清设置**：`installer/src/main.rs` 只传 `/S` 与 `/D=`，**没带 `/UPDATE`** ⇒ `$UpdateMode=0`，老卸载器被调起、`nsis/hooks.nsh` 那条 `RMDir /r "$INSTDIR\appdata"` 执行，配置目录（设置/任务存档/鸣谢快照/WebView profile）跟着没。应用内更新那条链已经带上了，这条同族的口子还在安装壳那边；用它重装前先补参数。
 - **旧产物不会自己消失**：`bundle/` 下会同时留着 `SideShift_0.1.0_x64-setup.exe` 与 `SideShift-0.1.0-portable-x64.zip` 这类历史手工包，发版时按版本串核对文件名，别顺手拿错。
 
 ## 开发环境

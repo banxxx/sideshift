@@ -63,7 +63,8 @@ export interface UpdateInfo {
  *
  * 与 `UpdateInfo` 分两张类型是刻意的：那张说「有没有新版本」（一次性、来自远端），
  * 这张说「这一版在本地办到哪一步」（会变、可取消、能被清缓存打断）。
- * `installing` 属于下一期，那时才加。
+ * **没有 `installing` 这一档**：装那一跳的最后一句是退出进程，窗口当场就没了，界面上不存在一段
+ * 「安装中」；装成了没有由下次启动的 `UpdateOutcome` 说。
  */
 export type UpdateStage = "idle" | "downloading" | "verifying" | "ready" | "failed" | "canceled";
 
@@ -82,3 +83,21 @@ export interface UpdateStatus {
     /** 失败原因：只有种类码，那句话在 `errors.ts` 一处渲染 */
     error: string | null;
 }
+
+/**
+ * 上一次「重启并安装」的结论（Rust: `update_outcome`）。
+ * 只有本机确实试过装一次才有值，之后后端就把那本账收走 ⇒ 冷启动问第二次拿到 null，不会重复提示。
+ *
+ * 为什么没有「安装器返回的退出码」这种更直接的说法：Windows 上安装器会先把正在运行的我们杀掉，
+ * 那一刻起没有任何回调会执行，成败只能靠下次启动比对版本号（判据在 Rust 侧，前端只渲染）。
+ */
+export type UpdateOutcomeKind = "done" | "unfinished";
+
+export interface UpdateOutcome {
+    kind: UpdateOutcomeKind;
+    /** 那次试图装上去的版本 */
+    attempted: string;
+    /** 按下那颗钮时本机是哪一版 */
+    previous: string;
+}
+

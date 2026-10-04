@@ -89,6 +89,7 @@
   "settings.update-check": "Update check failed: {{reason}}",
   "settings.update-downloading": "Downloading · {{pct}}%",
   "settings.update-found": "Update found",
+  "settings.update-install": "Couldn't start the install: {{reason}}",
   "settings.update-ready": "Verified · ready to install",
   "settings.update-start": "Couldn't start the download: {{reason}}",
   "settings.update-verifying": "Verifying…",

@@ -419,6 +419,17 @@ export function SettingsPage() {
             .catch((e) => notify(t("settings.update-cancel-failed", "取消没能生效：{{reason}}", { reason: errOf(e) }), "error"));
     };
 
+    /**
+     * 重启并安装。**不等它成功**：成功那一路的最后一句是退出这个进程，窗口当场就没了，
+     * 这里连返回值都寄不到。所以只说得出「没能开始安装」那一句——装成了没有要等下趟启动的提示
+     * （出口在 `App.tsx`：读 `update_outcome` 那本账）。
+     */
+    const installNow = () => {
+        void api.installUpdate().catch((e) =>
+            notify(t("settings.update-install", "没能开始安装：{{reason}}", { reason: errOf(e) }), "error"),
+        );
+    };
+
     /** 切渠道：往 Beta 走要过确认，往正式版走不需要拦（保守方向不出错） */
     const chooseChannel = (k: UpdateChannel) => {
         if (!settings || k === channelOf(settings)) return;
@@ -776,13 +787,14 @@ export function SettingsPage() {
             </ModalShell>
 
             {/* 发现新版本：结论 + 取件那一轮的状态合到同一扇窗里演。关窗不取消——那一轮是进程级的，
-                重开时按 status 对号，所以这份结论也不随关窗清空。「重启并安装」要等换文件那条链路（P2） */}
+                重开时按 status 对号，所以这份结论也不随关窗清空 */}
             <UpdateDialog
                 info={updateOpen ? updateInfo : null}
                 status={updateStatus}
                 onClose={() => setUpdateOpen(false)}
                 onStart={startFetch}
                 onCancel={cancelFetch}
+                onInstall={installNow}
             />
         </motion.div>
     );

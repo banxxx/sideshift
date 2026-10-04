@@ -70,3 +70,14 @@ pub fn is_active(state: &Arc<AppState>, id: &str) -> bool {
         Some(t) if matches!(t.status, TaskStatus::Queued | TaskStatus::Running)
     )
 }
+
+/// 有没有还没跑完的转换（排队或运行中）。应用内更新用它挡一下：那条链的最后一句是退出进程，
+/// 正跑到一半的任务存档会停在 `running`，下次启动就是一条永远不动的任务——所以这颗闸门不给强制档。
+/// 与 `is_active` 分开写：那边按 id 问「这一条还在不在跑」，这边问「有没有任何一条还在跑」。
+pub fn has_active_tasks(state: &Arc<AppState>) -> bool {
+    let inner = state.inner.lock().unwrap();
+    inner
+        .tasks
+        .values()
+        .any(|t| matches!(t.status, TaskStatus::Queued | TaskStatus::Running))
+}

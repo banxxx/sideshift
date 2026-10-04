@@ -18,7 +18,7 @@ pub(crate) use persist::config_dir;
 pub(crate) use persist::webview_profile_dir;
 pub use persist::{save_settings, save_templates};
 pub use schedule::{cancel, create_task, remove_task_staging, retry_task, StartResult};
-pub use state::{AppState, Inner};
+pub use state::{has_active_tasks, AppState, Inner};
 pub use trash::{drain_trash, entries as trash_entries, restore_task, trash_task, TrashEntry};
 
 /// 单条任务的暂存目录名：`{cache}\tasks\{任务 id}\staging`。写它的（pipeline/schedule）与

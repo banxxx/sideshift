@@ -9,6 +9,7 @@
 //! `UpdateBuilder`，拿不到「只借它的装包引擎、检测仍用自己的」这条折中路。
 
 pub mod fetch;
+pub mod install;
 pub mod release;
 pub mod verify;
 
@@ -98,5 +99,21 @@ mod tests {
         assert!(!key.contains('\n') && !key.contains('\r'), "内联串必须是一行");
         assert_eq!(key, key.trim(), "公钥串不该带首尾空白");
         super::verify::decode_public_key(key).expect("内置公钥该解得开");
+    }
+
+    /// 两处公钥必须同串。构建器那份（`tauri.conf.json` 的 `plugins.updater.pubkey`，
+    /// `createUpdaterArtifacts` 就是靠它验私钥配对）只影响出包，运行期这份才影响用户——
+    /// 只改一处会产出一枚「签得上、客户端读不懂」的包，而那要等用户点了下载才暴露。
+    #[test]
+    fn conf_pubkey_is_the_same_string_as_the_builtin_one() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tauri.conf.json");
+        let raw = std::fs::read_to_string(path).expect("读不到 tauri.conf.json");
+        let conf: serde_json::Value = serde_json::from_str(&raw).expect("tauri.conf.json 不是合法 JSON");
+        let in_conf = conf["plugins"]["updater"]["pubkey"].as_str().unwrap_or("");
+        assert_eq!(
+            in_conf,
+            updater_pubkey().expect("内置公钥不该为空"),
+            "换钥要同一次改 tauri.conf.json 与 UPDATER_PUBKEY"
+        );
     }
 }

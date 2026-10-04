@@ -74,8 +74,9 @@ export function appText(code: string): string | null {
     if (!code.startsWith("app:")) return null;
     const kind = code.slice(4);
     // 更新那一轮的码先单走一张表：它的下一动作各不相同（等一等 / 重开一次 / 只能去发布页），
-    // 混在兜底那句「本机操作没能完成」里，用户就只会一遍遍点同一个必失败的按钮
-    if (kind.startsWith("update-")) return updateText(kind);
+    // 混在兜底那句「本机操作没能完成」里，用户就只会一遍遍点同一个必失败的按钮。
+    // 过表之前把 `update-` 那截段名削掉：表里的 case 写的是段名本身
+    if (kind.startsWith("update-")) return updateText(kind.slice("update-".length));
     switch (kind) {
         case "panic":
             return t("lib.app-panic", "本机处理没能完成，重试一次");
@@ -89,9 +90,11 @@ export function appText(code: string): string | null {
 }
 
 /**
- * 取件（下载 + 验签）那一段的降级句。措辞分工是刻意的：
+ * 更新那条链的降级句：取件（下载 + 验签）与装（安装）两段的码都走这一张表。
+ * 措辞分工是刻意的：
  * 说「去发布页」的四条是**发布侧或本机形态**的问题，用户在这扇窗里做什么都没用；
- * 说「重试」的是这条链自己的抖动，同一颗按钮再点一次就是正解。
+ * 说「重试」的是这条链自己的抖动，同一颗按钮再点一次就是正解；
+ * 装那一段的几句各自给一个不同的下一动作（等转换跑完 / 重新下载 / 去安全软件那里看一眼）。
  */
 function updateText(kind: string): string {
     switch (kind) {
@@ -125,6 +128,25 @@ function updateText(kind: string): string {
             return t("update.fail-sig-format", "签名文件读不懂，没能校验");
         case "sig-mismatch":
             return t("update.fail-sig-mismatch", "签名与安装包对不上，没能校验");
+        // ---- 装那一段（点「重启并安装」之后、进程退出之前）----
+        case "dev-build":
+            return t("update.fail-dev-build", "开发构建不执行安装，请用打包后的程序测这条链");
+        case "portable":
+            return t("update.fail-portable", "便携版要整目录手动替换，这里不做应用内安装");
+        case "not-ready":
+            return t("update.fail-not-ready", "暂存的安装包已经不在了，重新下载一次");
+        case "tasks-busy":
+            return t("update.fail-tasks-busy", "还有整合包在转换，等它跑完再装");
+        case "journal":
+            return t("update.fail-journal", "没能写下这次安装的记录，安装没有开始");
+        case "path":
+            return t("update.fail-path", "没能确定当前程序的位置，安装没有开始");
+        case "config-dir":
+            return t("update.fail-config-dir", "找不到应用配置目录，安装没有开始");
+        case "spawn":
+            return t("update.fail-spawn", "安装程序没能启动，可能被安全软件拦下了");
+        case "browser":
+            return t("update.fail-browser", "浏览器预览里没有可运行的安装器，请用打包后的程序测");
         default:
             return t("update.fail-generic", "这次更新没能完成，稍后重试");
     }

@@ -8,7 +8,7 @@ use super::UpdateChannel;
 #[derive(Serialize, Clone, Copy, Debug, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub enum UpdateAssetKind {
-    /// `createUpdaterArtifacts` 出的签名安装包（`*-setup.nsis.zip`）——签名覆盖的是它，不是 exe
+    /// `createUpdaterArtifacts` 出的签名安装包（`*-setup.exe`，本机真构建实测的产物名）——签名覆盖的是它
     Package,
     /// 与某个 Package 同名的 `<包名>.sig`
     Signature,
@@ -86,7 +86,9 @@ pub struct UpdateInfo {
 /// 这张说的是「这一版在本地办到哪一步了」，会变、可取消、能被清缓存打断。合成一张，界面就
 /// 得在同一个对象里猜哪些字段此刻有意义。
 /// `checking` / `available` / `blocked` 不在这里——那三档由 `check_update` 的返回值表达，
-/// 界面读 `UpdateInfo`；`installing` 属于 P2，那时才加。
+/// 界面读 `UpdateInfo`。
+/// **也没有 `installing`**：装那一跳的最后一句是「退出进程」，窗口当场就没了，界面上不存在一段
+/// 「安装中」；装成了没有由下次启动的 `UpdateOutcome` 说。
 #[derive(Serialize, Clone, Copy, Debug, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case")]
 pub enum UpdateStage {
@@ -131,4 +133,29 @@ impl UpdateStatus {
             error: None,
         }
     }
+}
+
+/// 上一次「重启并安装」到底装成了没有。这一档只在**有过一次安装尝试**时才存在，
+/// 所以它是 `Option<UpdateOutcome>`——没有账本时界面什么都不说，而不是报一句「没装上」。
+///
+/// 为什么靠「下次启动读盘对账」而不是安装器的回执：Windows 上 spawn 之后就没有我们了——
+/// 官方 NSIS 在 `/S` 下会直接杀掉正在运行的 `SideShift.exe`（生成的安装脚本引的
+/// `utils.nsh` 那段 `IfSilent → KillProcess`），任何当场回调都不会执行。
+#[derive(Serialize, Clone, Copy, Debug, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum UpdateOutcomeKind {
+    /// 本机版本已经等于那次试图装上去的版本
+    Done,
+    /// 没等到：安装器没跑成、跑到一半被人关掉、或产物被杀毒软件清掉了
+    Unfinished,
+}
+
+#[derive(Serialize, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct UpdateOutcome {
+    pub kind: UpdateOutcomeKind,
+    /// 那次试图装上去的版本
+    pub attempted: String,
+    /// 按下那颗钮时本机是哪一版
+    pub previous: String,
 }

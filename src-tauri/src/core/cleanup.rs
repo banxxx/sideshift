@@ -556,7 +556,7 @@ mod tests {
         update_dir(
             &dir,
             "1.1.0",
-            &[("SideShift_1.1.0_x64-setup.nsis.zip", 30), ("SideShift_1.1.0_x64-setup.nsis.zip.sig", 4)],
+            &[("SideShift_1.1.0_x64-setup.exe", 30), ("SideShift_1.1.0_x64-setup.exe.sig", 4)],
             1,
         );
         update_dir(&dir, "1.0.0", &[("old.zip", 5)], 1);
