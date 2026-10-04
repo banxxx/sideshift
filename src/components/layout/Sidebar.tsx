@@ -7,7 +7,7 @@ import { Home, Info, LayoutTemplate, ListChecks, Settings, Moon, Sun } from "luc
 import { useRef, useState } from "react";
 import { AnimatePresence, motion } from "motion/react";
 import { NotificationStack } from "./NotificationStack";
-import { HOVER_FILL } from "@/components/ui";
+import { HOVER_FILL, TIP_TRIGGER, Tip } from "@/components/ui";
 import { useT } from "@/lib/i18n";
 import { PILL_SLIDE } from "@/lib/springs";
 import { cn } from "@/lib/utils";
@@ -93,12 +93,7 @@ export function Sidebar() {
                     return (
                         <button
                             key={item.key}
-                            onClick={() => {
-                                switchPrimary(item.key);
-                                // 那颗点是这行自己亮起来的：点进设置就顺手看到那一版，
-                                // 而不是让人进了页再去找一颗钮（关掉窗仍落在设置页，没被带走）
-                                if (updateBadge && item.key === "settings") openUpdate();
-                            }}
+                            onClick={() => switchPrimary(item.key)}
                             className={cn(
                                 "relative w-full h-9 rounded-lg px-3 text-[13px] font-medium",
                                 HOVER_FILL,
@@ -118,25 +113,6 @@ export function Sidebar() {
                                 <Icon className="size-4" />
                                 <span>{navLabel[item.key]}</span>
                             </span>
-                            {/* 更新角标：一颗点、不带数字——它说的是「这儿有事」而不是「有几件事」
-                                （一期只有应用更新这一个来源）。外层只管定位，缩放交给里面这一枚：
-                                motion 写 transform 会把 `-translate-y-1/2` 整条顶掉，点会跳位置。 */}
-                            {item.key === "settings" && (
-                                <span className="pointer-events-none absolute right-3 top-0 z-[1] flex h-full items-center">
-                                    <AnimatePresence initial={false}>
-                                        {updateBadge && (
-                                            <motion.span
-                                                key="update-dot"
-                                                initial={{ opacity: 0, scale: 0.5 }}
-                                                animate={{ opacity: 1, scale: 1 }}
-                                                exit={{ opacity: 0, scale: 0.5 }}
-                                                transition={{ duration: 0.16, ease: [0.16, 1, 0.3, 1] }}
-                                                className="size-1.5 rounded-full bg-accent"
-                                            />
-                                        )}
-                                    </AnimatePresence>
-                                </span>
-                            )}
                         </button>
                     );
                 })}
@@ -151,7 +127,43 @@ export function Sidebar() {
                 被抽成 absolute 的退场卡片是挂到整窗外壳那个 `relative` 上的）。 */}
             <div className="relative flex items-center justify-between pt-3 pr-0 pb-3 pl-3">
                 <NotificationStack />
-                <span className="font-mono text-[11px] text-text-3">v{VERSION_CORE}</span>
+                {/* 版本号：更新角标挂在这里（原来在设置项上，挪过来离「这是哪一版」更近）。
+                    有角标才可点（点开更新窗并记一次看过）；Tip 挂项目自己的气泡——
+                    它贴着窗底，side 必须是 top，不然会把气泡算给滚动祖先撑出滚动条 */}
+                <button
+                    type="button"
+                    aria-label={updateBadge ? t("settings.update-found", "发现新版本") : undefined}
+                    className={cn(
+                        "relative flex items-center gap-1.5 font-mono text-[11px] text-text-3 transition-colors",
+                        updateBadge ? TIP_TRIGGER + " cursor-pointer hover:text-text-1" : "cursor-default",
+                    )}
+                    onClick={() => {
+                        if (updateBadge) openUpdate();
+                    }}
+                >
+                    <Tip
+                        label={t("settings.update-found", "发现新版本")}
+                        side="top"
+                        align="start"
+                    />
+                    {/* 角标钉在文字右上角（上标位）：外层 relative 只圈文字本身，
+                        点的位置跟字号走而不跟按钮框走 */}
+                    <span className="relative">
+                        v{VERSION_CORE}
+                        <AnimatePresence initial={false}>
+                            {updateBadge && (
+                                <motion.span
+                                    key="update-dot"
+                                    initial={{ opacity: 0, scale: 0.5 }}
+                                    animate={{ opacity: 1, scale: 1 }}
+                                    exit={{ opacity: 0, scale: 0.5 }}
+                                    transition={{ duration: 0.16, ease: [0.16, 1, 0.3, 1] }}
+                                    className="absolute -right-2 -top-1.5 size-2 rounded-full bg-emerald"
+                                />
+                            )}
+                        </AnimatePresence>
+                    </span>
+                </button>
                 <button
                     ref={themeBtn}
                     onClick={() => {

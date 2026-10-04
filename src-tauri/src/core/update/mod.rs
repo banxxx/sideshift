@@ -14,6 +14,7 @@ pub mod install;
 pub mod release;
 pub mod verify;
 
+use crate::core::downloader::reqwest_code;
 use crate::models::UpdateChannel;
 
 /// 更新包的 minisign **公钥**：`bundle.createUpdaterArtifacts` 签出的那批 `.sig` 就是配着它验的。
@@ -57,13 +58,77 @@ pub fn release_tag_url(tag: &str) -> String {
     format!("https://api.github.com/repos/{REPO_SLUG}/releases/tags/{tag}")
 }
 
-/// 允许当下载源的宿主。镜像档（P5）加进来时必须同时留在表里——
+/// 允许当下载源的宿主。镜像宿主也在表里（P5 落地，见 `ASSET_MIRRORS` 的说明）——
 /// 验签打在落地字节上，所以镜像不可伪造，但**不接受 release 响应里回传的任何其它址**。
 const ALLOWED_HOSTS: &[&str] = &[
     "github.com",
     "objects.githubusercontent.com",
     "raw.githubusercontent.com",
+    // 下面两个是 ASSET_MIRRORS 的宿主：镜像档进候选链的前提是宿主先在这里登记
+    "ghfast.top",
+    "ghproxy.net",
 ];
+
+/// release 资产的镜像前缀（P5）：**前缀 + 完整 URL** 的形态（`https://ghfast.top/https://github.com/...`）。
+///
+/// 2026-10 实测：两家都对 `/releases/download/` 透明代理（含 Range，206）；同期的 gh-proxy.com
+/// 已连不通——**这张表会朽**，维护契约是「烂一家摘一家，官方直连永远殿后兜底」：
+/// 镜像全死时官方候选还带着满额重试，最坏退回无镜像时代的行为，不会有更糟的档。
+///
+/// 信任模型（为什么敢让第三方镜像碰更新包）：验签打在**落地字节**的哈希上，镜像哪怕伪造整份
+/// 响应也签不出我们的名——它至多「藏起新版本」或「递来一个旧签名包」，后者有 `update-downgrade`
+/// 那道闸拦着。API JSON（版本号、文件清单）没有镜像：ghproxy 系实测全部拒绝代理
+/// `api.github.com`，要补这一层只能自建反代（见 `api_json` 的注释）。
+const ASSET_MIRRORS: &[&str] = &["https://ghfast.top/", "https://ghproxy.net/"];
+
+/// 一个资产的下载候选（按顺序试）：镜像在前（国内秒下）、官方殿后（吃满重试预算的最耐用源）。
+/// 官方址是 release 响应里回传的 `browser_download_url`，候选表自己不发明任何址
+pub fn asset_candidates(url: &str) -> Vec<String> {
+    let mut out: Vec<String> = ASSET_MIRRORS
+        .iter()
+        .map(|m| format!("{m}{url}"))
+        .collect();
+    out.push(url.to_string());
+    out
+}
+
+/// GitHub API JSON 的取法：**官方直连，短超时，两次尝试**。
+///
+/// 为什么没有镜像：ghproxy 系公共代理实测全部拒绝 `api.github.com`（"Invalid input."），
+/// 硬编码一片坟场只会假装有兜底。为什么掐 10 秒：Downloader 那颗 client 的全局超时是 120s——
+/// 那是给大文件留的，「检查更新」挂两分钟等于把人逼去点别的。要补 API 层的镜像，唯一可靠的
+/// 形态是自建反代（Cloudflare Worker 之类），到时候往这里加一个候选循环即可
+pub(crate) async fn api_json(
+    client: &reqwest::Client,
+    url: &str,
+) -> Result<serde_json::Value, String> {
+    let timeout = std::time::Duration::from_secs(10);
+    let mut last = String::from("unknown");
+    for attempt in 1..=2 {
+        let resp = client.get(url).timeout(timeout).send().await;
+        let resp = match resp {
+            Ok(r) => r,
+            Err(e) => {
+                last = reqwest_code(&e, url);
+                if attempt == 1 {
+                    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+                }
+                continue;
+            }
+        };
+        match resp.json::<serde_json::Value>().await {
+            Ok(v) => return Ok(v),
+            Err(e) => {
+                // 200 但回的是 HTML 错误页（拦截页/镜像墓碑）：与连不上同档，再来一次
+                last = reqwest_code(&e, url);
+                if attempt == 1 {
+                    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+                }
+            }
+        }
+    }
+    Err(last)
+}
 
 /// 这一轮实际订阅哪条线：用户选过用他选的，没选过看本机版本号带不带预发布位。
 ///
@@ -100,6 +165,19 @@ mod tests {
         assert!(!key.contains('\n') && !key.contains('\r'), "内联串必须是一行");
         assert_eq!(key, key.trim(), "公钥串不该带首尾空白");
         super::verify::decode_public_key(key).expect("内置公钥该解得开");
+    }
+
+    /// 镜像候选的形状：前缀 + 完整 URL，官方殿后；镜像宿主必须在白名单里
+    #[test]
+    fn asset_candidates_put_mirrors_first_and_official_last() {
+        let official = "https://github.com/banxxx/sideshift/releases/download/v1.0.0/x.exe";
+        let cands = asset_candidates(official);
+        assert_eq!(cands.len(), 3);
+        assert!(cands[0].starts_with("https://ghfast.top/https://github.com/"), "{}", cands[0]);
+        assert!(cands[1].starts_with("https://ghproxy.net/https://github.com/"), "{}", cands[1]);
+        assert_eq!(cands[2], official, "官方永远殿后");
+        // 白名单契约：镜像宿主不在表里 = 候选链成了摆设
+        assert!(host_allowed(&cands[0]) && host_allowed(&cands[1]) && host_allowed(official));
     }
 
     /// 两处公钥必须同串。构建器那份（`tauri.conf.json` 的 `plugins.updater.pubkey`，

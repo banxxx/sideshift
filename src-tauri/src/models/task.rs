@@ -138,7 +138,7 @@ pub struct TaskError {
     pub detail: String,
     /// 失败种类代码（`net:offline:api.modrinth.com` 这一串）：界面上给人看的是它翻出来的
     /// 那句本地化文案，`detail` 里那条带 URL/状态码的原句只进「复制诊断信息」。
-    /// 归不了类的失败（缺 API Key 那两句本来就是中文整句）没有码 ⇒ 旧档缺这个字段也照样成立
+    /// 归不了类的失败（中文整句的那些）没有码 ⇒ 旧档缺这个字段也照样成立
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub code: Option<String>,
     pub retryable: bool,

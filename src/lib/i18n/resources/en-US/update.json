@@ -44,5 +44,6 @@
   "update.outcome-done": "Updated to v{{version}}",
   "update.outcome-unfinished": "The update to v{{version}} didn't finish — this machine is still on v{{current}}",
   "update.retry": "Retry",
-  "update.title-new": "Update to v{{version}}"
+  "update.title-new": "Update to v{{version}}",
+  "update.skip-version": "Skip this version"
 }

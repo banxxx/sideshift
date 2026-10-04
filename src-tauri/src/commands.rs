@@ -12,7 +12,7 @@ use crate::core::ack::{self, AckList};
 use crate::core::cfpack;
 use crate::core::cleanup;
 use crate::core::detector;
-use crate::core::downloader::{Downloader, app_code, reqwest_code};
+use crate::core::downloader::{Downloader, app_code};
 use crate::core::env;
 use crate::core::java;
 use crate::core::parser;

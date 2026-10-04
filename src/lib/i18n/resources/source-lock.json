@@ -894,5 +894,6 @@
   "update.outcome-done": "已更新到 v{{version}}",
   "update.outcome-unfinished": "更新到 v{{version}} 没有成功，本机仍是 v{{current}}",
   "update.retry": "重试",
+  "update.skip-version": "跳过这个版本",
   "update.title-new": "更新到 v{{version}}"
 }

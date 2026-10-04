@@ -66,6 +66,15 @@ export function markUpdateSeen(): void {
     void invokeOrMock<void>("mark_update_seen", undefined, () => undefined);
 }
 
+/**
+ * 「跳过这个版本」（Rust: skip_update）⇒ 角标灭，渠道里出现**更新**的那条之前不再亮。
+ * 与记看过同一口径：后端同步且总是成功，fire-and-forget；浏览器里没有账本，原样忽略
+ */
+export function skipUpdate(version: string): void {
+    if (!isTauri) return;
+    void invokeOrMock<void>("skip_update", { version }, () => undefined);
+}
+
 /** 订阅启动后那一趟自动检查的结论（Rust 侧 `update://available`）。浏览器里没有那一趟 ⇒ 订阅是个空动作 */
 export function onUpdateAvailable(cb: (info: UpdateInfo) => void): Promise<UnlistenFn> {
     if (!isTauri) return Promise.resolve(() => {});

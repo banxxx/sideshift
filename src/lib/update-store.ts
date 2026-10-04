@@ -136,6 +136,17 @@ export function closeUpdate(): void {
 }
 
 /**
+ * 跳过这一版：角标灭 + 关窗，后端记下这一版——渠道里出现**更新**的那条之前不再点灯
+ * （判定在后端按 semver 比，被跳过的版本被撤回也不会拿更老的顶上来）。
+ * 手动检查不受它影响：人主动点了钮，查出来什么就该显示什么
+ */
+export function skipUpdate(): void {
+    const version = s.info?.latest;
+    set({ open: false, badge: false });
+    if (version) api.skipUpdate(version);
+}
+
+/**
  * 开始取件（下载 + 验签）。**不等这句**：整轮都在这一个调用里，过程走 `update://progress`，
  * 它的返回值只当最后一锤。所以这里只负责把 reject 的那几种「没跑起来」说出来
  * （并发第二轮、这个构建没带公钥、tag 读不懂）——半途失败由弹窗那行红字说。

@@ -6,7 +6,14 @@
  * 每跳重画整棵应用（标题栏、侧栏、当前页全跟着走）。订阅收在这片叶子上，别的层只读它自己的档位
  */
 import { UpdateDialog } from "@/features/update/UpdateDialog";
-import { cancelFetch, closeUpdate, installUpdate, startFetch, useUpdate } from "@/lib/update-store";
+import {
+    cancelFetch,
+    closeUpdate,
+    installUpdate,
+    skipUpdate,
+    startFetch,
+    useUpdate,
+} from "@/lib/update-store";
 
 export function UpdateLayer() {
     const { open, info, status } = useUpdate();
@@ -18,6 +25,7 @@ export function UpdateLayer() {
             onStart={startFetch}
             onCancel={cancelFetch}
             onInstall={installUpdate}
+            onSkip={skipUpdate}
         />
     );
 }

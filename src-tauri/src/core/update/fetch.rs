@@ -46,11 +46,15 @@ const BACKOFF: Duration = Duration::from_millis(500);
 /// 进度事件的最小间隔。每个块发一条会把前端刷成打字机，100ms 一档足够画出进度条的形状
 const TICK: Duration = Duration::from_millis(100);
 
-/// 一次尝试的失败分类（与 `downloader::client` 同一套思路，只是这里没有「换源」那一档：P5 才有多源）
+/// 一次尝试的失败分类（与 `downloader::client` 同一套思路，多了「换源」这一档）
 enum Stop {
     /// 换个时间再试可能成功（连接断、408/429/5xx、块间停滞、收回来是半截）
     Retry(String),
-    /// 重试也不会变好（404/403、磁盘写不进、用户取消）：立即结束这一轮
+    /// 这个源到不了目的（403 拦截/项目不放行、404 透传）：**立刻换下一个候选**，
+    /// 在它身上花退避预算没有意义。404 也归这档而不是「全局没救」：镜像对不存在的文件
+    /// 会透传上游的 404，但反过来「镜像 404、官方其实有」的误伤多花两发快请求就能纠回来
+    Skip(String),
+    /// 重试也不会变好（磁盘写不进、用户取消）：立即结束这一轮
     Fatal(String),
 }
 
@@ -279,14 +283,10 @@ async fn run(
     cancel: &Arc<AtomicBool>,
 ) -> Result<UpdateStatus, String> {
     let url = release_tag_url(tag);
-    let body = client()
-        .get(&url)
-        .send()
+    // 与 check_update 同一条取法：短超时 + 两次尝试（全局 120s 在这一档是黑洞）
+    let body = super::api_json(client(), &url)
         .await
-        .map_err(|e| fail(app, reqwest_code(&e, &url)))?
-        .json::<serde_json::Value>()
-        .await
-        .map_err(|e| fail(app, reqwest_code(&e, &url)))?;
+        .map_err(|c| fail(app, c))?;
     let rel = release::parse_one(&body, &url).map_err(|c| fail(app, c))?;
 
     // 渠道与新旧各一判：前端递上来的 tag 只是「它想要这一版」，凭什么给由这里说了算
@@ -360,7 +360,10 @@ pub(crate) fn landed_ok(pkg_path: &Path, sig_path: &Path) -> Result<(), String> 
     verify::verify_file(pkg_path, &sig)
 }
 
-/// 取一个资产：重试几次、每次都是流式收进 `.part` 再改名定稿。返回收到的字节数
+/// 取一个资产：候选链（镜像在前、官方殿后）逐源尝试，每次都是流式收进 `.part` 再改名定稿。
+/// 预算分配与 `downloader::client::stream_url` 同一条规矩：**非末位源只给一次机会**（换源要快，
+/// 不能把退避预算耗在一个明显不通的源上），末位源才吃满 `RETRIES`——镜像全朽时官方那一段
+/// 就是无镜像时代的老行为。返回收到的字节数
 async fn fetch_asset(
     app: &AppHandle,
     cancel: &Arc<AtomicBool>,
@@ -368,31 +371,39 @@ async fn fetch_asset(
     dest: &Path,
     base: u64,
 ) -> Result<u64, String> {
+    let candidates = super::asset_candidates(&asset.url);
+    let last_i = candidates.len() - 1;
     let mut last: Option<String> = None;
-    for attempt in 1..=RETRIES {
-        match stream_into(app, cancel, asset, dest, base, attempt).await {
-            Ok(bytes) => return Ok(bytes),
-            Err(Stop::Fatal(code)) => return Err(code),
-            Err(Stop::Retry(cause)) => {
-                last = Some(cause);
-                if attempt < RETRIES {
-                    if canceled(cancel) {
-                        return Err(app_code("update-canceled"));
+    for (ci, url) in candidates.iter().enumerate() {
+        let budget = if ci == last_i { RETRIES } else { 1 };
+        for attempt in 1..=budget {
+            match stream_into(app, cancel, url, asset, dest, base, attempt).await {
+                Ok(bytes) => return Ok(bytes),
+                Err(Stop::Fatal(code)) => return Err(code),
+                Err(Stop::Skip(cause)) | Err(Stop::Retry(cause)) => {
+                    last = Some(cause);
+                    // Skip 不退避（下一发换的是源，不是时间）；Retry 在还有预算时才等
+                    if attempt < budget {
+                        if canceled(cancel) {
+                            return Err(app_code("update-canceled"));
+                        }
+                        tokio::time::sleep(BACKOFF * attempt).await;
                     }
-                    tokio::time::sleep(BACKOFF * attempt).await;
                 }
             }
         }
     }
-    // 三次都没拿下：报最后一次的原因。理论上到不了这条（循环至少跑一次），
+    // 全部候选都没拿下：报最后一次的原因。理论上到不了这条（循环至少跑一次），
     // 到了就说明那边一个字节都没回过——那正是「连不上」那一档
     Err(last.unwrap_or_else(|| net_code(&asset.url, 0)))
 }
 
-/// 一次尝试：连上、收流写 `.part`、按声明大小核对、改名。失败一律清掉自己那半个文件
+/// 一次尝试：连上、收流写 `.part`、按声明大小核对、改名。失败一律清掉自己那半个文件。
+/// `url` 是候选链里的**这一发**用的址（镜像或官方），错误码与超时都按它说
 async fn stream_into(
     app: &AppHandle,
     cancel: &Arc<AtomicBool>,
+    url: &str,
     asset: &Asset,
     dest: &Path,
     base: u64,
@@ -403,19 +414,20 @@ async fn stream_into(
         dest.file_name().and_then(|s| s.to_str()).unwrap_or("download")
     ));
     let resp = client()
-        .get(&asset.url)
+        .get(url)
         .send()
         .await
-        .map_err(|e| Stop::Retry(reqwest_code(&e, &asset.url)))?;
+        .map_err(|e| Stop::Retry(reqwest_code(&e, url)))?;
     let status = resp.status();
     if !status.is_success() {
         // 走到这里时 3xx 已经被 reqwest 跟完了（默认最多 10 跳），所以「非 2xx」就是终态
-        let code = net_code(&asset.url, status.as_u16());
+        let code = net_code(url, status.as_u16());
         let code = if status.is_server_error() || matches!(status.as_u16(), 408 | 429) {
             Stop::Retry(code)
         } else {
-            // 404/403 说的是「东西不在那儿」，重试只是白敲门
-            Stop::Fatal(code)
+            // 404/403 说的是「这个源到不了目的」：镜像透传上游 404、拦截层回 403 都长这样，
+            // 在同一个源上重试只是白敲门——换下一个候选
+            Stop::Skip(code)
         };
         return Err(code);
     }
@@ -435,10 +447,10 @@ async fn stream_into(
                 // 那边连着但不回字节了。半截文件留不住（下一次尝试换个临时名，旧的成垃圾），删
                 drop(file);
                 let _ = std::fs::remove_file(&temp);
-                return Err(Stop::Retry(net_timeout_code(&asset.url)));
+                return Err(Stop::Retry(net_timeout_code(url)));
             }
             Ok(None) => break,
-            Ok(Some(Err(e))) => return Err(Stop::Retry(reqwest_code(&e, &asset.url))),
+            Ok(Some(Err(e))) => return Err(Stop::Retry(reqwest_code(&e, url))),
             Ok(Some(Ok(b))) => b,
         };
         // 写完这块再判取消：块与块之间删文件，Windows 上句柄已释放，删得干净

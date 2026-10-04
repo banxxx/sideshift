@@ -38,6 +38,10 @@ pub struct Stamp {
     pub seen_ms: i64,
     /// 那一趟的结论。`None` = 那次连结论都没拿到（网络失败、解不懂）
     pub info: Option<UpdateInfo>,
+    /// 用户明确说过「别再提这个版本」（`skip_update` 写入）。badge 对它让位，
+    /// 直到渠道里出现**更新**的那一条——同版本被编辑/重发都不会重新点灯
+    #[serde(default)]
+    pub skipped: Option<String>,
 }
 
 impl Stamp {
@@ -49,15 +53,34 @@ impl Stamp {
         self.at_ms == 0 || now_ms < self.at_ms || now_ms - self.at_ms >= INTERVAL_MS
     }
 
-    /// 角标该不该亮：那条 release 真能一键装，**且这次的结果你还没看过**。
+    /// 角标该不该亮：那条 release 真能一键装、**这次的结果你还没看过**、且它不是你跳过的那一版。
     ///
     /// 「看过」就是 `seen_ms >= at_ms`：打开过一次弹窗之后角标自己灭，而明天那一趟把
-    /// `at_ms` 往前挪，若仍是新版本就自己重新亮起来——不需要删文件、也不需要额外的标记
+    /// `at_ms` 往前挪，若仍是新版本就自己重新亮起来——不需要删文件、也不需要额外的标记。
+    /// 「跳过」比「看过」更长久：`skipped` 那一格要等渠道里出现**更新**的版本才让位
     pub fn badge(&self) -> bool {
-        match &self.info {
-            Some(info) => info.has_update && info.downloadable && self.seen_ms < self.at_ms,
-            None => false,
+        let Some(info) = &self.info else {
+            return false;
+        };
+        if !info.has_update || !info.downloadable || self.seen_ms >= self.at_ms {
+            return false;
         }
+        match &self.skipped {
+            Some(v) => !superseded(v, info.latest.as_deref().unwrap_or("")),
+            None => true,
+        }
+    }
+}
+
+/// 「latest 不比 skipped 新」⇒ 用户跳过它是有意的，别再点灯。semver 比不出（脏串）退到字面相等：
+/// 宁可多提醒一次，也别把真新版本咽下去
+fn superseded(skipped: &str, latest: &str) -> bool {
+    match (
+        semver::Version::parse(skipped.trim_start_matches('v')),
+        semver::Version::parse(latest.trim_start_matches('v')),
+    ) {
+        (Ok(s), Ok(l)) => l <= s,
+        _ => skipped == latest,
     }
 }
 
@@ -100,6 +123,7 @@ mod tests {
             at_ms,
             seen_ms,
             info: None,
+            skipped: None,
         }
     }
 
@@ -159,6 +183,34 @@ mod tests {
         assert_eq!((back.at_ms, back.seen_ms), (123, 45));
         assert!(back.info.is_none());
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 跳过的版本：同版/更老都不点灯，**更新**的那一条才重新亮。semver 比不出退到字面相等
+    #[test]
+    fn skipped_version_stays_quiet_until_something_newer() {
+        let mut s = stamp(1_000, 0);
+        s.info = Some(info(true, true));
+        s.info.as_mut().unwrap().latest = Some("1.0.0-beta.3".into());
+        // 没跳过 ⇒ 亮
+        assert!(s.badge());
+        // 跳过同一条 ⇒ 灭
+        s.skipped = Some("1.0.0-beta.3".into());
+        assert!(!s.badge());
+        // tag 带 v 前缀的写法也认得（命令层会归一，但账本自己不吃生串的亏）
+        s.skipped = Some("v1.0.0-beta.3".into());
+        assert!(!s.badge());
+        // 更新的那条出来 ⇒ 重新亮
+        s.info.as_mut().unwrap().latest = Some("1.0.0-beta.4".into());
+        assert!(s.badge());
+        // 渠道里最新的反而比跳过的老（新版本被撤下）⇒ 照旧不亮，别拿旧的顶包
+        s.info.as_mut().unwrap().latest = Some("1.0.0-beta.2".into());
+        assert!(!s.badge());
+        // 脏串两边都解不出 semver ⇒ 退到字面相等：相等算跳过，不等就亮，宁可多提醒
+        s.skipped = Some("garbage".into());
+        s.info.as_mut().unwrap().latest = Some("1.0.0-beta.3".into());
+        assert!(s.badge());
+        s.info.as_mut().unwrap().latest = Some("garbage".into());
+        assert!(!s.badge());
     }
 
     /// 只填判定要看的那两格，其余给到能编译为止（这本账只认那两个 bool）

@@ -300,7 +300,7 @@ async fn run_pipeline(app: AppHandle, state: Arc<AppState>, id: String) {
             title: "整合包里有模组拿不到文件".into(),
             detail: format!(
                 "CurseForge 上这 {} 个模组不通过接口发放下载链，两条取链路都拿不到字节：{}。\
-                 填了 API Key 也不会变——那是项目自己的设置。把它们在方案里改成剔除，\
+                 这是项目作者自己的设置，换什么网络都不会变。把它们在方案里改成剔除，\
                  或勾选「允许跳过拿不到文件的模组」再构建",
                 blocked_required,
                 brief_list(&blocked_names)

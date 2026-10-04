@@ -1,0 +1,44 @@
+# 提交/PR 的卫生检查：测试、前端类型与构建、i18n 覆盖。
+# 与发版（release.yml）同一套环境：发出去的包就是这条线验过的代码。
+#
+# 只跑 windows：测试里有 Windows 专属的路径归一（native_path）与安装壳逻辑，
+# 在 Linux 上跑不出它们的真实结果，绿灯会给出虚假的安心。
+
+name: CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+
+jobs:
+  check:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - name: 安装依赖
+        run: pnpm install --frozen-lockfile
+
+      - name: Rust 测试
+        working-directory: src-tauri
+        run: cargo test
+
+      - name: 前端类型与构建（含 tsc）
+        run: pnpm build
+
+      - name: i18n 覆盖
+        run: pnpm i18n:check

@@ -1,0 +1,58 @@
+# 文档站（GitHub Pages）部署：docs/ 下的 markdown 经 VitePress 构建后发到
+# https://banxxx.github.io/sideshift/ 。只挂这一条线，与发版（release.yml，按 tag 触发）、
+# CI（ci.yml）互不干扰；源文件只有 docs/** 与构建清单变化时才值得重跑。
+#
+# 一次性前置（仓库设置页）：Settings → Pages → Build and deployment → Source 选
+# 「GitHub Actions」。选完之后这条线才接得住（deploy-pages 需要 Pages 已启用）。
+
+name: Pages
+
+on:
+    push:
+        branches: [master]
+        paths:
+            - "docs/**"
+            - "package.json"
+            - "pnpm-lock.yaml"
+            - ".github/workflows/pages.yml"
+    workflow_dispatch:
+
+permissions:
+    pages: write
+    id-token: write
+
+# 同一时间只发一版站点：两次快速提交时，后到的取代还在跑的前一个
+concurrency:
+    group: pages
+    cancel-in-progress: true
+
+jobs:
+    deploy:
+        environment:
+            name: github-pages
+            url: ${{ steps.deployment.outputs.page_url }}
+        runs-on: ubuntu-latest
+        steps:
+            - uses: actions/checkout@v4
+
+            - uses: pnpm/action-setup@v4
+
+            - uses: actions/setup-node@v4
+              with:
+                  node-version: 22
+                  cache: pnpm
+
+            - name: 安装依赖
+              run: pnpm install --frozen-lockfile
+
+            - name: 构建文档站
+              run: pnpm docs:build
+
+            - uses: actions/configure-pages@v5
+
+            - uses: actions/upload-pages-artifact@v3
+              with:
+                  path: docs/.vitepress/dist
+
+            - id: deployment
+              uses: actions/deploy-pages@v4

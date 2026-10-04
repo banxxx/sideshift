@@ -72,6 +72,7 @@ export function UpdateDialog({
     onStart,
     onCancel,
     onInstall,
+    onSkip,
 }: {
     /** null 时不渲染：父级只在「确实有新版本」时才打开这扇窗 */
     info: UpdateInfo | null;
@@ -83,6 +84,8 @@ export function UpdateDialog({
     onCancel?: () => void;
     /** 换文件那一跳（静默跑官方安装器，然后这个进程就退出）。没传时那颗钮画定形但禁用 */
     onInstall?: () => void;
+    /** 跳过这一版（后端记账，渠道里出现更新的那条之前不再点灯）。没传就不给这颗钮 */
+    onSkip?: () => void;
 }) {
     const t = useT();
     if (!info) return null;
@@ -149,9 +152,16 @@ export function UpdateDialog({
             </Btn>
         )
     ) : (
-        <Btn size="sm" variant="ghost" onClick={onClose}>
-            {t("update.later", "以后再说")}
-        </Btn>
+        <>
+            {onSkip !== undefined && info.latest && (
+                <Btn size="sm" variant="ghost" onClick={onSkip}>
+                    {t("update.skip-version", "跳过这个版本")}
+                </Btn>
+            )}
+            <Btn size="sm" variant="ghost" onClick={onClose}>
+                {t("update.later", "以后再说")}
+            </Btn>
+        </>
     );
 
     const right = fetching ? (

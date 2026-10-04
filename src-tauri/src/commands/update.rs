@@ -41,7 +41,8 @@ fn local_facts(app: &AppHandle, state: &Arc<AppState>) -> Result<Local, String> 
 /// 敲那一趟，把版本比较、渠道、能不能一键装全部算完再回。
 ///
 /// 端点是 release **列表**而不是 `/releases/latest`（原因见 `core::update::releases_url`）；
-/// 判据都在 Rust 侧算，前端只渲染。
+/// 判据都在 Rust 侧算，前端只渲染。取 JSON 走 `update::api_json`（10s 短超时 + 两次尝试，
+/// 全局 120s 在这一档是黑洞；API 层无镜像，原因见那边的注释）。
 async fn gather(app: &AppHandle, state: &Arc<AppState>) -> Result<UpdateInfo, String> {
     let Local {
         channel,
@@ -52,15 +53,7 @@ async fn gather(app: &AppHandle, state: &Arc<AppState>) -> Result<UpdateInfo, St
 
     let dl = downloader_of(state);
     let url = update::releases_url();
-    let body = dl
-        .client
-        .get(&url)
-        .send()
-        .await
-        .map_err(|e| reqwest_code(&e, &url))?
-        .json::<serde_json::Value>()
-        .await
-        .map_err(|e| reqwest_code(&e, &url))?;
+    let body = update::api_json(&dl.client, &url).await?;
     let releases = update::release::parse(&body, &url)?;
 
     // 便携形态（exe 旁边就是 portable.flag）一期不给一键更新：
@@ -127,13 +120,11 @@ pub fn mark_update_seen(app: AppHandle) {
 
 /// 启动后那一趟自动检查。由 `lib.rs` 的 setup spawn，前端不感知它的存在，只收得着事件。
 ///
-/// 三道「不打扰」：dev 构建一趟不发（开发机一天开几十次，那道闸门只会变成噪声制造机）；
-/// 满 24 小时才真敲；失败完全不吭声，界面上不留一句。查出可装的版本只发
+/// 两道「不打扰」：满 24 小时才真敲（账本管频次，dev 与 release 同一条路、同一本账——
+/// 那道「dev 一趟不发」的闸撤了：有账本在，开发机一天重启几十次也只是一次真网络，
+/// 而留着它 dev 里整条角标链就没法测）；失败完全不吭声，界面上不留一句。查出可装的版本只发
 /// `update://available` 让角标亮，**不弹窗**——用户在忙别的时跳出一扇升级窗是打断。
 pub(crate) async fn startup_check(app: AppHandle) {
-    if cfg!(debug_assertions) {
-        return;
-    }
     // 让开启动那几秒：splash、语言目录、占用扫描都在抢同一段主线程和同一份磁盘
     tokio::time::sleep(Duration::from_millis(8_000)).await;
 
@@ -167,6 +158,25 @@ pub(crate) async fn startup_check(app: AppHandle) {
             let _ = app.emit(update::check::EVENT_AVAILABLE, info);
         }
     }
+}
+
+/// 「跳过这个版本」（Rust: skip_update）⇒ 角标灭，且渠道里不出现**更新**的那一条之前不再亮
+/// （判定在 `check::badge`，按 semver 比，被跳过的那版被撤回也不会拿更老的顶上来）。
+/// 版本由前端从弹窗递回来（它正显示着那一版），归一掉 `v` 前缀再进账。
+/// 同步、无返回值，与 `mark_update_seen` 同一口径：这本账坏了最贵的结果只是多提醒一次
+#[tauri::command]
+pub fn skip_update(app: AppHandle, version: String) {
+    let Some(dir) = task_engine::config_dir(&app) else {
+        return;
+    };
+    let version = version.trim().trim_start_matches('v').to_string();
+    if version.is_empty() {
+        return;
+    }
+    let mut stamp = update::check::read(&dir);
+    stamp.skipped = Some(version);
+    stamp.seen_ms = chrono::Utc::now().timestamp_millis();
+    update::check::write(&dir, &stamp);
 }
 
 /// 取件（Rust: prepare_update -> 这一版的下载与验签结果）。进度另走 `update://progress`。

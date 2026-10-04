@@ -43,3 +43,10 @@ deploy/ack/contributors.prev.json
 *.njsproj
 *.sln
 *.sw?
+
+# 更新签名私钥（docs/release.md）：只进本地与 CI Secrets，永不进仓库
+.keys/
+
+# VitePress（文档站）构建产物与缓存：dist 由 Pages workflow 现场构建
+docs/.vitepress/dist
+docs/.vitepress/cache

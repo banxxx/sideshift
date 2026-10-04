@@ -25,11 +25,6 @@ pub enum DownloadError {
     },
     #[error("未找到可用版本：{0}")]
     NotFound(String),
-    /// 平台在门口就把请求拒了（缺 API Key、Key 无效）。这类话必须原样给用户看，
-    /// 不能套进 `Http` 那句「网络请求失败：{url}（HTTP 403）」——那是给日志看的，
-    /// 用户读不出「403」其实等于「你还没填 Key」
-    #[error("{0}")]
-    Refused(String),
 }
 
 /// 只取主机名：`https://api.modrinth.com/v2/x?y=1` → `api.modrinth.com`。
@@ -129,7 +124,6 @@ impl DownloadError {
             // attempts=0 的 `Failed` 是包内/本地读失败，不是网络的事，保留原句
             DownloadError::Failed { attempts: 0, .. } => return None,
             DownloadError::Failed { .. } => "net:retry".to_string(),
-            DownloadError::Refused(_) => return None,
         })
     }
 
@@ -247,10 +241,6 @@ mod tests {
 
     #[test]
     fn errors_that_are_already_plain_chinese_stay_verbatim() {
-        // 缺 Key 那句要给「去设置里填」的出口，套上代码就把意思抽掉了
-        let refused = DownloadError::Refused("还没有配置 CurseForge API Key".into());
-        assert_eq!(refused.net_code(), None);
-        assert_eq!(refused.ipc_msg(), "还没有配置 CurseForge API Key");
         // 没重试过的 Failed = 包内/本地读失败，不是网络的事
         let local = DownloadError::Failed {
             file_name: "x.jar".into(),

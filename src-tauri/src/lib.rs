@@ -81,6 +81,7 @@ pub fn run() {
             commands::check_update,
             commands::update_badge,
             commands::mark_update_seen,
+            commands::skip_update,
             commands::prepare_update,
             commands::cancel_update,
             commands::update_status,

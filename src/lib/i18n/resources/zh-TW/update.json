@@ -41,5 +41,6 @@
   "update.line-verifying": "正在校驗簽名…",
   "update.open-release": "開啟發布頁",
   "update.outcome-unfinished": "更新到 v{{version}} 沒有成功，本機仍是 v{{current}}",
-  "update.retry": "重試"
+  "update.retry": "重試",
+  "update.skip-version": "跳過這個版本"
 }

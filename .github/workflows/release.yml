@@ -1,0 +1,103 @@
+# 发版流水线：tag 推送 → 签名出包 → GitHub Release。
+#
+# 两条触发线：
+# - push tag `v*`：完整发版——构建 + 上传 release（prerelease 标记按版本号是否带预发布位自动判断）；
+# - workflow_dispatch：只构建不上传 release（产物进 workflow artifacts），用于第一次配好
+#   Secrets 之后、正式发版之前验证整条链路能走通。
+#
+# 签名：`createUpdaterArtifacts: true`（tauri.conf.json）让 CLI 在出 NSIS 包时顺手签出
+# `*-setup.exe.sig`；私钥从 GitHub Secrets 注入（TAURI_SIGNING_PRIVATE_KEY = 钥匙文件**内容本身**，
+# 官方明说给路径不工作）。钥匙怎么生成、Secrets 怎么配、换钥的约束，全部写在 docs/release.md。
+#
+# 版本号唯一真源是根 package.json（tauri.conf.json 的 "version": "../package.json" 读它），
+# 所以 tag 与它不一致时直接 fail——exe 里烧死的版本号来自 package.json，对不上的 tag
+# 发出去就是一个「永远查不到自己更新」的版本。
+
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      # 主应用与安装壳共用 src-tauri/target（build-installer.mjs 自己把 CARGO_TARGET_DIR 指过去）
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - name: 核对 tag 与 package.json 的版本一致
+        if: startsWith(github.ref, 'refs/tags/')
+        shell: bash
+        run: |
+          TAG="${GITHUB_REF_NAME#v}"
+          PKG=$(node -p "require('./package.json').version")
+          if [ "$TAG" != "$PKG" ]; then
+            echo "::error::tag 是 v$TAG，package.json 是 $PKG。版本号唯一真源是 package.json，请对齐后重新打 tag"
+            exit 1
+          fi
+
+      - name: 安装依赖
+        run: pnpm install --frozen-lockfile
+
+      - name: 出主应用安装包（NSIS + 更新器签名）
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: pnpm tauri build --bundles nsis
+
+      - name: 出安装壳（首装 UX 的那份 SideShift-Setup.exe）
+        run: node scripts/build-installer.mjs
+
+      - name: 出便携版
+        run: node scripts/build-portable.mjs
+
+      - name: 收集发版产物
+        shell: bash
+        run: |
+          mkdir -p dist
+          cp src-tauri/target/release/bundle/nsis/*-setup.exe dist/
+          cp src-tauri/target/release/bundle/nsis/*-setup.exe.sig dist/
+          cp src-tauri/target/release/SideShift-Setup.exe dist/
+          cp src-tauri/target/release/bundle/portable/*.zip dist/
+          ls -la dist/
+
+      # 试跑线：不建 release，产物留在 workflow artifacts 里人工验
+      - name: 上传构建产物（仅 workflow_dispatch）
+        if: github.event_name == 'workflow_dispatch'
+        uses: actions/upload-artifact@v4
+        with:
+          name: SideShift-build-${{ github.sha }}
+          path: dist/*
+          if-no-files-found: error
+
+      # 正式发版：create 已存在时（上一次跑挂在中途）退到 upload --clobber，重跑是幂等的
+      - name: 发布 GitHub Release（仅 tag 推送）
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          VERSION=$(node -p "require('./package.json').version")
+          EXTRA=""
+          case "$VERSION" in *-*) EXTRA="--prerelease";; esac
+          gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1 \
+            || gh release create "$GITHUB_REF_NAME" --title "$GITHUB_REF_NAME" --generate-notes $EXTRA
+          gh release upload "$GITHUB_REF_NAME" dist/* --clobber
