@@ -74,15 +74,17 @@ jobs:
       - name: 出便携版
         run: node scripts/build-portable.mjs
 
+      # 收集目录刻意不叫 dist/：beforeBuildCommand 的前端 vite 构建产物就在根 dist/（含 assets/ 子目录），
+      # 同名会把目录混进上传列表，gh 读目录直接报 Incorrect function
       - name: 收集发版产物
         shell: bash
         run: |
-          mkdir -p dist
-          cp src-tauri/target/release/bundle/nsis/*-setup.exe dist/
-          cp src-tauri/target/release/bundle/nsis/*-setup.exe.sig dist/
-          cp src-tauri/target/release/SideShift-Setup.exe dist/
-          cp src-tauri/target/release/bundle/portable/*.zip dist/
-          ls -la dist/
+          mkdir -p release-dist
+          cp src-tauri/target/release/bundle/nsis/*-setup.exe release-dist/
+          cp src-tauri/target/release/bundle/nsis/*-setup.exe.sig release-dist/
+          cp src-tauri/target/release/SideShift-Setup.exe release-dist/
+          cp src-tauri/target/release/bundle/portable/*.zip release-dist/
+          ls -la release-dist/
 
       # 试跑线：不建 release，产物留在 workflow artifacts 里人工验
       - name: 上传构建产物（仅 workflow_dispatch）
@@ -90,7 +92,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: SideShift-build-${{ github.sha }}
-          path: dist/*
+          path: release-dist/*
           if-no-files-found: error
 
       # 正式发版：create 已存在时（上一次跑挂在中途）退到 upload --clobber，重跑是幂等的
@@ -105,4 +107,4 @@ jobs:
           case "$VERSION" in *-*) EXTRA="--prerelease";; esac
           gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1 \
             || gh release create "$GITHUB_REF_NAME" --title "$GITHUB_REF_NAME" --generate-notes $EXTRA
-          gh release upload "$GITHUB_REF_NAME" dist/* --clobber
+          gh release upload "$GITHUB_REF_NAME" release-dist/* --clobber
