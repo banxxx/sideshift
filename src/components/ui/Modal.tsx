@@ -29,6 +29,8 @@ export function ModalShell({
     footerNote,
     footerActions,
     persistent,
+    plainFooter,
+    subTone,
 }: {
     open: boolean;
     onClose: () => void;
@@ -49,6 +51,10 @@ export function ModalShell({
     footerActions?: ReactNode;
     /** 防误触：点遮罩/按 Esc 不关闭，只能走按钮（目录勾选弹窗用） */
     persistent?: boolean;
+    /** 脚不带那条分隔线：整扇窗只剩「一行小字 + 两颗钮」时，那条线会把两行拆成三段 */
+    plainFooter?: boolean;
+    /** 副标行转红：失败那句话就长在这一行上，不另开提示盒 */
+    subTone?: "danger";
 }) {
     const t = useT();
     const sizeStyle = {
@@ -100,7 +106,12 @@ export function ModalShell({
                                 {titleTag && <span className="flex shrink-0 items-center">{titleTag}</span>}
                             </span>
                             {sub && (
-                                <span className="truncate text-[11px] leading-[16px] font-normal text-text-3">
+                                <span
+                                    className={cn(
+                                        "truncate text-[11px] leading-[16px] font-normal",
+                                        subTone === "danger" ? "text-redstone" : "text-text-3"
+                                    )}
+                                >
                                     {sub}
                                 </span>
                             )}
@@ -140,15 +151,15 @@ export function ModalShell({
                     {children}
 
                     {(footerNote || footerActions) && (
-                        <div className="flex w-full flex-col gap-3">
-                            <Divider hard />
+                        <>
+                            {!plainFooter && <Divider hard />}
                             <div className="flex w-full items-center justify-between gap-2.5">
                                 <span className="text-[11px] leading-[16px] font-normal text-text-3">
                                     {footerNote}
                                 </span>
                                 <div className="flex items-center gap-2">{footerActions}</div>
                             </div>
-                        </div>
+                        </>
                     )}
                 </DialogPrimitive.Popup>
             </DialogPrimitive.Portal>

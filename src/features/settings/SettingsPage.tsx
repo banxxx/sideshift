@@ -7,14 +7,21 @@ import { FlaskConical, Folder, Monitor, Moon, RefreshCw, Sun, Trash2 } from "luc
 import { useCallback, useEffect, useState, type ReactNode } from "react";
 import { motion } from "motion/react";
 import * as api from "@/lib/api";
-import { channelLabel, formatSize } from "@/lib/format";
+import { channelLabel, formatSize, ratioPercent } from "@/lib/format";
 import { notify, type NoticeKind } from "@/lib/notify";
 import { CARD_RISE, PAGE_RISE } from "@/lib/page-motion";
 import { usePackStore } from "@/lib/pack-store";
 import { switchTheme, useTheme, type Theme } from "@/lib/theme";
 import { LOCALE_OPTIONS, LOCALE_TO_WIRE, applyLocaleChoice, systemLocale, t, useT, type AppLocale, type Locale, type TranslateFn } from "@/lib/i18n";
 import { errOf } from "@/lib/errors";
-import type { AppSettings, CacheUsage, CleanReport, UpdateChannel, UpdateInfo } from "@/lib/types";
+import type {
+    AppSettings,
+    CacheUsage,
+    CleanReport,
+    UpdateChannel,
+    UpdateInfo,
+    UpdateStatus,
+} from "@/lib/types";
 import { cn } from "@/lib/utils";
 import { UpdateDialog } from "@/features/update/UpdateDialog";
 import {
@@ -43,7 +50,21 @@ function themeTabs(): Array<{ key: Theme; label: string; icon: typeof Sun }> {
     ];
 }
 
-type UpdateState = "idle" | "checking" | "latest" | "available";
+type UpdateState = "idle" | "checking" | "latest" | "available" | "downloading" | "verifying" | "ready";
+
+/** 取件那一轮的三个在飞/落定档位；不在档里（idle/failed/canceled）时由「查一次」的结论说话 */
+function roundOf(stage: UpdateStatus["stage"]): UpdateState | null {
+    return stage === "downloading" || stage === "verifying" || stage === "ready" ? stage : null;
+}
+
+/** 没有轮次时的那一档：字段一次给全，界面不用补默认值（与 Rust 的 `UpdateStatus::idle()` 同形） */
+const IDLE_STATUS: UpdateStatus = {
+    stage: "idle",
+    version: null,
+    downloaded: 0,
+    total: 0,
+    error: null,
+};
 
 /** 更新渠道两档：SegTabs 的 value 取解析后的档位，所以「跟随当前构建」在界面上不占第三态 */
 function channelTabs(): Array<{ key: UpdateChannel; label: string }> {
@@ -53,13 +74,16 @@ function channelTabs(): Array<{ key: UpdateChannel; label: string }> {
     ];
 }
 
-/** 检查更新按钮的四态文案（函数内建表，每格一条 `t(字面量)`） */
-function updateLabel(state: UpdateState): string {
+/** 检查更新按钮的文案：前四档是「查一次」的结论，后三档是「那一轮正在本地办」的进度（函数内建表，每格一条 `t(字面量)`） */
+function updateLabel(state: UpdateState, pct: number): string {
     return {
         idle: t("settings.check-updates-2", "检查更新"),
         checking: t("settings.checking", "检查中…"),
         latest: t("settings.date", "已是最新版本"),
         available: t("settings.update-found", "发现新版本"),
+        downloading: t("settings.update-downloading", "下载中 · {{pct}}%", { pct }),
+        verifying: t("settings.update-verifying", "校验中…"),
+        ready: t("settings.update-ready", "已验签 · 待安装"),
     }[state];
 }
 
@@ -183,10 +207,14 @@ export function SettingsPage() {
     const t = useT();
     const [theme] = useTheme();
     const [update, setUpdate] = useState<UpdateState>("idle");
+    /** 取件那一轮（下载 / 校验 / 就位 / 失败）的本地事实。它是进程级的：关窗、换页都不打断它，
+     *  所以这页只问一次「办到哪一步」再跟着事件走，不自己记进度 */
+    const [updateStatus, setUpdateStatus] = useState<UpdateStatus>(IDLE_STATUS);
     /** 切到 Beta 的二次确认：改动的是"以后会装上什么包"，点一下就换太轻率 */
     const [confirmBeta, setConfirmBeta] = useState(false);
-    /** 「发现新版本」弹窗吃的那一份后端结论；null = 没开。弹窗而不是横幅：版本差异要看的字段一件横幅装不下 */
+    /** 「发现新版本」弹窗吃的那一份后端结论。留着不随关窗清空：那一轮还在跑时，重开不该再敲一次网络 */
     const [updateInfo, setUpdateInfo] = useState<UpdateInfo | null>(null);
+    const [updateOpen, setUpdateOpen] = useState(false);
 
     useEffect(() => {
         void api
@@ -201,6 +229,36 @@ export function SettingsPage() {
                 setSources(next);
             })
             .catch((e) => notify(t("settings.failed-read", "读取下载源失败：{{reason}}", { reason: errOf(e) }), "error"));
+    }, []);
+
+    /** 取件状态两头都要接：先问一次「上一轮办到哪一步」（冷启动、或从别的页换回来时那次下载还在跑），
+     *  再订阅后续事件。只在挂载时做一次——它是进程级事实，不跟着换页重订阅 */
+    useEffect(() => {
+        let alive = true;
+        let unlisten: (() => void) | undefined;
+        void api
+            .updateStatus()
+            .then((s) => {
+                if (alive) setUpdateStatus(s);
+            })
+            .catch(() => {
+                // 这一句只是「对齐」，拿不到就当没有轮次：真跑起来时事件照样会把它填上
+            });
+        void api
+            .onUpdateProgress((s) => {
+                if (alive) setUpdateStatus(s);
+            })
+            .then((fn) => {
+                if (alive) unlisten = fn;
+                else fn();
+            })
+            .catch(() => {
+                // 订阅失败与查不到同义：界面退回「没有轮次」，不替它编一条错误出来
+            });
+        return () => {
+            alive = false;
+            unlisten?.();
+        };
     }, []);
 
     /** 占用数字读的是磁盘：只在「这个进程还没扫过」、换缓存目录、手动刷新、清理完这四件事
@@ -314,17 +372,19 @@ export function SettingsPage() {
     };
 
     /**
-     * 检查更新。结论（有没有更新、能不能一键装）全部由后端算完，这里只负责把它摊开：
-     * 有新版本走弹窗——版本号、订阅的渠道、release 正文、产物配齐没有是一套判断的全部依据，
-     * 侧栏那条一句话的横幅装不下；没有更新或查失败才回落到横幅。
+     * 检查更新。结论（有没有更新、能不能就地装）全部由后端算完，这里只负责把它摊开：
+     * 有新版本走弹窗——哪一版、多大、什么时候发的、能不能一键更新，这几件事侧栏那条一句话的横幅装不下；
+     * 没有更新或查失败才回落到横幅。
      */
     const checkUpdate = async () => {
         setUpdate("checking");
         try {
             const r = await api.checkUpdate();
             setUpdate(r.hasUpdate ? "available" : "latest");
-            if (r.hasUpdate) setUpdateInfo(r);
-            else notify(t("settings.already-date", "已是最新版本 v{{current}}", { current: r.current }), "success");
+            if (r.hasUpdate) {
+                setUpdateInfo(r);
+                setUpdateOpen(true);
+            } else notify(t("settings.already-date", "已是最新版本 v{{current}}", { current: r.current }), "success");
         } catch (e) {
             // 网络不通、仓库还没发过 release 都会走到这里：只报错，不许顶着一个假的"已是最新"
             notify(t("settings.update-check", "检查更新失败：{{reason}}", { reason: errOf(e) }), "error");
@@ -332,6 +392,31 @@ export function SettingsPage() {
             return;
         }
         window.setTimeout(() => setUpdate("idle"), 3000);
+    };
+
+    /**
+     * 开始取件（下载 + 验签）。**不等这句**：整轮都在这一个调用里，过程走 `update://progress`，
+     * 它的返回值只当最后一锤。所以这里只负责把 reject 的那几种「没跑起来」说出来
+     * （并发第二轮、这个构建没带公钥、tag 读不懂）——半途失败由弹窗那行红字说。
+     */
+    const startFetch = () => {
+        const tag = updateInfo?.tag;
+        if (!tag) return;
+        void api
+            .prepareUpdate(tag)
+            .then((s) => setUpdateStatus(s))
+            .catch((e) => notify(t("settings.update-start", "没能开始下载：{{reason}}", { reason: errOf(e) }), "error"));
+    };
+
+    /** 取消这一轮：正在下就只立旗（半截由那一轮自己收走），已经定稿就把暂存收走。关窗不等于取消 */
+    const cancelFetch = () => {
+        void api
+            .cancelUpdate()
+            .then((s) => {
+                setUpdateStatus(s);
+                notify(t("settings.update-canceled", "已取消这次下载"), "info");
+            })
+            .catch((e) => notify(t("settings.update-cancel-failed", "取消没能生效：{{reason}}", { reason: errOf(e) }), "error"));
     };
 
     /** 切渠道：往 Beta 走要过确认，往正式版走不需要拦（保守方向不出错） */
@@ -347,6 +432,9 @@ export function SettingsPage() {
             notify(t("settings.switched-beta", "已切到 Beta：之后检查更新收到的会是测试版"), "warn");
         }
     };
+
+    /** 这一行说什么由「那一轮」优先：它比一次网络结论更贴近用户此刻等的事 */
+    const round = roundOf(updateStatus.stage);
 
     // 只有这个进程还没读过设置时才占位（冷启动那一趟；换页回来首帧就有 `peekSettings()`）：
     // 直接 return null 会让整页闪一下白，所以给一组等高占位行
@@ -640,8 +728,20 @@ export function SettingsPage() {
                         descMono
                         desc={`v${api.APP_VERSION}`}
                     >
-                        <Btn size="sm" icon={RefreshCw} onClick={() => void checkUpdate()}>
-                            {updateLabel(update)}
+                        <Btn
+                            size="sm"
+                            icon={RefreshCw}
+                            onClick={() => {
+                                // 那一轮在跑或已就位时这颗钮是「回到它」：重查会把用户正看着的进度顶掉。
+                                // 换页回来那份结论丢了（updateInfo 为空）才落到重查——顺带把它补回来
+                                if (round && updateInfo) setUpdateOpen(true);
+                                else void checkUpdate();
+                            }}
+                        >
+                            {updateLabel(
+                                round ?? update,
+                                ratioPercent(updateStatus.downloaded, updateStatus.total)
+                            )}
                         </Btn>
                     </SettingRow>
                 </Section>
@@ -675,9 +775,15 @@ export function SettingsPage() {
                 </p>
             </ModalShell>
 
-            {/* 发现新版本：这一版只给「打开发布页」，应用内换文件那条链路还没接上，
-                所以不传 onInstall，那颗必然失败的按钮就不出现 */}
-            <UpdateDialog info={updateInfo} onClose={() => setUpdateInfo(null)} />
+            {/* 发现新版本：结论 + 取件那一轮的状态合到同一扇窗里演。关窗不取消——那一轮是进程级的，
+                重开时按 status 对号，所以这份结论也不随关窗清空。「重启并安装」要等换文件那条链路（P2） */}
+            <UpdateDialog
+                info={updateOpen ? updateInfo : null}
+                status={updateStatus}
+                onClose={() => setUpdateOpen(false)}
+                onStart={startFetch}
+                onCancel={cancelFetch}
+            />
         </motion.div>
     );
 }

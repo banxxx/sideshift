@@ -1,37 +1,22 @@
 /**
- * 「发现新版本」弹窗：把后端算完的结论原样摊开——订阅的渠道、发布时间、release 正文、产物清单，
- * 以及走不通一键更新时的那句原因。缺件**不报错**，只退回「打开发布页」：
- * 一个点了必然失败的按钮比没有按钮更糟。
- * 安装那颗钮要等换文件那条链路真的接上（父级传 `onInstall`）才出现。
+ * 「发现新版本」弹窗：整扇窗只有一个会变的零件——右下角那颗钮。
+ * 进度、校验、就位、失败都活在这颗钮的文字与填充里，加上标题下面那一行小字；不再另开进度条、提示盒与产物清单。
+ * 缺件不报错：那颗钮换成「打开发布页」——一个点了必然失败的按钮比没有按钮更糟。
  */
-import { ExternalLink, FileArchive, FileKey2, Package, Rocket, ShieldAlert } from "lucide-react";
-import { Btn, ListRow, MetaCell, ModalShell, NoteRow, SectionTitle, TagChip } from "@/components/ui";
-import { channelLabel, formatSize, formatStamp } from "@/lib/format";
+import { ExternalLink, Rocket } from "lucide-react";
+import type { ReactNode } from "react";
+import { Btn, ModalShell } from "@/components/ui";
+import { formatDate, formatSize, ratioPercent } from "@/lib/format";
+import { errOf } from "@/lib/errors";
 import { t, useT } from "@/lib/i18n";
 import { openExternal } from "@/lib/api";
-import type { UpdateAssetKind, UpdateBlocked, UpdateInfo } from "@/lib/types";
-import { cn } from "@/lib/utils";
+import type { UpdateBlocked, UpdateInfo, UpdateStatus } from "@/lib/types";
 
-/** 产物种类 → 图标：认不出的一律通用压缩包，不猜 */
-function assetIcon(kind: UpdateAssetKind) {
-    switch (kind) {
-        case "package":
-            return Package;
-        case "signature":
-            return FileKey2;
-        default:
-            return FileArchive;
-    }
-}
-
-/** 产物种类 → 标签文案（表建在函数里，与 evidenceLabel 同一条 i18n 规矩） */
-function assetKindLabel(kind: UpdateAssetKind): string {
-    return {
-        package: t("update.kind-package", "安装包"),
-        signature: t("update.kind-signature", "签名"),
-        portable: t("update.kind-portable", "便携包"),
-        other: t("update.kind-other", "其它"),
-    }[kind];
+/** 这一轮办的是不是弹窗里这一版：后端两处落点（占位那一次写 tag 原文，定稿那一次写版本号），所以两边都去 `v` 再比 */
+function isThisRound(status: UpdateStatus, tag: string | null): boolean {
+    if (!status.version || !tag) return false;
+    const strip = (s: string) => s.replace(/^v/, "");
+    return strip(status.version) === strip(tag);
 }
 
 /**
@@ -50,142 +35,177 @@ function blockedLabel(b: UpdateBlocked): string {
     }[b];
 }
 
+/** GitHub 的时间串 → 「2026-10-02」；认不出格式就原样显示，不替它编一个日期 */
+function stampOf(iso: string | null): string {
+    if (!iso) return "";
+    const d = new Date(iso);
+    return Number.isNaN(d.getTime()) ? iso : formatDate(d);
+}
+
+/**
+ * 钮内进度：一层从左边推进来的淡底，底下压一条 2px 实心线收边。
+ * 它是量规不是按钮（点它没有下一个动作），所以 `disabled` 但不压灰——压灰读起来是「这条链路坏了」，
+ * 而它说的是「正在跑」。`disabled:opacity-100` 顶掉 Btn 那条 60%（同类目，tailwind-merge 取后者）。
+ */
+function ProgressBtn({ pct, children }: { pct: number; children: ReactNode }) {
+    return (
+        <Btn
+            size="sm"
+            variant="primary"
+            disabled
+            className="relative overflow-hidden bg-accent-dim text-accent hover:opacity-100 disabled:opacity-100"
+        >
+            <span
+                className="absolute inset-y-0 left-0 z-[1] bg-current opacity-[0.17]"
+                style={{ width: `${pct}%` }}
+            />
+            <span className="absolute bottom-0 left-0 z-[1] h-[2px] bg-current" style={{ width: `${pct}%` }} />
+            <span className="relative z-[2]">{children}</span>
+        </Btn>
+    );
+}
+
 export function UpdateDialog({
     info,
+    status,
     onClose,
+    onStart,
+    onCancel,
     onInstall,
 }: {
     /** null 时不渲染：父级只在「确实有新版本」时才打开这扇窗 */
     info: UpdateInfo | null;
+    /** 取件那一段的生命周期；办的不是这一版时按「没有轮次」演 */
+    status: UpdateStatus;
     onClose: () => void;
-    /** 应用内更新的入口；没接上这条链路的阶段一律不传，按钮就不出现 */
+    /** 开始取件（下载 + 验签）；没传就不亮那颗「立即更新」 */
+    onStart?: () => void;
+    onCancel?: () => void;
+    /** 应用内换文件的那条链路（P2）：没接上时「重启并安装」画定形但禁用 */
     onInstall?: () => void;
 }) {
     const t = useT();
     if (!info) return null;
 
-    const canInstall = info.downloadable && onInstall !== undefined;
+    const round = isThisRound(status, info.tag);
+    const verifying = round && status.stage === "verifying";
+    const fetching = round && (status.stage === "downloading" || verifying);
+    // 「取消之后」不是一屏：立旗那一档，与那一轮收尾报回来的 canceled，都回第一屏
+    const canceled =
+        status.stage === "canceled" ||
+        (status.stage === "failed" && (status.error ?? "").endsWith("update-canceled"));
+    const ready = round && status.stage === "ready";
+    const failed = round && status.stage === "failed" && !canceled;
+    // 缺件那句只在「这一版还没开始办」时说：轮次一旦跑起来，它自己的成败更贴近用户此刻做的事
+    const blocked = info.blocked !== null && !round;
+
+    // 安装包 + 同名签名：这一对正是后端要落地的两个字节数
+    const stagedBytes = info.assets
+        .filter((a) => a.kind === "package" || a.kind === "signature")
+        .reduce((n, a) => n + a.size, 0);
+    const totalBytes = fetching || ready ? Math.max(status.total, stagedBytes) : stagedBytes;
+    const pct = ratioPercent(status.downloaded, status.total);
+
+    const sub = (() => {
+        if (fetching)
+            return verifying
+                ? t("update.line-verifying", "正在校验签名…")
+                : t("update.line-downloading", "正在下载 · {{got}} / {{total}}", {
+                      got: formatSize(status.downloaded),
+                      total: formatSize(status.total),
+                  });
+        if (ready)
+            return t("update.line-ready", "已验签 · {{size}} · 当前 v{{current}}", {
+                size: formatSize(totalBytes),
+                current: info.current,
+            });
+        if (failed)
+            // 种类码渲染好的那一句就长在这一行上，只补一句「没动过本机」
+            return t("update.line-failed", "{{reason}}，本机版本没变", { reason: errOf(status.error ?? "") });
+        if (blocked && info.blocked) return blockedLabel(info.blocked);
+        return t("update.line-idle", "{{size}} · {{date}} · 当前 v{{current}}", {
+            size: formatSize(totalBytes),
+            date: stampOf(info.publishedAt),
+            current: info.current,
+        });
+    })();
+
+    const openRelease = () => void openExternal(info.releaseUrl!);
+    const canStart = info.downloadable && info.tag !== null && onStart !== undefined;
+
+    // 两颗钮永远各在其位：换的是文字与配色，不是位置
+    const left = fetching ? (
+        <Btn size="sm" variant="ghost" onClick={onCancel}>
+            {t("common.cancel", "取消")}
+        </Btn>
+    ) : ready ? (
+        <Btn size="sm" variant="ghost" onClick={onClose}>
+            {t("update.later-again", "稍后")}
+        </Btn>
+    ) : failed ? (
+        info.releaseUrl && (
+            <Btn size="sm" variant="ghost" icon={ExternalLink} onClick={openRelease}>
+                {t("update.open-release", "打开发布页")}
+            </Btn>
+        )
+    ) : (
+        <Btn size="sm" variant="ghost" onClick={onClose}>
+            {t("update.later", "以后再说")}
+        </Btn>
+    );
+
+    const right = fetching ? (
+        <ProgressBtn pct={verifying ? 100 : pct}>
+            {verifying
+                ? t("update.btn-verifying", "校验中…")
+                : t("update.btn-downloading", "下载中 · {{pct}}%", { pct })}
+        </ProgressBtn>
+    ) : ready ? (
+        <Btn size="sm" variant="primary" disabled={onInstall === undefined} onClick={onInstall}>
+            {t("update.restart-install", "重启并安装")}
+        </Btn>
+    ) : failed ? (
+        <Btn size="sm" variant="primary" icon={Rocket} onClick={onStart}>
+            {t("update.retry", "重试")}
+        </Btn>
+    ) : canStart ? (
+        <Btn size="sm" variant="primary" icon={Rocket} onClick={onStart}>
+            {t("update.install-now", "立即更新")}
+        </Btn>
+    ) : info.releaseUrl ? (
+        <Btn size="sm" variant="primary" icon={ExternalLink} onClick={openRelease}>
+            {t("update.open-release", "打开发布页")}
+        </Btn>
+    ) : (
+        <Btn size="sm" variant="primary" onClick={onClose}>
+            {t("common.close", "关闭")}
+        </Btn>
+    );
 
     return (
         <ModalShell
             open
             onClose={onClose}
             persistent
-            width={560}
-            height={440}
+            plainFooter
+            width={460}
             icon={Rocket}
-            title={`v${info.latest ?? info.current}`}
-            titleTag={
-                <TagChip tone={info.channel === "beta" ? "gold" : "muted"}>
-                    {channelLabel(info.channel)}
-                </TagChip>
-            }
-            sub={t("update.sub-current", "当前 v{{current}}", { current: info.current })}
-            footerNote={
-                info.blocked
-                    ? blockedLabel(info.blocked)
-                    : canInstall
-                      ? t("update.footer-ready", "更新会先校验签名，再替换并重启")
-                      : t("update.footer-release", "打开发布页即可下载这一版")
-            }
+            title={t("update.title-new", "更新到 v{{version}}", { version: info.latest ?? info.current })}
+            sub={sub}
+            subTone={failed ? "danger" : undefined}
             footerActions={
                 <>
-                    <Btn size="sm" variant="ghost" onClick={onClose}>
-                        {t("common.close", "关闭")}
-                    </Btn>
-                    {info.releaseUrl && (
-                        <Btn
-                            size="sm"
-                            icon={ExternalLink}
-                            onClick={() => void openExternal(info.releaseUrl!)}
-                        >
-                            {t("update.open-release", "打开发布页")}
-                        </Btn>
-                    )}
-                    {canInstall && (
-                        <Btn size="sm" variant="primary" icon={Rocket} onClick={onInstall}>
-                            {t("update.install-now", "立即更新")}
-                        </Btn>
-                    )}
+                    {left}
+                    {right}
                 </>
             }
         >
-            <div className="flex min-h-0 flex-1 flex-col gap-3">
-                <div className="flex gap-2">
-                    <MetaCell label={t("update.meta-current", "当前版本")} value={`v${info.current}`} />
-                    <MetaCell label={t("update.meta-latest", "最新版本")} value={info.latest ? `v${info.latest}` : "—"} />
-                    <MetaCell label={t("update.meta-published", "发布时间")} value={stampOf(info.publishedAt)} />
-                </div>
-
-                <div className="list-scroll flex min-h-0 flex-1 flex-col gap-3 overflow-auto">
-                    <div className="flex flex-col gap-1.5">
-                        <SectionTitle>{t("update.notes", "更新说明")}</SectionTitle>
-                        {info.notes ? (
-                            <p className="select-text whitespace-pre-wrap text-[12px] leading-[18px] font-normal text-text-2">
-                                {info.notes}
-                            </p>
-                        ) : (
-                            <span className="text-[12px] leading-[18px] font-normal text-text-3">
-                                {t("update.no-notes", "这条发布没有写说明")}
-                            </span>
-                        )}
-                    </div>
-
-                    <div className="flex flex-col gap-1.5">
-                        <SectionTitle>{t("update.assets", "更新产物")}</SectionTitle>
-                        {info.assets.length === 0 ? (
-                            <span className="text-[12px] leading-[18px] font-normal text-text-3">
-                                {t("update.no-assets", "这条发布没有列出产物")}
-                            </span>
-                        ) : (
-                            <div className="flex flex-col gap-1">
-                                {info.assets.map((a) => {
-                                    const Icon = assetIcon(a.kind);
-                                    return (
-                                        // 不挂 Tip：气泡在 .list-scroll 这个 overflow-auto 盒里，贴底那行会被裁掉
-                                        <ListRow key={a.name} className="bg-surface-2">
-                                            <Icon
-                                                className={cn(
-                                                    "size-3.5 shrink-0",
-                                                    a.trusted ? "text-text-2" : "text-text-3"
-                                                )}
-                                            />
-                                            <span
-                                                className={cn(
-                                                    "min-w-0 flex-1 truncate font-mono text-[11px] leading-[16px]",
-                                                    a.trusted ? "text-text-1" : "text-text-3"
-                                                )}
-                                            >
-                                                {a.name}
-                                            </span>
-                                            <TagChip tone={a.trusted ? undefined : "muted"} square>
-                                                {assetKindLabel(a.kind)}
-                                            </TagChip>
-                                            <span className="shrink-0 font-mono text-[11px] leading-[16px] font-medium text-text-3">
-                                                {formatSize(a.size)}
-                                            </span>
-                                        </ListRow>
-                                    );
-                                })}
-                            </div>
-                        )}
-                    </div>
-
-                    {/* 宿主不可信是安全判定，不是「缺个文件」：在清单下面再落一句，别只靠压灰 */}
-                    {info.blocked === "untrusted-host" && (
-                        <NoteRow icon={ShieldAlert} tone="gold">
-                            {blockedLabel("untrusted-host")}
-                        </NoteRow>
-                    )}
-                </div>
-            </div>
+            {/* 说明在四档里都挂着：只有那一行小字和那颗钮在换，窗高不跟着跳 */}
+            {info.notes && (
+                <p className="select-text line-clamp-4 pb-2 text-[12px] leading-[18px] font-normal whitespace-pre-wrap text-text-2">
+                    {info.notes}
+                </p>
+            )}
         </ModalShell>
     );
-}
-
-/** GitHub 的时间串 → 本地完整时刻；认不出格式就原样显示，不替它编一个日期 */
-function stampOf(iso: string | null): string {
-    if (!iso) return "—";
-    const d = new Date(iso);
-    return Number.isNaN(d.getTime()) ? iso : formatStamp(d);
 }

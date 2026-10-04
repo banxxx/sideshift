@@ -34,6 +34,13 @@ export function formatStamp(d: Date | number): string {
     return `${t.getFullYear()}-${p(t.getMonth() + 1)}-${p(t.getDate())} ${p(t.getHours())}:${p(t.getMinutes())}`;
 }
 
+/** 只到日「2026-10-02」：更新弹窗那一行小字还要同时装体积与当前版本，时分是挤进来多余的 */
+export function formatDate(d: Date | number): string {
+    const t = new Date(d);
+    const p = (n: number) => String(n).padStart(2, "0");
+    return `${t.getFullYear()}-${p(t.getMonth() + 1)}-${p(t.getDate())}`;
+}
+
 /** 耗时：短于 1 分钟显示 "42 秒"，否则 "2分 14秒"（报告页口径） */
 export function formatDuration(ms: number): string {
     const s = Math.max(0, Math.round(ms / 1000));
@@ -55,6 +62,11 @@ export function formatElapsed(ms: number): string {
 /** 0-100 → 0-1 CSS 宽度分数 */
 export function toFraction(progress: number): number {
     return Math.min(1, Math.max(0, progress / 100));
+}
+
+/** 已收 / 总量 → 整数百分比。总量为 0（服务端没给长度）时不猜、回 0：界面宁可只说「正在下载」也不编一个数 */
+export function ratioPercent(part: number, whole: number): number {
+    return whole > 0 ? Math.min(100, Math.round((part / whole) * 100)) : 0;
 }
 
 /** 实时条速率：沿用 formatSize 的单位口径加 /s（1.9 MB/s） */
