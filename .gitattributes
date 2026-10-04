@@ -1,0 +1,7 @@
+# 行尾策略：本仓库目前未做全局规范化，仅对字节敏感的文件做显式保护。
+#
+# 签名测试夹具必须逐字节稳定：CI 的 Windows runner 默认 autocrlf=true，
+# 检出时会把文本夹具的 LF 转成 CRLF —— include_bytes! 嵌进测试二进制的字节一变，
+# minisign 验签测试全挂（本地绿、CI 红，正是这种症状）。
+# binary（= -text -diff -merge）让任何平台检出都不做行尾转换。
+src-tauri/tests/fixtures/** binary
