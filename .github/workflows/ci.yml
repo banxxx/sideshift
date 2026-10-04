@@ -9,7 +9,17 @@ name: CI
 on:
   push:
     branches: [master]
+    # 纯文档/纯 workflow 的提交不跑应用 CI（文档由 Pages 线管，workflow 语法由 GitHub 自行校验）
+    paths-ignore:
+        - "docs/**"
+        - "**.md"
+        - ".github/**"
   pull_request:
+
+# 同分支连推时取消还在跑的旧一轮：CI 的结论只对最新提交有意义
+concurrency:
+    group: ci-${{ github.ref }}
+    cancel-in-progress: true
 
 jobs:
   check:

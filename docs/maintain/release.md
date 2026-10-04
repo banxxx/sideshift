@@ -47,6 +47,18 @@ pnpm tauri signer generate -w .keys/sideshift.key
 
 4. workflow 自动：构建 NSIS + 签名 → 出安装壳与便携包 → 建 Release（预发布位自动判断）→ 上传四个产物。
 
+## 版本线：正式版与测试版
+
+两条线互相独立，tag 的预发布位决定一切：
+
+| 你打的 tag | GitHub 上的标记 | 谁会收到 |
+| --- | --- | --- |
+| `v1.0.0-beta.N` | 自动标 Prerelease | 只有「Beta 线」用户 |
+| `v1.1.0` | 正式 Release | 只有「正式线」用户 |
+
+Beta 线用户**收不到正式版推送**：装着 `beta.4` 的用户在 `1.1.0` 发布后不会收到提示——
+他的渠道里只有 beta 系。发正式版时记得另行公告，或在设置里引导切换渠道。
+
 ## Release 上的四个产物
 
 | 文件 | 谁用它 |

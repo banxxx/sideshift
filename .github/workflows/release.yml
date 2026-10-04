@@ -23,6 +23,11 @@ on:
 permissions:
   contents: write
 
+# 同一个 tag 的发版构建不并行：两轮同时写 release 会互相踩资产。
+# cancel-in-progress 刻意不设——发版跑到一半被杀比排队等待更糟
+concurrency:
+  group: release-${{ github.ref }}
+
 jobs:
   build:
     runs-on: windows-latest
