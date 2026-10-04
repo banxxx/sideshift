@@ -31,6 +31,7 @@
   "update.fail-tag": "That version tag isn't in a valid format, so the download didn't start",
   "update.fail-tasks-busy": "A pack is still converting — wait for it to finish before installing",
   "update.fail-version": "This release's version number can't be read — grab it from the release page",
+  "update.install-and-close": "Install · the window will close",
   "update.install-now": "Update now",
   "update.later": "Not now",
   "update.later-again": "Later",
@@ -42,7 +43,6 @@
   "update.open-release": "Open release page",
   "update.outcome-done": "Updated to v{{version}}",
   "update.outcome-unfinished": "The update to v{{version}} didn't finish — this machine is still on v{{current}}",
-  "update.restart-install": "Restart & install",
   "update.retry": "Retry",
   "update.title-new": "Update to v{{version}}"
 }

@@ -8,6 +8,7 @@
 //! 那条链同构的候选链（`core::downloader::source`）。且当前版本的插件没有公开的
 //! `UpdateBuilder`，拿不到「只借它的装包引擎、检测仍用自己的」这条折中路。
 
+pub mod check;
 pub mod fetch;
 pub mod install;
 pub mod release;

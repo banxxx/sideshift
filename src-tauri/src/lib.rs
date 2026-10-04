@@ -33,6 +33,9 @@ pub fn run() {
             let state = task_engine::AppState::new(app.handle());
             app.manage(std::sync::Arc::new(state));
             build_main_window(app)?;
+            // 一天一趟的应用更新检查（闸门、失败不吭声都在 `commands::update::startup_check`）。
+            // spawn 而不是等同样的话：这一趟最坏要跑几秒，而它凭什么是别人的启动耗时
+            tauri::async_runtime::spawn(commands::startup_check(app.handle().clone()));
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -76,6 +79,8 @@ pub fn run() {
             commands::clean_cache,
             commands::list_download_sources,
             commands::check_update,
+            commands::update_badge,
+            commands::mark_update_seen,
             commands::prepare_update,
             commands::cancel_update,
             commands::update_status,

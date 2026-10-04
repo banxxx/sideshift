@@ -31,7 +31,9 @@ fn last_parsed(state: &S<'_>) -> Option<Arc<ParsedPack>> {
     last_parsed_of(&inner)
 }
 
-fn downloader_of(state: &S<'_>) -> Downloader {
+/// 收 `&Arc<AppState>` 而不是 `&S<'_>`：启动那一趟自动检查手里没有 `State` 句柄（它跨 `await`），
+/// 只有一个克隆出来的 `Arc`。两处敲的是同一份下载器配置，不许各拼一遍
+fn downloader_of(state: &Arc<AppState>) -> Downloader {
     let s = lock(&state).settings.clone();
     Downloader::new(PathBuf::from(&s.cache_dir), s.concurrency as usize)
         .with_source(s.download_source.normalized())
@@ -105,3 +107,6 @@ pub use system::*;
 pub use task::*;
 pub use templates::*;
 pub use update::*;
+
+/// 启动后那一趟自动检查：它不是命令（前端不调它），由 `lib.rs` 的 setup 自己 spawn
+pub(crate) use update::startup_check;

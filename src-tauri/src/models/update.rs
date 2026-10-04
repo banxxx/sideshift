@@ -1,11 +1,11 @@
 //! 应用更新的跨进程载荷（Rust: `check_update`）。与 `src/lib/types/update.ts` 逐字段对齐。
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use super::UpdateChannel;
 
 /// release 资产的种类。前端用它分图标与判「产物配齐没」，**不拿它做任何安装决策**。
-#[derive(Serialize, Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub enum UpdateAssetKind {
     /// `createUpdaterArtifacts` 出的签名安装包（`*-setup.exe`，本机真构建实测的产物名）——签名覆盖的是它
@@ -18,7 +18,7 @@ pub enum UpdateAssetKind {
     Other,
 }
 
-#[derive(Serialize, Clone, Debug)]
+#[derive(Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct UpdateAsset {
     pub name: String,
@@ -32,7 +32,7 @@ pub struct UpdateAsset {
 /// 不能走「应用内一键更新」的原因（种类码，给人看的那句话在前端 `errors.ts` 同族的表里）。
 /// 这条降级态是刻意的：**缺件不许报错，只许退回「打开下载页」**——否则「签名密钥还没生成」
 /// 这种过渡期会让用户点一个必失败的按钮。
-#[derive(Serialize, Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case")]
 pub enum UpdateBlocked {
     /// 本机是便携形态（exe 旁边就是 `portable.flag`），一期不给一键更新
@@ -51,7 +51,7 @@ pub enum UpdateBlocked {
 
 /// 检查更新的结果。结论（有没有更新、能不能一键装）全部在 Rust 侧算完，
 /// 前端只渲染——包括渠道：那一档的判据只许有一个实现点。
-#[derive(Serialize, Clone, Debug)]
+#[derive(Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct UpdateInfo {
     /// 本地版本（取自 tauri 的 package_info，与前端注入的 __APP_VERSION__ 同一个源）

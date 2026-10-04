@@ -18,8 +18,10 @@ import { TemplatesPage } from "@/features/templates/TemplatesPage";
 import { TemplateEditPage } from "@/features/templates/TemplateEditPage";
 import { TrashBin } from "@/features/tasks/TrashBin";
 import { ResizeEdges } from "@/components/shared/ResizeEdges";
+import { UpdateLayer } from "@/features/update/UpdateLayer";
 import { useWindowControls } from "@/lib/window-controls";
 import { PackStoreProvider } from "@/lib/pack-store";
+import { initUpdate } from "@/lib/update-store";
 import { setScrollNode } from "@/lib/page-scroll";
 import { LocaleGate } from "@/lib/i18n";
 import {
@@ -45,6 +47,9 @@ const pages: Record<PageKey, ComponentType> = {
 function Shell() {
     const { entry } = useNavigation();
     const Page = pages[entry.key];
+    // 更新那两条事件与那本账在挂树时接一次（取件是进程级事实，订阅不该跟着换页重挂；
+    // 返回值是给 StrictMode 那第二遍的退订）。这一句不订阅 store，所以进度每跳不会重画整棵树
+    useEffect(() => initUpdate(), []);
     // 最大化时把留白收成 0（见 App.css 的「最大化」段）：卡片铺满整窗、投影与把手一起退场。
     // 这个开关写在 <html> 而不是外壳 div 上：`--win-inset` 得让**body 层的 portal**（弹窗遮罩）
     // 也读得到——遮罩收在卡片边沿上靠的就是这一个数，留在外壳 div 上时它只覆盖到那一棵子树。
@@ -112,6 +117,9 @@ function Shell() {
                     {entry.key === "tasks" && <TrashBin />}
                 </div>
             </div>
+            {/* 发现新版本那扇窗（数据源是进程级 store，见 lib/update-store）：
+                仍排在缩放把手**之前**——同 z 档时后来者压过遮罩，把手得永远够得着 */}
+            <UpdateLayer />
             {/* 缩放把手铺在四周留白里，必须排在卡片之后（同 z 档时后来者压过模态遮罩）。
                 口径见组件文件头：透明留白把系统那条原生缩放环推到了窗口外沿，这里补回边框。 */}
             <ResizeEdges />

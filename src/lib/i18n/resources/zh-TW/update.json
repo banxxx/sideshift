@@ -31,6 +31,7 @@
   "update.fail-tag": "這一版的編號對不上格式，沒能開始下載",
   "update.fail-tasks-busy": "還有整合包在轉換，等它跑完再裝",
   "update.fail-version": "這條發佈的版本號讀不懂，請在發佈頁手動下載",
+  "update.install-and-close": "立即安裝 · 視窗會關閉",
   "update.later": "以後再說",
   "update.later-again": "稍後",
   "update.line-downloading": "正在下載 · {{got}} / {{total}}",
@@ -40,6 +41,5 @@
   "update.line-verifying": "正在校驗簽名…",
   "update.open-release": "開啟發布頁",
   "update.outcome-unfinished": "更新到 v{{version}} 沒有成功，本機仍是 v{{current}}",
-  "update.restart-install": "重啟並安裝",
   "update.retry": "重試"
 }

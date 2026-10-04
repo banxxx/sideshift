@@ -85,7 +85,7 @@ export interface UpdateStatus {
 }
 
 /**
- * 上一次「重启并安装」的结论（Rust: `update_outcome`）。
+ * 上一次「立即安装」的结论（Rust: `update_outcome`）。
  * 只有本机确实试过装一次才有值，之后后端就把那本账收走 ⇒ 冷启动问第二次拿到 null，不会重复提示。
  *
  * 为什么没有「安装器返回的退出码」这种更直接的说法：Windows 上安装器会先把正在运行的我们杀掉，

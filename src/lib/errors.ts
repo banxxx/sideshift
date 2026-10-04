@@ -128,7 +128,7 @@ function updateText(kind: string): string {
             return t("update.fail-sig-format", "签名文件读不懂，没能校验");
         case "sig-mismatch":
             return t("update.fail-sig-mismatch", "签名与安装包对不上，没能校验");
-        // ---- 装那一段（点「重启并安装」之后、进程退出之前）----
+        // ---- 装那一段（点「立即安装」之后、进程退出之前）----
         case "dev-build":
             return t("update.fail-dev-build", "开发构建不执行安装，请用打包后的程序测这条链");
         case "portable":

@@ -1,4 +1,7 @@
-/** 应用版本、更新检查，以及取件（下载 / 验签 / 取消）与装（安装 / 回读上次结论）那六颗 IPC */
+/**
+ * 应用更新那八颗 IPC（查 / 角标 / 记看过 / 取件 / 取消 / 问进度 / 装 / 回读上次结论）+ 两条事件。
+ * 谁调它们见 `@/lib/update-store`：判据全在 Rust，这层只做「命令名 ↔ 前端」的映射。
+ */
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { EVENTS, type UpdateChannel, type UpdateInfo, type UpdateOutcome, type UpdateStatus } from "@/lib/types";
 import * as mock from "@/lib/mock";
@@ -42,6 +45,34 @@ export async function checkUpdate(): Promise<UpdateInfo> {
 }
 
 /**
+ * 冷启动那颗角标的初始值（Rust: update_badge -> 该亮时给那一版的结论，否则 null）。
+ * 纯读后端那本 24 小时的账、不敲网络：角标要在界面画出来的那一刻就有答案，
+ * 等一次网络等于先闪一个空位、亮了再说不出为什么
+ */
+export function updateBadge(): Promise<UpdateInfo | null> {
+    if (!isTauri) return Promise.resolve(mock.mockUpdateBadge());
+    return invokeOrMock<UpdateInfo | null>("update_badge", undefined, () => mock.mockUpdateBadge());
+}
+
+/**
+ * 记一次「弹窗被打开过」（Rust: mark_update_seen）⇒ 角标灭，直到下一趟敲出新版本。
+ * 后端那条同步且总是成功，所以这里不 await 也不回 promise：账本坏了最贵的结果只是角标多亮一次
+ */
+export function markUpdateSeen(): void {
+    if (!isTauri) {
+        mock.mockMarkUpdateSeen();
+        return;
+    }
+    void invokeOrMock<void>("mark_update_seen", undefined, () => undefined);
+}
+
+/** 订阅启动后那一趟自动检查的结论（Rust 侧 `update://available`）。浏览器里没有那一趟 ⇒ 订阅是个空动作 */
+export function onUpdateAvailable(cb: (info: UpdateInfo) => void): Promise<UnlistenFn> {
+    if (!isTauri) return Promise.resolve(() => {});
+    return listen<UpdateInfo>(EVENTS.updateAvailable, (ev) => cb(ev.payload));
+}
+
+/**
  * 把某一版取到本地并验签（Rust: prepare_update -> UpdateStatus）。
  * 交出去的是 `checkUpdate()` 回的那枚 tag 原文，不是版本号：省掉「前面有没有 v」这一猜。
  * 这一调用会挂到整轮跑完才回（下载与验签都在里面），所以界面**不等它**：
@@ -78,7 +109,7 @@ export async function installUpdate(): Promise<void> {
 }
 
 /**
- * 上一次「重启并安装」的结论（Rust: update_outcome）。
+ * 上一次「立即安装」的结论（Rust: update_outcome）。
  * 后端读一次就把账本收走 ⇒ 这一颗在本进程里**只问一次**，结果留着给所有问它的人：
  * 不缓存的话，挂载两次（StrictMode）就会有一次把账读走、另一次拿到 null，
  * 而那本账正是用户想知道的唯一一件事。

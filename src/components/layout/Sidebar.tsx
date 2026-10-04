@@ -13,6 +13,7 @@ import { PILL_SLIDE } from "@/lib/springs";
 import { cn } from "@/lib/utils";
 import { isDark, switchTheme, useTheme } from "@/lib/theme";
 import { PRERELEASE_BADGE, VERSION_CORE } from "@/lib/api";
+import { openUpdate, useUpdateBadge } from "@/lib/update-store";
 import {
     SECONDARY_OWNER,
     useNavigation,
@@ -31,6 +32,8 @@ const navItems: { key: PrimaryPage; icon: typeof Home }[] = [
 export function Sidebar() {
     const { entry, switchPrimary } = useNavigation();
     const [theme] = useTheme();
+    // 后台那一趟查出「可装的新版、而你还没点开看过」才亮；点开那扇窗即灭（见 lib/update-store）
+    const updateBadge = useUpdateBadge();
     const t = useT();
     // 表建在组件里、每格一条 `t(字面量)`：模块顶层建表会把词冻在首次加载的语言上
     const navLabel: Record<PrimaryPage, string> = {
@@ -90,7 +93,12 @@ export function Sidebar() {
                     return (
                         <button
                             key={item.key}
-                            onClick={() => switchPrimary(item.key)}
+                            onClick={() => {
+                                switchPrimary(item.key);
+                                // 那颗点是这行自己亮起来的：点进设置就顺手看到那一版，
+                                // 而不是让人进了页再去找一颗钮（关掉窗仍落在设置页，没被带走）
+                                if (updateBadge && item.key === "settings") openUpdate();
+                            }}
                             className={cn(
                                 "relative w-full h-9 rounded-lg px-3 text-[13px] font-medium",
                                 HOVER_FILL,
@@ -110,6 +118,25 @@ export function Sidebar() {
                                 <Icon className="size-4" />
                                 <span>{navLabel[item.key]}</span>
                             </span>
+                            {/* 更新角标：一颗点、不带数字——它说的是「这儿有事」而不是「有几件事」
+                                （一期只有应用更新这一个来源）。外层只管定位，缩放交给里面这一枚：
+                                motion 写 transform 会把 `-translate-y-1/2` 整条顶掉，点会跳位置。 */}
+                            {item.key === "settings" && (
+                                <span className="pointer-events-none absolute right-3 top-0 z-[1] flex h-full items-center">
+                                    <AnimatePresence initial={false}>
+                                        {updateBadge && (
+                                            <motion.span
+                                                key="update-dot"
+                                                initial={{ opacity: 0, scale: 0.5 }}
+                                                animate={{ opacity: 1, scale: 1 }}
+                                                exit={{ opacity: 0, scale: 0.5 }}
+                                                transition={{ duration: 0.16, ease: [0.16, 1, 0.3, 1] }}
+                                                className="size-1.5 rounded-full bg-accent"
+                                            />
+                                        )}
+                                    </AnimatePresence>
+                                </span>
+                            )}
                         </button>
                     );
                 })}

@@ -70,6 +70,21 @@ export function mockCheckUpdate(current: string, channel: UpdateChannel | null):
     };
 }
 
+/**
+ * 假角标（对应真实侧的 `update_badge`）：浏览器里那一趟自动检查根本不发（dev 构建被 Rust 挡掉），
+ * 所以这一态由本地记一笔「看过没有」——刷新页面等于新的一趟启动，角标重新亮，才演得出冷启动那一态
+ */
+let mockBadgeSeen = false;
+
+export function mockUpdateBadge(): UpdateInfo | null {
+    if (mockBadgeSeen) return null;
+    return mockCheckUpdate("1.0.0-beta.1", "beta");
+}
+
+export function mockMarkUpdateSeen(): void {
+    mockBadgeSeen = true;
+}
+
 /* ================= 取件这一轮的 dev 假象 =================
  * 浏览器里既没后端也没事件总线，所以在 mock 侧自备一只进程内订阅表 + 一条自己走完的假轮次。
  * 档位与 Rust 同序（downloading → verifying → ready），字段照抄 `UpdateStatus`，

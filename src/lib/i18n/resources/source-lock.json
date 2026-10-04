@@ -881,6 +881,7 @@
   "update.fail-tag": "这一版的编号对不上格式，没能开始下载",
   "update.fail-tasks-busy": "还有整合包在转换，等它跑完再装",
   "update.fail-version": "这条发布的版本号读不懂，请在发布页手动下载",
+  "update.install-and-close": "立即安装 · 窗口会关闭",
   "update.install-now": "立即更新",
   "update.later": "以后再说",
   "update.later-again": "稍后",
@@ -892,7 +893,6 @@
   "update.open-release": "打开发布页",
   "update.outcome-done": "已更新到 v{{version}}",
   "update.outcome-unfinished": "更新到 v{{version}} 没有成功，本机仍是 v{{current}}",
-  "update.restart-install": "重启并安装",
   "update.retry": "重试",
   "update.title-new": "更新到 v{{version}}"
 }

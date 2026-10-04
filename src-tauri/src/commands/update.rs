@@ -1,5 +1,12 @@
 //! 应用更新（设置 · 外观与关于）。检测、取件与装的本事都在 `core::update`，这里只管取本地事实、
 //! 上那道只有拿得到全局状态的层才上的闸门，以及组装返回值。
+//!
+//! 检查只有 `gather` 一个实现点：设置里那颗手动钮与启动后那一趟自动检查走同一段代码。
+//! 「设置页说有新版、角标说没有」这种两边各自自洽的错，在这里没有第二条路径能长出来。
+
+use std::time::Duration;
+
+use tauri::Manager;
 
 use super::*;
 use crate::core::{data_root, update};
@@ -15,7 +22,7 @@ struct Local {
     cur: semver::Version,
 }
 
-fn local_facts(app: &AppHandle, state: &S<'_>) -> Result<Local, String> {
+fn local_facts(app: &AppHandle, state: &Arc<AppState>) -> Result<Local, String> {
     let current = app.package_info().version.to_string();
     let cur = semver::Version::parse(current.trim_start_matches('v'))
         .map_err(|e| format!("本地版本号不是合法 semver（{current}）：{e}"))?;
@@ -31,20 +38,19 @@ fn local_facts(app: &AppHandle, state: &S<'_>) -> Result<Local, String> {
     })
 }
 
-/// 检查更新（Rust: check_update -> 该渠道的最新版本与能不能应用内更新）。
+/// 敲那一趟，把版本比较、渠道、能不能一键装全部算完再回。
 ///
 /// 端点是 release **列表**而不是 `/releases/latest`（原因见 `core::update::releases_url`）；
-/// 渠道与比较都在 Rust 侧算完，前端只渲染，判据只有一个实现点。
-#[tauri::command]
-pub async fn check_update(app: AppHandle, state: S<'_>) -> Result<UpdateInfo, String> {
+/// 判据都在 Rust 侧算，前端只渲染。
+async fn gather(app: &AppHandle, state: &Arc<AppState>) -> Result<UpdateInfo, String> {
     let Local {
         channel,
         current,
         cur,
         ..
-    } = local_facts(&app, &state)?;
+    } = local_facts(app, state)?;
 
-    let dl = downloader_of(&state);
+    let dl = downloader_of(state);
     let url = update::releases_url();
     let body = dl
         .client
@@ -70,6 +76,97 @@ pub async fn check_update(app: AppHandle, state: S<'_>) -> Result<UpdateInfo, St
         portable,
         update::updater_pubkey().is_some(),
     ))
+}
+
+/// 检查更新（Rust: check_update -> 该渠道的最新版本与能不能应用内更新）。手动那颗钮。
+///
+/// 不读那道 24 小时闸门——闸门是给「用户没开口」的那些趟设的，人刚按了钮就该真敲一次。
+#[tauri::command]
+pub async fn check_update(app: AppHandle, state: S<'_>) -> Result<UpdateInfo, String> {
+    let state = state.inner().clone();
+    let info = gather(&app, &state).await?;
+    // 落同一本账：明天那趟看见「今天才敲过」就不必再敲。`seen_ms` 也一并记成这一刻——
+    // 结论此刻就摊在设置页上，人正站在那儿，没有比这更硬的「看过」
+    if let Some(dir) = task_engine::config_dir(&app) {
+        let now = chrono::Utc::now().timestamp_millis();
+        let mut stamp = update::check::read(&dir);
+        stamp.at_ms = now;
+        stamp.seen_ms = now;
+        stamp.info = Some(info.clone());
+        update::check::write(&dir, &stamp);
+    }
+    Ok(info)
+}
+
+/// 冷启动那颗角标的初始值（Rust: update_badge -> 该亮就给那一版的结论，否则 null）。
+///
+/// 纯读那本账、不敲网络：角标要在界面画出来的那一刻就有答案，等一次网络等于先闪一个空位
+#[tauri::command]
+pub fn update_badge(app: AppHandle) -> Option<UpdateInfo> {
+    let dir = task_engine::config_dir(&app)?;
+    let stamp = update::check::read(&dir);
+    if stamp.badge() {
+        stamp.info
+    } else {
+        None
+    }
+}
+
+/// 记一次「这扇窗被打开过」（Rust: mark_update_seen）⇒ 角标灭，直到下一趟敲出新版本。
+///
+/// 同步、无返回值：这本账坏了最贵的结果只是角标多亮一次，不值得为它给前端加一条错误分支
+#[tauri::command]
+pub fn mark_update_seen(app: AppHandle) {
+    let Some(dir) = task_engine::config_dir(&app) else {
+        return;
+    };
+    let mut stamp = update::check::read(&dir);
+    stamp.seen_ms = chrono::Utc::now().timestamp_millis();
+    update::check::write(&dir, &stamp);
+}
+
+/// 启动后那一趟自动检查。由 `lib.rs` 的 setup spawn，前端不感知它的存在，只收得着事件。
+///
+/// 三道「不打扰」：dev 构建一趟不发（开发机一天开几十次，那道闸门只会变成噪声制造机）；
+/// 满 24 小时才真敲；失败完全不吭声，界面上不留一句。查出可装的版本只发
+/// `update://available` 让角标亮，**不弹窗**——用户在忙别的时跳出一扇升级窗是打断。
+pub(crate) async fn startup_check(app: AppHandle) {
+    if cfg!(debug_assertions) {
+        return;
+    }
+    // 让开启动那几秒：splash、语言目录、占用扫描都在抢同一段主线程和同一份磁盘
+    tokio::time::sleep(Duration::from_millis(8_000)).await;
+
+    let Some(dir) = task_engine::config_dir(&app) else {
+        return;
+    };
+    let mut stamp = update::check::read(&dir);
+    let now = chrono::Utc::now().timestamp_millis();
+    if !stamp.due(now) {
+        return;
+    }
+    // 这里只有克隆出来的 Arc，没有 `State` 句柄（那玩意儿跨不了 `await`）
+    let Some(state) = app
+        .try_state::<Arc<AppState>>()
+        .map(|s| s.inner().clone())
+    else {
+        return;
+    };
+
+    // 敲失败就沿用上一轮的结论：昨天查到的新版本今天仍然值得提醒，而「这趟没网」不该把角标抹掉。
+    // 代价说清楚：那条 release 可能已被撤下，而取件那一轮自己会再查一遍
+    stamp.info = match gather(&app, &state).await {
+        Ok(info) => Some(info),
+        Err(_) => stamp.info.clone(),
+    };
+    stamp.at_ms = now;
+    update::check::write(&dir, &stamp);
+
+    if stamp.badge() {
+        if let Some(info) = &stamp.info {
+            let _ = app.emit(update::check::EVENT_AVAILABLE, info);
+        }
+    }
 }
 
 /// 取件（Rust: prepare_update -> 这一版的下载与验签结果）。进度另走 `update://progress`。
@@ -119,7 +216,7 @@ pub fn install_update(app: AppHandle, state: S<'_>) -> Result<(), String> {
     update::install::install(&app, &config_dir, &current)
 }
 
-/// 上一次「重启并安装」的结论（Rust: update_outcome）。账本读一次即收走 ⇒ 第二次调它是 null。
+/// 上一次「立即安装」的结论（Rust: update_outcome）。账本读一次即收走 ⇒ 第二次调它是 null。
 ///
 /// 顺带把装成功那一版的暂存收掉：那两个字节此刻已经变成装进机器里的程序，
 /// 留在缓存里只是白占几 MB；没装成的那一对**留着**——重下一轮靠它直接跳过下载。

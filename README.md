@@ -134,8 +134,16 @@ $b.GetPixel(0, 0).A; $b.GetPixel(16, 6); $b.GetPixel(16, 20)
 **传给安装器的三条参数，缺一条就出事**（判据来自本机生成的 `target/release/nsis/x64/installer.nsi`，不是文档转述）：
 
 - `/S` —— 无界面，且模板里没有 run-after：**装完不会自动拉起**，「点钮 → 窗口消失 → 自己重开」是这条链的观感。
-- `/UPDATE` —— 置 `$UpdateMode=1`：跳过调起老卸载器，并且让 `nsis/hooks.nsh` 的 `RMDir /r /REBOOTOK "$INSTDIR\appdata"` 不执行。**少了它，应用内升级会把设置、任务存档、鸣谢快照与 WebView profile 全删掉**（安装版的数据根就是 `{exe}\appdata`），`output\` 也在这道闸后面。
+- `/UPDATE` —— 置 `$UpdateMode=1`：跳过调起老卸载器，并且让 `nsis/hooks.nsh` 的 `RMDir /r /REBOOTOK "$INSTDIR\appdata"` 不执行。**少了它，应用内升级会把配置目录整个删掉**：设置、任务存档、鸣谢快照与皮肤副本、WebView2 的 profile、`installer.json`，还有收起来的那枚原生卸载器（注册表 `UninstallString` 指的就是它 ⇒ 「添加或删除程序」里那条项会指向一个不存在的文件）。**产物与缓存不在这道闸里**：它们按数据根走（`{盘}\SideShift\{output,cache}`，或设置里自选的目录），而钩子只删 `$INSTDIR\appdata` 这一个子目录——文件头那句「绝不写 `RMDir /r "$INSTDIR"`」就是为了防「安装目录被选成数据根」那种配法。
 - `/D=<当前 exe 所在目录>` —— 必须是**最后一个**参数，NSIS 从等号取到行尾当字面量。装回原目录的判据用 `current_exe()` 而不是注册表的 `InstallLocation`：前者就是本次覆盖的目标本身。
+
+**启动后那一趟自动检查（一天一趟）**：`lib.rs` 的 setup 里 spawn `commands::update::startup_check`，睡 8 秒再敲（避开 splash、语言目录、占用扫描抢同一段主线程）。判据与那本账都在 `core/update/check.rs`：文件是配置目录里的 `update-check.json`（**不在缓存**，否则「清理缓存」等于把闸门重置），三个字段 `atMs` / `seenMs` / 整份 `info`。三条规矩：
+
+- 记的是**发起**时刻而不是成功时刻 ⇒ 失败的趟也算发过，一天顶多一次网络（匿名打 GitHub release 列表限流 60/小时）。代价：断网那一趟白跑，要等明天，或用户自己点设置里那颗钮（它不走这道闸）。
+- 结论**整份存**：冷启动的角标要当场画得出，点开要有内容，不能为了亮一颗点先等一次网络。
+- 读写都不报错、失败完全不吭声：一条没人点过的自动检查不该在界面上留下任何一句失败。
+
+角标在侧栏「设置」那颗右侧（一颗点、不带数字），判据是 `has_update && downloadable && seenMs < atMs` ——**打开过那扇窗就灭**，明天那一趟若仍是新版本自己重新亮。点那颗行＝进设置 + 顺手开那扇窗。dev 构建一趟都不发（`cfg!(debug_assertions)` 直接返回）。「发现新版本」弹窗挂在 `App.tsx` 的 Shell 层、数据源是进程级 `lib/update-store.ts`：换页会把页面子树整个卸掉，而下载与校验是进程级的。
 
 **预发布版本号在打包链上已实测通过**（`1.0.0-beta.1` 与 `1.0.0-beta.2` 各走一遍完整 CLI 出包）：NSIS 产物名 `SideShift_1.0.0-beta.2_x64-setup.exe` 正常；beta.2 那次带私钥，**同名 `.exe.sig` 也产出了**，并用我们自己的 `verify_file` 对内置公钥验过那份 exe 的字节。**仍未实测**：真实安装与升级路径（要写用户机器，按惯例由开发者自测）、私有仓改成 public 之后 `check_update` 的真实返回。
 

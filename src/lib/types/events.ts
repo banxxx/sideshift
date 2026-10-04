@@ -21,4 +21,6 @@ export const EVENTS = {
     classified: "plan://classified",
     /** 应用更新取件进度（阶段 + 字节数同一个载荷，见 `types/update.ts` 的 `UpdateStatus`） */
     updateProgress: "update://progress",
+    /** 启动后那一趟自动检查查出「有新版且能一键装」（载荷是 `UpdateInfo`）。只点角标，不弹窗 */
+    updateAvailable: "update://available",
 } as const;

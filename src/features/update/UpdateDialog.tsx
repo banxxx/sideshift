@@ -162,7 +162,7 @@ export function UpdateDialog({
         </ProgressBtn>
     ) : ready ? (
         <Btn size="sm" variant="primary" disabled={onInstall === undefined} onClick={onInstall}>
-            {t("update.restart-install", "重启并安装")}
+            {t("update.install-and-close", "立即安装 · 窗口会关闭")}
         </Btn>
     ) : failed ? (
         <Btn size="sm" variant="primary" icon={Rocket} onClick={onStart}>
