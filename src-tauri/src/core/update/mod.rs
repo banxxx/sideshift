@@ -14,16 +14,17 @@ pub mod verify;
 
 use crate::models::UpdateChannel;
 
-/// 更新包的 minisign **公钥**（与 `tauri.conf.json` 里 `plugins.updater.pubkey` 同一串）。
+/// 更新包的 minisign **公钥**：`bundle.createUpdaterArtifacts` 签出的那批 `.sig` 就是配着它验的。
 ///
 /// 空串是有意义的一档：**这一枚包没内置可信根** ⇒ 应用内更新一律判
 /// `UpdateBlocked::MissingKey`，界面只给「打开发布页」。它是 §4 那条降级态的另一半——
 /// release 里没 `.sig` 会挡住，这里有钥没配也会挡住，两条都不必让谁点一个必失败的按钮。
 ///
-/// 私钥永远不进仓库（构建时从 CI secret 读）。换公钥必须与构建脚本同一次改：
+/// 私钥永远不进仓库、也不进这份文件：构建时由环境变量 `TAURI_SIGNING_PRIVATE_KEY`（钥匙内容本身，
+/// 给路径或 URL 官方明说"不工作"）连同 `..._PASSWORD` 注入，出完包即撤。换公钥必须与构建脚本同一次改：
 /// 只改一侧的话，旧包读不懂新钥签出的名，用户会停在「验签没过」那一档，
 /// 而那档在界面上一句都修不了——所以换钥要连着发一版只为改钥的包。
-const UPDATER_PUBKEY: &str = "";
+const UPDATER_PUBKEY: &str = "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDZFMkVBMzEzMjUwMzExQTEKUldTaEVRTWxFNk11Ymg4Vnp4VnZ4blBWeVJpRXNwdExjTnNLNGFjcTAzVDAyTUo2RTlHRUQvVlAK";
 
 /// 内置公钥（没有就回 `None`，调用方据此把「不能一键更新」的原因说清楚）。
 /// 收成一个函数而不是让人直接读那枚 const：`None` 这一档要在两处（下载与判定）都拦得住。
@@ -81,4 +82,21 @@ pub fn host_allowed(url: &str) -> bool {
         .ok()
         .and_then(|u| u.host_str().map(str::to_ascii_lowercase))
         .is_some_and(|h| ALLOWED_HOSTS.contains(&&h[..]))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// 内置公钥的自检，而且是这轮改动**唯一**的错字指示器：这一串打错一个字符，
+    /// 装了这个构建的所有用户都会停在「验签没过」那一档，而那档在界面上一句都修不了。
+    /// 让它先在这里红，比让它在几万台机器上红便宜。
+    #[test]
+    fn builtin_pubkey_is_one_line_and_decodes() {
+        let key = updater_pubkey().expect("这一版起就该内置可信根了");
+        // 换行/首尾空白是手贴最常见的坏法：解不开还算运气好，解开了另一枚才是真事故
+        assert!(!key.contains('\n') && !key.contains('\r'), "内联串必须是一行");
+        assert_eq!(key, key.trim(), "公钥串不该带首尾空白");
+        super::verify::decode_public_key(key).expect("内置公钥该解得开");
+    }
 }

@@ -156,12 +156,23 @@ mod tests {
         assert_eq!(err, app_code("update-sig-mismatch"));
     }
 
-    /// 没内置公钥时**根本不该走到验签那一步**，且报的是「缺钥」而不是「验不过」——
-    /// 这一档就是 §4 那条降级态的另一半：P1 这一期还没接密钥，界面上说的是我们没配好
+    /// 内置了可信根之后，「没配钥」那一档在本机已经走不到（它由 `release.rs` 那边显式传
+    /// `has_pubkey = false` 继续演，不依赖常量），这一条改验**别的钥签出来的包**：
+    /// 必须验不过，而不是被误判成「没配钥」——两句话在界面上是两条不同的下一动作。
+    /// 它顺带钉住一件事：夹具里那把测试钥不是内置那把，哪天手滑把测试钥当发版钥填进常量，这里就红。
+    ///
+    /// 期望值是 `update-sig-format` 而不是 `update-sig-mismatch`，这条是实测出来的分层：
+    /// `decode_signature` 已经能吃开那份签名（所以不是「读不懂」），而 `verify_stream` 在
+    /// 建 verifier 时就读签名头里的 key id、当场认出发签者不是内置那把 ⇒ 我们这条链把它
+    /// 归在了 format 那一档。界面那句「签名文件读不懂」对这一档其实偏了一点，要不要拆一个
+    /// 独立种类码是文案决定（只在**换公钥**那个窗口里才会撞到用户）。
     #[test]
-    fn no_builtin_key_blocks_before_verification_not_as_a_failure() {
+    fn a_package_signed_by_another_key_fails_verification_not_as_missing_key() {
         let sig = decode_signature(SIG).unwrap();
-        assert_eq!(verify_file(&fixture_path(), &sig), Err(app_code("update-key-missing")));
+        assert_eq!(
+            verify_file(&fixture_path(), &sig),
+            Err(app_code("update-sig-format"))
+        );
     }
 
     /// 编码可以放宽、内容不能：四行明文形态与一行 base64 形态解出同一个签名
