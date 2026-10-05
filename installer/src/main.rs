@@ -20,6 +20,12 @@ compile_error!("安装壳请用 `pnpm installer` 出包（裸 cargo build --rele
 #[path = "../../src-tauri/src/core/data_root.rs"]
 mod data_root;
 
+// 卸载壳的投递与注册表入口维护：与 data_root 同一条 #[path] 复用路线。
+// 主应用（更新后自愈）与本壳（首装）是它的两个消费方，改行为两处同时生效
+#[allow(dead_code)]
+#[path = "../../src-tauri/src/core/uninstall_shell.rs"]
+mod uninstall_shell;
+
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -29,10 +35,6 @@ use tauri::{AppHandle, Emitter, State};
 
 /// 内嵌的官方安装包（build.rs 从主应用的 nsis 产物里读进来）
 static SETUP: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/setup-payload.bin"));
-
-/// 内嵌的卸载壳（build.rs 从 `pnpm uninstaller` 的产物里读进来）。
-/// NSIS 只登记它自己的 `uninstall.exe`，所以这份字节由壳落到安装目录、再把卸载入口改指过来
-static UNINSTALL_SHELL: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/uninstall-shell.bin"));
 
 /// 装完后主程序的期望字节数（进度条分母）。build.rs 拿不到时为 0 → 进度退化成时间爬升
 const INSTALLED_EXE_BYTES: u64 = match option_env!("INSTALLED_EXE_BYTES") {
@@ -284,8 +286,13 @@ fn install(app: &AppHandle, cancel: &AtomicBool, req: Request) -> Result<Outcome
     pct(app, Stage::Copy, 88.0);
 
     // 卸载入口换成壳自己那一份：NSIS 登记的永远是它自己的 `uninstall.exe`，而壳要把控制面板里
-    // 点出来的那个窗口画成刚才用户看到的这套。落不进文件就 entirely 不碰注册表——原生入口至少能用
-    let note = deliver_uninstall_shell(&install_dir);
+    // 点出来的那个窗口画成刚才用户看到的这套。落不进文件就 entirely 不碰注册表——原生入口至少能用。
+    // 配置目录在这里先拼出来：deliver 收存原生卸载器时要把文件挪进去（目录由收存步骤自己建）
+    let config = install_dir.join(data_root::APP_DATA_DIR_NAME);
+    let note = match uninstall_shell::deliver(&uninstall_shell::NAMES, &install_dir, &config) {
+        uninstall_shell::Deliver::Already | uninstall_shell::Deliver::Retargeted => None,
+        uninstall_shell::Deliver::Note(m) => Some(m),
+    };
 
     // ---- 阶段 3：数据目录 + 把偏好交给应用 ----
     let exe = install_dir.join(format!("SideShift{}", std::env::consts::EXE_SUFFIX));
@@ -304,19 +311,15 @@ fn install(app: &AppHandle, cancel: &AtomicBool, req: Request) -> Result<Outcome
     }
     pct(app, Stage::Data, 94.0);
 
-    // 写进**应用将来会用的那个配置目录**：安装版把配置放在 exe 同级的 `appdata`
-    // （判定在 `task_engine::persist::config_dir`，目录名单源是 `data_root::APP_DATA_DIR_NAME`）。
+    // 写进**应用将来会用的那个配置目录**（上面那行已拼出路径）：安装版把配置放在 exe 同级的
+    // `appdata`（判定在 `task_engine::persist::config_dir`，目录名单源是 `data_root::APP_DATA_DIR_NAME`）。
     // 不能再问 Tauri 要 app_config_dir()——那是老布局的 %APPDATA%，应用升级后已经不读它了。
     // 建不起来就吵一句：静默写不进去等于「用户在安装界面挑的数据目录白挑」，那笔账没法查
-    let config = install_dir.join(data_root::APP_DATA_DIR_NAME);
     std::fs::create_dir_all(&config)
         .map_err(|e| format!("建配置目录 {} 失败：{e}（程序已装好，但数据目录的选择没落下来）", config.display()))?;
     let target = config.join(data_root::INSTALLER_FILE);
     let body = serde_json::json!({ "dataRoot": display(&root) }).to_string();
     std::fs::write(&target, &body).map_err(|e| format!("写 {} 失败：{e}", target.display()))?;
-
-    // 原生卸载器收到这里来。排在配置目录建好之后：它没有义务替我们建目录
-    stash_native_uninstaller(&install_dir, &config);
 
     cleanup(&tmp);
     let _ = app.emit(
@@ -329,182 +332,6 @@ fn install(app: &AppHandle, cancel: &AtomicBool, req: Request) -> Result<Outcome
         data_root: display(&root),
         uninstall_note: note,
     })
-}
-
-/// 卸载入口现在指向谁。判定只看**文件名**，不比整条路径：`$INSTDIR` 由 NSIS 自己拼，
-/// 尾随分隔符和大小写都不由我们做主，比整串等于 `"$INSTDIR\uninstall.exe"` 会误判成"不是我们的键"
-#[cfg(windows)]
-enum Entry {
-    /// 原生入口 → 改成壳
-    Rewrite(String),
-    /// 已经是壳（升级走这条）→ 什么都不动
-    Already,
-    /// 空 / 读不到 / 指向别处 → 不碰，让原生那条路留着
-    Foreign,
-}
-
-/// 纯判定部分，单独抽出来才能测（注册表那两个调用没有可测的余地）
-#[cfg(windows)]
-fn classify_entry(existing: Option<&str>, shell_path: &Path) -> Entry {
-    let Some(raw) = existing.map(str::trim).filter(|s| !s.is_empty()) else {
-        return Entry::Foreign;
-    };
-    let name_of = |p: &str| {
-        p.rsplit(['\\', '/'])
-            .next()
-            .unwrap_or("")
-            .to_ascii_lowercase()
-    };
-    // 模板写进去的值是带引号的 `"$INSTDIR\uninstall.exe"`，读回来原样带着那对引号
-    let stem = name_of(raw.trim_matches('"'));
-    if stem == name_of(&display(shell_path)) {
-        Entry::Already
-    } else if stem == "uninstall.exe" {
-        Entry::Rewrite(format!("\"{}\"", display(shell_path)))
-    } else {
-        Entry::Foreign
-    }
-}
-
-/// 把卸载壳落到安装目录，并把注册表里的卸载入口改指过去。
-///
-/// 返回 `Some(一句话)` 表示"没换成"，但**安装本身照旧成功**：原生 `uninstall.exe` 还在原位，
-/// 控制面板里仍然卸得掉，只是那套界面是 NSIS 的。所以这是一条 note，不是一次失败——
-/// 把装好了的东西报成失败，比让人多看到一个原生对话框严重的多
-#[cfg(windows)]
-fn deliver_uninstall_shell(install_dir: &Path) -> Option<String> {
-    let target = install_dir.join(data_root::UNINSTALL_SHELL_NAME);
-    if let Err(e) = std::fs::write(&target, UNINSTALL_SHELL) {
-        return Some(format!(
-            "卸载界面没换成自带的那套：写 {} 失败（{e}）。控制面板里的卸载仍然可用",
-            target.display()
-        ));
-    }
-    match retarget_entry(&target) {
-        // Already = 升级覆盖，Rewrite = 刚改指过来。两种都是"入口就是它"
-        Ok(Entry::Already) | Ok(Entry::Rewrite(_)) => None,
-        Ok(Entry::Foreign) => Some(
-            "卸载界面没换成自带的那套：注册表里的卸载入口不是这个安装目录写的，没有去改它。控制面板里的卸载仍然可用"
-                .into(),
-        ),
-        Err(e) => Some(format!("卸载界面没换成自带的那套：{e}。控制面板里的卸载仍然可用")),
-    }
-}
-
-#[cfg(not(windows))]
-fn deliver_uninstall_shell(_install_dir: &Path) -> Option<String> {
-    // 非 Windows 不产出安装包，这条链不走；留个桩是为了 data_root 那份共享源码能在本机编过
-    None
-}
-
-/// 把 NSIS 那份原生卸载器收进配置目录。安装目录里躺着两个能卸载东西的 exe，人和杀毒软件都分不清
-/// 哪个是正主；而它又**不能删**——快捷方式（含从任务栏取消固定）、注册表项、文件清单都写在它的
-/// 删除清单里，卸载壳只是把界面换成我们这套，真正动手的仍是它。所以是"收起来"，不是"删掉"。
-///
-/// 挪不动就算了（目标被占用/跨卷）：卸载壳两处都认，最坏的后果是那个文件还看得见，不是卸不掉。
-/// Windows 上 `rename` 会覆盖同名目标，所以升级时上一份留在那儿也不用先删——先删再挪失败就等于
-/// 把唯一的原生入口弄没了
-fn stash_native_uninstaller(install_dir: &Path, config: &Path) {
-    let from = install_dir.join(data_root::NSIS_UNINSTALLER_NAME);
-    if from.is_file() {
-        let _ = std::fs::rename(&from, config.join(data_root::NSIS_UNINSTALLER_STASHED));
-    }
-}
-
-/// `UNINSTKEY` = `Software\Microsoft\Windows\CurrentVersion\Uninstall\${PRODUCTNAME}`
-/// （生成脚本 :61）。产品名取自 src-tauri/tauri.conf.json，改那一边要同步这一边——
-/// 不同步的后果是"谁都改不到"，卸载入口保持原生，属于安全的那一侧
-#[cfg(windows)]
-const UNINST_KEY: &str = r"Software\Microsoft\Windows\CurrentVersion\Uninstall\SideShift";
-
-/// 一次开键、读现值、判定、必要时写。读之前不写：现值就是"这个键是不是我们装的"的唯一凭据
-#[cfg(windows)]
-fn retarget_entry(shell: &Path) -> Result<Entry, String> {
-    use windows_sys::Win32::Foundation::{ERROR_FILE_NOT_FOUND, ERROR_SUCCESS};
-    use windows_sys::Win32::System::Registry::{
-        RegCloseKey, RegOpenKeyExW, RegQueryValueExW, RegSetValueExW, HKEY, HKEY_CURRENT_USER,
-        KEY_READ, KEY_SET_VALUE, REG_SZ,
-    };
-
-    let key = wide(UNINST_KEY);
-    let name = wide("UninstallString");
-    let mut h: HKEY = std::ptr::null_mut();
-    unsafe {
-        let opened = RegOpenKeyExW(
-            HKEY_CURRENT_USER,
-            key.as_ptr(),
-            0,
-            KEY_READ | KEY_SET_VALUE,
-            &mut h,
-        );
-        if opened == ERROR_FILE_NOT_FOUND {
-            return Ok(Entry::Foreign);
-        }
-        if opened != ERROR_SUCCESS {
-            return Err(format!("打开卸载注册表键失败（{opened}）"));
-        }
-
-        // 先量长度再读：RegQueryValueExW 的两段式调用没有别的写法
-        let mut len = 0u32;
-        let mut kind = 0u32;
-        let probe = RegQueryValueExW(
-            h,
-            name.as_ptr(),
-            std::ptr::null(),
-            &mut kind,
-            std::ptr::null_mut(),
-            &mut len,
-        );
-        let mut existing = None;
-        if probe == ERROR_SUCCESS && len > 0 && kind == REG_SZ {
-            let mut buf = vec![0u16; len as usize / 2 + 1];
-            let mut got = len;
-            let read = RegQueryValueExW(
-                h,
-                name.as_ptr(),
-                std::ptr::null(),
-                &mut kind,
-                buf.as_mut_ptr() as *mut u8,
-                &mut got,
-            );
-            if read == ERROR_SUCCESS {
-                let end = buf.iter().position(|c| *c == 0).unwrap_or(buf.len());
-                existing = Some(String::from_utf16_lossy(&buf[..end]));
-            }
-        }
-
-        let verdict = classify_entry(existing.as_deref(), shell);
-        let mut failure = None;
-        if let Entry::Rewrite(value) = &verdict {
-            let w = wide(value);
-            // cbData 含结尾那个 NUL，和 NSIS 自己写这条值时的算法一致
-            let set = RegSetValueExW(
-                h,
-                name.as_ptr(),
-                0,
-                REG_SZ,
-                w.as_ptr() as *const u8,
-                (w.len() * 2) as u32,
-            );
-            if set != ERROR_SUCCESS {
-                failure = Some(format!("写 UninstallString 失败（{set}）"));
-            }
-        }
-        RegCloseKey(h);
-        match failure {
-            Some(e) => Err(e),
-            None => Ok(verdict),
-        }
-    }
-}
-
-#[cfg(windows)]
-fn wide(s: &str) -> Vec<u16> {
-    use std::os::windows::ffi::OsStrExt;
-    std::ffi::OsStr::new(s)
-        .encode_wide()
-        .chain(std::iter::once(0))
-        .collect()
 }
 
 /// 复制阶段的百分比：以安装目录实际字节数为准（真在涨才算进度）。
@@ -552,39 +379,6 @@ fn trim_arg(s: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[cfg(windows)]
-    #[test]
-    fn entry_is_rewritten_only_from_the_native_one() {
-        let shell = Path::new("E:\\SideShift\\SideShift-Uninstall.exe");
-        // 模板写的值带引号，且 $INSTDIR 的分隔符尾注不确定 → 只认文件名
-        let native = "\"E:\\SideShift\\uninstall.exe\"".to_string();
-        let Entry::Rewrite(v) = classify_entry(Some(&native), shell) else {
-            panic!("原生入口必须改成壳");
-        };
-        assert_eq!(v, "\"E:\\SideShift\\SideShift-Uninstall.exe\"");
-        // 升级覆盖时读回来的已经是壳：不能再改一次，也不该报任何话
-        assert!(matches!(
-            classify_entry(Some("\"E:\\SideShift\\SideShift-Uninstall.exe\""), shell),
-            Entry::Already
-        ));
-        // 大小写与正斜杠都不是判据（同一台机器上两种写法都合法）
-        assert!(matches!(
-            classify_entry(Some("e:/side shift/UNINSTALL.EXE"), shell),
-            Entry::Rewrite(_)
-        ));
-        // 别的程序占着同一个键名 ⇒ 一个字都不改。注意判据是**文件名**而不是整条路径：
-        // 这条 UninstallString 是刚才 NSIS 自己写的（模板 :677），目录必然就是这次装的那个，
-        // 而路径字符串的写法（尾分隔符、大小写、正反斜杠）我们做不了主
-        assert!(matches!(
-            classify_entry(Some("\"C:\\Other\\uninstall.exe\""), shell),
-            Entry::Rewrite(_)
-        ));
-        assert!(matches!(classify_entry(Some("\"C:\\Other\\setup.exe\""), shell), Entry::Foreign));
-        assert!(matches!(classify_entry(Some("\"C:\\Other\\setup.exe\""), shell), Entry::Foreign));
-        assert!(matches!(classify_entry(None, shell), Entry::Foreign));
-        assert!(matches!(classify_entry(Some("   "), shell), Entry::Foreign));
-    }
 
     /// 静默安装的目录归一：尾部分隔符要留着（盘根 `D:\` 削成 `D:` 会装错地方），引号要剥掉
     #[test]

@@ -16,3 +16,5 @@ pub mod cleanup;
 pub mod ack;
 // 应用更新：渠道判定、release 解析（下载与安装分两期接进来）
 pub mod update;
+// 卸载壳自愈：安装壳与主应用共用的投递/改指/收存逻辑（#[path] 复用，改一处两处生效）
+pub mod uninstall_shell;

@@ -36,6 +36,26 @@ pub fn run() {
             // 一天一趟的应用更新检查（闸门、失败不吭声都在 `commands::update::startup_check`）。
             // spawn 而不是等同样的话：这一趟最坏要跑几秒，而它凭什么是别人的启动耗时
             tauri::async_runtime::spawn(commands::startup_check(app.handle().clone()));
+            // 卸载壳自愈：应用内更新的静默安装会以主 NSIS 包重写卸载入口（指向它重新生成的
+            // 原生卸载器），自绘卸载向导就此丢失——启动时检查一次，把入口改回壳、把新版原生
+            // 卸载器收进配置目录。best-effort：改不动就静默（原生卸载器仍在，控制面板照常可卸），
+            // 与安装壳的投递同口径；dev / 可攜 / 没内嵌壳的构建在 `self_heal` 内部安静跳过。
+            // spawn_blocking：注册表读写是几毫秒的阻塞调用，不占 async 运行时
+            {
+                let app = app.handle().clone();
+                tauri::async_runtime::spawn_blocking(move || {
+                    let exe_dir = std::env::current_exe()
+                        .ok()
+                        .and_then(|p| p.parent().map(|d| d.to_path_buf()));
+                    let config_dir = task_engine::config_dir(&app);
+                    if let (Some(exe_dir), Some(config_dir)) = (exe_dir, config_dir) {
+                        if let Some(note) = core::uninstall_shell::self_heal(&exe_dir, &config_dir)
+                        {
+                            println!("[uninstall] {note}");
+                        }
+                    }
+                });
+            }
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![

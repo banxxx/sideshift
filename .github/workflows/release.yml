@@ -62,6 +62,11 @@ jobs:
       - name: 安装依赖
         run: pnpm install --frozen-lockfile
 
+      # 卸载壳必须**最先**出：主应用的 build.rs 会把它内嵌进 exe（启动时的卸载壳自愈载荷），
+      # 顺序反了主应用嵌的就是空载荷、自愈静默失效；安装壳的 build.rs 同样要内嵌它
+      - name: 出卸载壳（自愈载荷 + 卸载向导）
+        run: node scripts/build-uninstaller.mjs
+
       - name: 出主应用安装包（NSIS + 更新器签名）
         env:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}

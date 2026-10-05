@@ -51,7 +51,11 @@ minisign-verify = "0.3"
 # 数据根预选要读每个盘的剩余空间（GetDiskFreeSpaceExW）；锁在 windows 目标里，
 # 其他平台编译不到这行，data_root 那边直接返回空候选、回落用户目录
 [target.'cfg(windows)'.dependencies]
-windows-sys = { version = "0.61", features = ["Win32_Storage_FileSystem"] }
+windows-sys = { version = "0.61", features = [
+        "Win32_Storage_FileSystem",
+        "Win32_System_Registry",
+        "Win32_Foundation",
+    ] }
 
 
 # Read the optimization guideline for more details: https://tauri.app/concept/size/#cargo-configuration
