@@ -97,6 +97,7 @@ pub fn run() {
             commands::cache_usage,
             commands::clean_junk,
             commands::clean_cache,
+            commands::clean_installs,
             commands::list_download_sources,
             commands::check_update,
             commands::update_badge,

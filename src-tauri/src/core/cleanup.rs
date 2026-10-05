@@ -6,7 +6,10 @@ use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
 
-use crate::core::data_root::{CACHE_FILES_DIR, CACHE_TASKS_DIR, CACHE_UPDATE_DIR};
+use crate::core::data_root::{
+    CACHE_CF_INDEX, CACHE_ENV_INDEX, CACHE_FILES_DIR, CACHE_INSTALLS_DIR, CACHE_JAVA_INDEX,
+    CACHE_MARKER, CACHE_TASKS_DIR, CACHE_UPDATE_DIR,
+};
 use crate::core::downloader::is_partial_name;
 use crate::core::update::fetch::busy as update_running;
 use crate::models::{CacheUsage, CleanReport};
@@ -41,6 +44,10 @@ struct Snapshot {
     orphans: Vec<(PathBuf, u64)>,
     /// (版本目录, 定稿文件字节合计, 里面最新的 mtime)——mtime 是 `stale` 档的判据
     update: Vec<(PathBuf, u64, SystemTime)>,
+    /// loader 复用安装的条目：`installs\{loader}\{mc}-{ver}`，一个目录算一项
+    /// （几百个文件、100–160 MB，逐文件报数没意义）。它是复用资产不是垃圾，
+    /// 只进占用报表，删除走 `clean_installs` 那条独立的命令
+    installs: Vec<(PathBuf, u64)>,
     empty_dirs: Vec<PathBuf>,
 }
 
@@ -52,6 +59,7 @@ impl Default for Snapshot {
             parts: Vec::new(),
             orphans: Vec::new(),
             update: Vec::new(),
+            installs: Vec::new(),
             empty_dirs: Vec::new(),
         }
     }
@@ -76,7 +84,31 @@ fn snapshot(
     walk_cache_files(&cache_dir.join(CACHE_FILES_DIR), cutoff, busy, &mut s);
     walk_cache_tasks(cache_dir, live_task_ids, &mut s);
     walk_cache_update(cache_dir, update_writing, &mut s);
+    walk_cache_installs(cache_dir, &mut s);
     s
+}
+
+/// loader 复用安装的条目清点：`installs\{loader}\{mc}-{ver}\`（两级）。
+/// 只数两级目录、不递归进内容——单条目的字节量用 `dir_bytes` 现算（数量级是十几个目录）。
+/// 条目名以 `.partial` 结尾的是上次没走完的安装（`installer::PARTIAL_SUFFIX`），照样算占用：
+/// 它们占着磁盘，且没有任何任务会再认领它们（下次安装会另起一个新目录、成功后原子改名）
+fn walk_cache_installs(cache_dir: &Path, s: &mut Snapshot) {
+    let root = cache_dir.join(CACHE_INSTALLS_DIR);
+    let Ok(loaders) = std::fs::read_dir(&root) else {
+        return;
+    };
+    for loader in loaders.flatten() {
+        let Ok(entries) = std::fs::read_dir(loader.path()) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let dir = entry.path();
+            if !dir.is_dir() {
+                continue;
+            }
+            s.installs.push((dir.clone(), dir_bytes(&dir)));
+        }
+    }
 }
 
 /// 第 6 类：应用更新的暂存目录 `cache\update\{版本}\`。
@@ -241,14 +273,54 @@ pub fn usage(cache_dir: &Path, live_task_ids: &BTreeSet<String>, busy: bool) -> 
         orphan_bytes: sum(&s.orphans),
         update_count: s.update.len(),
         update_bytes: s.update.iter().map(|(_, b, _)| *b).sum(),
+        installs_count: s.installs.len(),
+        installs_bytes: sum(&s.installs),
         empty_dirs: s.empty_dirs.len(),
         busy,
         stale_days: STALE_DAYS,
     }
 }
 
+/// 这颗缓存目录是不是本应用的：盖过归属标记（`.sideshift-cache`）当然算；
+/// 老安装（标记功能上线之前建的）没有标记，但只要里面躺着我们认识的**任何一个**
+/// 桶或根索引，也认——判据与卸载壳的归属判定同一条河的两岸。
+///
+/// 手动清理对着「用户挑来的目录」下手（设置里完全可以指到 `D:\Games` 这种地方），
+/// 外来目录里如果恰好有同名子树，这里的删除会把它带走。闸门只在**会删东西**的
+/// 两条命令前拦（`usage` 是纯读，放行无妨）
+fn cache_dir_is_ours(cache_dir: &Path) -> bool {
+    if !cache_dir.is_dir() {
+        return true; // 不存在的目录交给各命令自己的「缺失 = 空」路径
+    }
+    if cache_dir.join(CACHE_MARKER).is_file() {
+        return true;
+    }
+    let buckets = [
+        CACHE_FILES_DIR,
+        CACHE_TASKS_DIR,
+        CACHE_INSTALLS_DIR,
+        CACHE_UPDATE_DIR,
+    ];
+    let indexes = [CACHE_ENV_INDEX, CACHE_CF_INDEX, CACHE_JAVA_INDEX];
+    if buckets.iter().any(|d| cache_dir.join(d).is_dir())
+        || indexes.iter().any(|f| cache_dir.join(f).is_file())
+    {
+        return true;
+    }
+    // 都不认识：空目录放行（没有可误删的东西，拒绝只是给用户添堵——
+    // 老安装全清空之后正好落在这个状态）；有用户自己的字节才拒绝
+    is_empty_dir(cache_dir)
+}
+
 /// 清理垃圾：半截下载 + 孤儿暂存 + 空壳目录。下载缓存本体一个字节都不碰。
-pub fn clean_junk(cache_dir: &Path, live_task_ids: &BTreeSet<String>, busy: bool) -> CleanReport {
+pub fn clean_junk(
+    cache_dir: &Path,
+    live_task_ids: &BTreeSet<String>,
+    busy: bool,
+) -> Result<CleanReport, String> {
+    if !cache_dir_is_ours(cache_dir) {
+        return Err(CACHE_NOT_OURS.into());
+    }
     let mut s = snapshot(cache_dir, live_task_ids, busy, update_running());
     let mut r = CleanReport::default();
     for (path, bytes) in s.parts.drain(..) {
@@ -266,17 +338,20 @@ pub fn clean_junk(cache_dir: &Path, live_task_ids: &BTreeSet<String>, busy: bool
     for dir in s.empty_dirs.drain(..) {
         prune_empty(&dir, &mut r);
     }
-    r
+    Ok(r)
 }
 
 /// 清理下载缓存。删除前重新扫一遍——用户可能在设置页停留期间又跑完了一次转换。
-pub fn clean_cache(cache_dir: &Path, mode: CleanMode) -> CleanReport {
+pub fn clean_cache(cache_dir: &Path, mode: CleanMode) -> Result<CleanReport, String> {
     clean_cache_with(cache_dir, mode, update_running())
 }
 
 /// 同一件事，但「更新那一轮是否在取件」由调用方给出。测试要能造出「正在写」这一档，
 /// 而那颗旗是进程级的、单元测试并行跑 ⇒ 去拧真旗等于给别的测试埋雷
-fn clean_cache_with(cache_dir: &Path, mode: CleanMode, writing: bool) -> CleanReport {
+fn clean_cache_with(cache_dir: &Path, mode: CleanMode, writing: bool) -> Result<CleanReport, String> {
+    if !cache_dir_is_ours(cache_dir) {
+        return Err(CACHE_NOT_OURS.into());
+    }
     // 空任务名单：这条不动 tasks 桶
     let mut s = snapshot(cache_dir, &BTreeSet::new(), false, writing);
     let mut list = match mode {
@@ -309,7 +384,45 @@ fn clean_cache_with(cache_dir: &Path, mode: CleanMode, writing: bool) -> CleanRe
             r.failed += 1;
         }
     }
-    r
+    Ok(r)
+}
+
+/// 外来缓存目录的拒绝话术（两条会删东西的命令共用同一句）
+const CACHE_NOT_OURS: &str =
+    "这个目录没有本应用的缓存归属标记，可能是选错了目录；为了不误删你自己的文件，没有动手";
+
+/// 清理 loader 复用安装：`installs\{loader}\{mc}-{ver}` 逐条目收走。
+/// 与下载缓存分口的原因：它是**复用资产**不是垃圾——删掉省的是 100–160 MB，
+/// 赔的是下次转换同版本时的完整重装。所以单独一档、由用户显式选。
+/// 忙碌闸在命令层（安装中的 loader 目录正在被写入/取用，这里不做半路拆台的事）
+pub fn clean_installs(cache_dir: &Path) -> Result<CleanReport, String> {
+    if !cache_dir_is_ours(cache_dir) {
+        return Err(CACHE_NOT_OURS.into());
+    }
+    let mut s = Snapshot::default();
+    walk_cache_installs(cache_dir, &mut s);
+    let mut r = CleanReport::default();
+    for (dir, bytes) in s.installs.drain(..) {
+        if std::fs::remove_dir_all(&dir).is_ok() {
+            r.items += 1;
+            r.bytes += bytes;
+        } else {
+            r.failed += 1;
+        }
+    }
+    // 末尾收壳：loader 层与 installs 根层删空了都收走。**不进 report**——
+    // 用户读到的 items 是「清了几个 loader 安装」，空壳是收尾不是战果
+    for loader in ["fabric", "forge", "neoforge"] {
+        let d = cache_dir.join(CACHE_INSTALLS_DIR).join(loader);
+        if is_empty_dir(&d) {
+            let _ = std::fs::remove_dir(&d);
+        }
+    }
+    let root = cache_dir.join(CACHE_INSTALLS_DIR);
+    if is_empty_dir(&root) {
+        let _ = std::fs::remove_dir(&root);
+    }
+    Ok(r)
 }
 
 /// 删一个包内文件，并顺手收掉它那一层壳目录（布局是 `files\{键}\{文件名}`）。
@@ -451,13 +564,13 @@ mod tests {
         let busy = usage(&dir, &BTreeSet::new(), true);
         assert_eq!(busy.parts_count, 0);
         assert_eq!(
-            clean_junk(&dir, &BTreeSet::new(), true).items,
+            clean_junk(&dir, &BTreeSet::new(), true).unwrap().items,
             0,
             "运行中不清半截下载"
         );
         assert!(dir.join(CACHE_FILES_DIR).join("aaa").join("a.jar.part2").exists());
 
-        let r = clean_junk(&dir, &BTreeSet::new(), false);
+        let r = clean_junk(&dir, &BTreeSet::new(), false).unwrap();
         assert_eq!((r.items, r.bytes), (1, 7));
         assert!(
             dir.join(CACHE_FILES_DIR).join("aaa").join("a.jar").exists(),
@@ -481,7 +594,7 @@ mod tests {
             "只有注册表里查无此 id 的算孤儿"
         );
 
-        let r = clean_junk(&dir, &ids, false);
+        let r = clean_junk(&dir, &ids, false).unwrap();
         assert_eq!((r.items, r.bytes), (1, 6));
         assert!(live.exists(), "在册任务的暂存不能碰");
         assert!(!gone.exists());
@@ -494,7 +607,7 @@ mod tests {
         put(&dir, "aaa", "a.jar", 10, 0);
         put(&dir, "bbb", "b.jar", 20, STALE_DAYS + 1);
 
-        let r = clean_cache(&dir, CleanMode::Stale);
+        let r = clean_cache(&dir, CleanMode::Stale).unwrap();
         assert_eq!(
             (r.items, r.bytes),
             (2, 20),
@@ -503,7 +616,7 @@ mod tests {
         assert!(!dir.join(CACHE_FILES_DIR).join("bbb").exists());
         assert!(dir.join(CACHE_FILES_DIR).join("aaa").join("a.jar").exists());
 
-        let r = clean_cache(&dir, CleanMode::All);
+        let r = clean_cache(&dir, CleanMode::All).unwrap();
         assert_eq!(r.bytes, 10);
         assert_eq!(usage(&dir, &BTreeSet::new(), false).files_count, 0);
         std::fs::remove_dir_all(dir).ok();
@@ -518,7 +631,7 @@ mod tests {
         assert_eq!(u.empty_dirs, 1, "空壳目录要外显，否则用户以为没清干净");
         assert_eq!(u.files_count, 0);
 
-        assert_eq!(clean_junk(&dir, &BTreeSet::new(), false).items, 1);
+        assert_eq!(clean_junk(&dir, &BTreeSet::new(), false).unwrap().items, 1);
         assert_eq!(usage(&dir, &BTreeSet::new(), false).empty_dirs, 0);
         std::fs::remove_dir_all(dir).ok();
     }
@@ -531,7 +644,7 @@ mod tests {
         assert!(!u.exists);
         assert_eq!(u.files_bytes, 0);
         assert_eq!(u.empty_dirs, 0);
-        assert_eq!(clean_junk(&dir, &BTreeSet::new(), false).items, 0);
+        assert_eq!(clean_junk(&dir, &BTreeSet::new(), false).unwrap().items, 0);
     }
 
     /// 按更新那一轮的布局放一版暂存：`cache\update\{版本}\{名}`
@@ -587,7 +700,7 @@ mod tests {
         assert!(writing.parts.is_empty(), "正在写的那半截别报成垃圾");
         assert_eq!(writing.update.len(), 1, "定稿那一半与忙不忙无关");
 
-        let r = clean_junk(&dir, &BTreeSet::new(), false);
+        let r = clean_junk(&dir, &BTreeSet::new(), false).unwrap();
         assert_eq!((r.items, r.bytes), (1, 6), "只收那半截，按字节报它自己的量");
         assert!(!d.join("pkg.zip.part1").exists());
         assert!(d.join("pkg.zip").exists(), "垃圾清理不碰已经落地的包");
@@ -602,19 +715,73 @@ mod tests {
         let old = update_dir(&dir, "1.0.0", &[("a.zip", 5)], STALE_DAYS + 1);
         let fresh = update_dir(&dir, "1.1.0", &[("b.zip", 7)], 0);
 
-        let r = clean_cache_with(&dir, CleanMode::Stale, false);
+        let r = clean_cache_with(&dir, CleanMode::Stale, false).unwrap();
         assert_eq!((r.items, r.bytes), (1, 5));
         assert!(!old.exists());
         assert!(fresh.exists(), "刚下完的那版不该被「清过期」收走");
 
-        let r = clean_cache_with(&dir, CleanMode::All, false);
+        let r = clean_cache_with(&dir, CleanMode::All, false).unwrap();
         assert_eq!((r.items, r.bytes), (1, 7));
         assert!(!fresh.exists());
 
         let running = update_dir(&dir, "1.2.0", &[("c.zip", 9)], 0);
-        let r = clean_cache_with(&dir, CleanMode::All, true);
+        let r = clean_cache_with(&dir, CleanMode::All, true).unwrap();
         assert_eq!((r.items, r.bytes), (0, 0));
         assert!(running.exists(), "更新在跑时清理不许拆它的台");
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    /// 归属闸三态：盖了标记、老安装（无标记但有我们的桶）、外来目录（拒绝并带话术）
+    #[test]
+    fn ownership_gate_has_three_verdicts() {
+        // 外来目录：存在、非空、没有任何桶/索引/标记 ⇒ 两条会删东西的命令都拒绝
+        let foreign = std::env::temp_dir().join(format!("ss-cleanup-foreign-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&foreign);
+        std::fs::create_dir_all(&foreign).unwrap();
+        std::fs::write(foreign.join("my-game-save.txt"), b"user data").unwrap();
+        assert!(cache_dir_is_ours(&foreign) == false);
+        let err = clean_junk(&foreign, &BTreeSet::new(), false).unwrap_err();
+        assert_eq!(err, CACHE_NOT_OURS);
+        assert!(foreign.join("my-game-save.txt").exists(), "外来目录一个字节都不许动");
+
+        // 老安装：没盖过标记，但 files 桶在 ⇒ 放行（不然老用户清不了缓存）
+        let legacy = temp_cache("legacy");
+        put(&legacy, "aaa", "a.jar", 5, 0);
+        assert!(cache_dir_is_ours(&legacy));
+        assert!(clean_junk(&legacy, &BTreeSet::new(), false).is_ok());
+        std::fs::remove_dir_all(legacy).ok();
+
+        // 新装：盖了标记，哪怕桶都空着也放行
+        let claimed = temp_cache("claimed");
+        std::fs::write(claimed.join(CACHE_MARKER), b"").unwrap();
+        assert!(cache_dir_is_ours(&claimed));
+        std::fs::remove_dir_all(claimed).ok();
+        std::fs::remove_dir_all(foreign).ok();
+    }
+
+    /// loader 复用安装：占用报表按目录计项，clean_installs 逐条收走并收空壳
+    #[test]
+    fn installs_are_reported_and_cleaned_as_entries() {
+        let dir = temp_cache("installs");
+        let forge = dir.join(CACHE_INSTALLS_DIR).join("forge").join("1.20.1-47.4.10");
+        std::fs::create_dir_all(&forge).unwrap();
+        std::fs::write(forge.join("a.jar"), vec![b'x'; 100]).unwrap();
+        let neo = dir.join(CACHE_INSTALLS_DIR).join("neoforge").join("1.21.1-21.1.72");
+        std::fs::create_dir_all(&neo).unwrap();
+        std::fs::write(neo.join("b.jar"), vec![b'x'; 50]).unwrap();
+
+        let u = usage(&dir, &BTreeSet::new(), false);
+        assert_eq!((u.installs_count, u.installs_bytes), (2, 150));
+        assert_eq!(u.files_count, 0, "installs 不混进下载缓存那格");
+
+        let r = clean_installs(&dir).unwrap();
+        assert_eq!((r.items, r.bytes), (2, 150));
+        assert!(!forge.exists() && !neo.exists());
+        assert!(!dir.join(CACHE_INSTALLS_DIR).exists(), "空壳连同 loader 层一起收干净");
+
+        // 再来一次：没有可清的，报零不报错
+        let r = clean_installs(&dir).unwrap();
+        assert_eq!((r.items, r.bytes), (0, 0));
         std::fs::remove_dir_all(dir).ok();
     }
 
@@ -627,7 +794,7 @@ mod tests {
         let u = usage(&dir, &BTreeSet::new(), false);
         assert_eq!((u.update_count, u.empty_dirs), (0, 2), "版本壳 + update 根壳各一项");
 
-        assert_eq!(clean_junk(&dir, &BTreeSet::new(), false).items, 2);
+        assert_eq!(clean_junk(&dir, &BTreeSet::new(), false).unwrap().items, 2);
         assert!(!v.exists());
         assert!(!dir.join(CACHE_UPDATE_DIR).exists());
         std::fs::remove_dir_all(dir).ok();

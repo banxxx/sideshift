@@ -97,6 +97,13 @@ export interface CacheUsage {
     /** 注册表里已无此任务的暂存目录：个数按目录算，不按里面的文件算 */
     orphanCount: number;
     orphanBytes: number;
+    /** 应用更新的暂存（cache/update/{版本}）：个数按版本目录算；暂未单独外显，跟随后端报表走 */
+    updateCount: number;
+    updateBytes: number;
+    /** loader 复用安装的条目（cache/installs/...）：一项 100–160 MB。
+     *  清理走独立的「Loader 安装」档：它是复用资产不是垃圾，删了下次要整包重装 */
+    installsCount: number;
+    installsBytes: number;
     /** 空壳目录：零字节，但用户会当成「没清干净」，所以要外显也要能清 */
     emptyDirs: number;
     /** 有任务在排队或运行：「清空全部」禁用 */

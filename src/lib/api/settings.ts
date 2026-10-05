@@ -86,3 +86,13 @@ export async function cleanCache(mode: CacheCleanMode): Promise<CleanReport> {
     if (!isTauri) return mock.mockCleanCache(mode);
     return invokeOrMock("clean_cache", { mode }, () => mock.mockCleanCache(mode));
 }
+
+/**
+ * 清理 Loader 复用安装（Rust: clean_installs）：`cache/installs/` 下每个版本一项 100–160 MB。
+ * 与下载缓存分档的原因见 Rust 侧：它是复用资产不是垃圾，删了下次转换同版本要整包重装。
+ * 有任务运行/排队时后端 reject（安装中的目录正在被取用），调用方要把那句话显示出来。
+ */
+export async function cleanInstalls(): Promise<CleanReport> {
+    if (!isTauri) return mock.mockCleanInstalls();
+    return invokeOrMock("clean_installs", undefined, () => mock.mockCleanInstalls());
+}

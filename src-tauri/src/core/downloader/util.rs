@@ -33,9 +33,17 @@ pub use crate::core::data_root::CACHE_FILES_DIR;
 /// 半成品后缀：`{文件名}.part{尝试序号}`（写侧是 client 的 `temp_path`，判侧是 `is_partial_name`）
 pub(crate) const PART_MARKER: &str = ".part";
 
-/// 是不是半截下载的临时文件。用 contains 而不是 ends_with：后缀带尝试序号
+/// 是不是半截下载的临时文件。半截下载的判据：`{原名}.part{尝试序号}`（`client::temp_path` 的命名规则）。
+/// 要求 `.part` 之后**到文件名末尾**全是数字——普通文件名里含 `.part` 的
+/// （`foo.part2.zip` 这类真模组）不再被误判成半截
 pub fn is_partial_name(name: &str) -> bool {
-    name.contains(PART_MARKER)
+    match name.rfind(PART_MARKER) {
+        Some(i) => {
+            let tail = &name[i + PART_MARKER.len()..];
+            !tail.is_empty() && tail.bytes().all(|b| b.is_ascii_digit())
+        }
+        None => false,
+    }
 }
 
 /// 命中复用时把「最后一次使用时间」写在文件自己身上。
@@ -92,4 +100,20 @@ pub fn verify_cache_for(item: &ItemSpec, cache: &Path) -> bool {
     };
     let bytes = std::fs::read(cache).unwrap_or_default();
     sha1_hex(&bytes).eq_ignore_ascii_case(expect)
+}
+
+#[cfg(test)]
+mod partial_tests {
+    use super::*;
+
+    /// `.part` 之后必须紧跟纯数字到行尾：真模组名里含 `.part` 的不再被误判
+    #[test]
+    fn partial_names_require_a_numeric_suffix() {
+        for ok in ["a.jar.part1", "a.jar.part12", "Setup.part3"] {
+            assert!(is_partial_name(ok), "{ok} 是半截下载");
+        }
+        for bad in ["a.part2.zip", "a.part", "part1.jar", "a.jar.part2.bak"] {
+            assert!(!is_partial_name(bad), "{bad} 不是半截下载");
+        }
+    }
 }

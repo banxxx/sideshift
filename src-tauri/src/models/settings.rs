@@ -210,6 +210,10 @@ pub struct CacheUsage {
     /// 应用更新的暂存（`cache\update\{版本}`）：个数按**版本目录**算，一个版本 = 安装包 + 它的签名
     pub update_count: usize,
     pub update_bytes: u64,
+    /// loader 复用安装的条目（`installs\{loader}\{mc}-{ver}`）：个数按**目录**算，一项 100–160 MB。
+    /// 清理走独立的「Loader 安装」档（`clean_installs`）：它是复用资产不是垃圾，删了要整包重装
+    pub installs_count: usize,
+    pub installs_bytes: u64,
     /// 空壳目录：零字节，但要让用户看见"清理确实收尾了"
     pub empty_dirs: usize,
     /// 有任务正在排队或运行：前端据此禁掉缓存清理，并把 parts 那一栏改口径说明

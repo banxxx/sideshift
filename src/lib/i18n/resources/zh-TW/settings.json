@@ -91,5 +91,8 @@
   "settings.use-another": "{{name}}正被其它程序佔用，一項都沒能刪掉",
   "settings.used-days": "｜{{days}} 天內都用過，沒有過期項",
   "settings.verify-after": "建置後自檢",
-  "settings.where-finished": "轉換完成的整合包落位目錄"
+  "settings.where-finished": "轉換完成的整合包落位目錄",
+  "settings.loader-installs": "Loader 安裝",
+  "settings.no-installs": "沒有已重用安裝的載入器（Forge / NeoForge）",
+  "settings.installs-count": "{{count}} 個版本 · 下次轉換同版本會重新下載安裝"
 }

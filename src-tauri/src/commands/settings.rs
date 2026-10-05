@@ -75,12 +75,13 @@ pub async fn cache_usage(state: S<'_>) -> Result<CacheUsage, String> {
 
 /// 清理无用文件：半截下载 + 孤儿暂存目录 + 空壳目录。下载缓存本体一个字节都不碰，
 /// 所以这条不挡运行中的任务（忙碌时扫描会自动跳过可能正在写的 `.part`）。
+/// 目录归属闸（`cleanup::cache_dir_is_ours`）不过时返回那条拒绝话术
 #[tauri::command]
 pub async fn clean_junk(state: S<'_>) -> Result<CleanReport, String> {
     let (dir, ids, busy) = cache_targets(&lock(&state));
     tauri::async_runtime::spawn_blocking(move || cleanup::clean_junk(&dir, &ids, busy))
         .await
-        .map_err(|_| app_code("panic"))
+        .map_err(|_| app_code("panic"))?
 }
 
 /// 清理下载缓存。`mode` = `stale`（只删过期）或 `all`（清空）。
@@ -101,6 +102,20 @@ pub async fn clean_cache(state: S<'_>, mode: String) -> Result<CleanReport, Stri
     };
     tauri::async_runtime::spawn_blocking(move || cleanup::clean_cache(&dir, mode))
         .await
-        .map_err(|_| app_code("panic"))
+        .map_err(|_| app_code("panic"))?
+}
+
+/// 清理 loader 复用安装（`installs\{loader}\{mc}-{ver}`）。
+/// 与下载缓存分档的原因见 `cleanup::clean_installs`：它是复用资产不是垃圾。
+/// 忙碌闸与「清空全部」同一道：安装中的 loader 目录此刻正在被写、被取用
+#[tauri::command]
+pub async fn clean_installs(state: S<'_>) -> Result<CleanReport, String> {
+    let (dir, _, busy) = cache_targets(&lock(&state));
+    if busy {
+        return Err("有任务正在转换或排队中，它的 loader 安装可能正在被取用".into());
+    }
+    tauri::async_runtime::spawn_blocking(move || cleanup::clean_installs(&dir))
+        .await
+        .map_err(|_| app_code("panic"))?
 }
 

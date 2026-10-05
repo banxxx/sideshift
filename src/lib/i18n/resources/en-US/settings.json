@@ -97,5 +97,8 @@
   "settings.used-days": "; all used within {{days}} days, nothing stale",
   "settings.verify-after": "Verify after build",
   "settings.version": "Version",
-  "settings.where-finished": "Where finished server packs are saved"
+  "settings.where-finished": "Where finished server packs are saved",
+  "settings.loader-installs": "Loader installs",
+  "settings.no-installs": "No reused loader installs (Forge / NeoForge)",
+  "settings.installs-count": "{{count}} version(s) · the same version re-downloads on next conversion"
 }

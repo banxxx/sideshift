@@ -379,7 +379,8 @@ pub fn install(
 }
 
 /// 复用缓存的桶名：`{cache}/installs/{loader}/{mc}-{loader ver}`。字面量在 `core::data_root`
-/// （那张表同时是卸载壳的删除清单），清理面板与这里引的是同一个名字
+/// （那张表同时是卸载壳的删除清单）；设置页的「Loader 安装」档（`cleanup::clean_installs`）
+/// 与这里引的是同一个名字
 pub use crate::core::data_root::CACHE_INSTALLS_DIR;
 /// 装完才原子改名进真名 ⇒ 复用侧永远看不见半截；这个后缀本身即「上次没走完」的记号
 const PARTIAL_SUFFIX: &str = ".partial";

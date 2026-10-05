@@ -120,8 +120,8 @@ const modrinthQueryOptions = (t: TranslateFn): SelectOption[] => [
 const endonymOf = (lng: Locale) =>
     LOCALE_OPTIONS.find((o) => o.value === LOCALE_TO_WIRE[lng])?.label ?? lng;
 
-/** 三种清理：无用文件 / 只清过期缓存 / 清空全部缓存 */
-type CleanKind = "junk" | "stale" | "all";
+/** 四种清理：无用文件 / 只清过期缓存 / 清空全部缓存 / Loader 复用安装 */
+type CleanKind = "junk" | "stale" | "all" | "installs";
 
 /** 播报文案的名词，与按钮上的说法一致，免得提示和界面两种叫法 */
 function cleanLabel(kind: CleanKind): string {
@@ -129,6 +129,7 @@ function cleanLabel(kind: CleanKind): string {
         junk: t("settings.junk-files", "无用文件"),
         stale: t("settings.expired-cache", "过期缓存"),
         all: t("settings.download-cache", "下载缓存"),
+        installs: t("settings.loader-installs", "Loader 安装"),
     }[kind];
 }
 
@@ -321,7 +322,12 @@ export function SettingsPage() {
         if (cleaning) return;
         setCleaning(kind);
         try {
-            const r = kind === "junk" ? await api.cleanJunk() : await api.cleanCache(kind);
+            const r =
+                kind === "junk"
+                    ? await api.cleanJunk()
+                    : kind === "installs"
+                      ? await api.cleanInstalls()
+                      : await api.cleanCache(kind);
             const n = cleanNotice(kind, r);
             notify(n.text, n.kind);
         } catch (e) {
@@ -519,6 +525,28 @@ export function SettingsPage() {
                             onClick={() => void runClean("junk")}
                         >
                             {cleaning === "junk" ? t("settings.cleaning", "清理中…") : t("settings.clean", "清理")}
+                        </Btn>
+                    </SettingRow>
+                    <SettingRow
+                        label={t("settings.loader-installs", "Loader 安装")}
+                        desc={
+                            !usage
+                                ? t("settings.counting-usage", "占用统计中…")
+                                : usage.installsCount === 0
+                                  ? t("settings.no-installs", "没有已复用安装的加载器（Forge / NeoForge）")
+                                  : `${formatSize(usage.installsBytes)}：` +
+                                    t("settings.installs-count", "{{count}} 个版本 · 下次转换同版本会重新下载安装", {
+                                        count: usage.installsCount,
+                                    })
+                        }
+                    >
+                        <Btn
+                            size="sm"
+                            variant="danger"
+                            disabled={!usage || usage.installsCount === 0 || !!cleaning || usage.busy}
+                            onClick={() => void runClean("installs")}
+                        >
+                            {cleaning === "installs" ? t("settings.cleaning", "清理中…") : t("settings.clean", "清理")}
                         </Btn>
                     </SettingRow>
                 </Section>

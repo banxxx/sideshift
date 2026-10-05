@@ -190,6 +190,11 @@ let mockUsage: CacheUsage = {
     orphanCount: 1,
     orphanBytes: 89_128_960,
     emptyDirs: 7,
+    updateCount: 0,
+    updateBytes: 0,
+    // Loader 复用安装（独立清理档）：给一组真实感的数
+    installsCount: 2,
+    installsBytes: 311_000_000,
     busy: false,
     staleDays: 30,
 };
@@ -214,6 +219,13 @@ export function mockCleanJunk(): CleanReport {
         orphanBytes: 0,
         emptyDirs: 0,
     };
+    return r;
+}
+
+/** 清 Loader 复用安装：一项 100–160 MB，删了下次转换同版本要重装 */
+export function mockCleanInstalls(): CleanReport {
+    const r: CleanReport = { items: mockUsage.installsCount, bytes: mockUsage.installsBytes, failed: 0 };
+    mockUsage = { ...mockUsage, installsCount: 0, installsBytes: 0 };
     return r;
 }
 
