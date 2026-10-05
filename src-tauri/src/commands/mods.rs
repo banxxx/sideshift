@@ -143,8 +143,9 @@ pub async fn estimate_download(
             complete: false,
         });
     };
+    let cache_dir = lock(&state).settings.cache_dir.clone();
     let dl = downloader_of(&state);
-    Ok(crate::core::estimate::estimate(&parsed, &plan, &options, &dl).await)
+    Ok(crate::core::estimate::estimate(&parsed, &plan, &options, &dl, &PathBuf::from(cache_dir)).await)
 }
 
 #[tauri::command]

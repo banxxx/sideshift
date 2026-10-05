@@ -452,6 +452,12 @@ fn complete_at(dir: &Path) -> Option<InstallReport> {
     Some(InstallReport { files, bytes, elapsed: Duration::ZERO, scripts, jars })
 }
 
+/// 复用命中与否（预估用）：`reuse` 开且 `{cache}/installs/{loader}/{mc}-{ver}`
+/// 已经是完整末态 ⇒ 本机安装零下载（连 installer jar 的安装期库拉取也一并省掉）
+pub fn reuse_hit(cache_dir: &Path, loader: LoaderKind, mc_version: &str, loader_version: &str) -> bool {
+    complete_at(&install_dir(cache_dir, loader, mc_version, loader_version)).is_some()
+}
+
 /// 复用条目的半成品名：`.partial` 后缀本身就等于「上次没走完」的记号
 fn partial_path(dir: &Path) -> PathBuf {
     PathBuf::from(format!("{}{PARTIAL_SUFFIX}", dir.display()))

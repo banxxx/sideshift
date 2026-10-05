@@ -259,8 +259,13 @@ impl NetActivity {
         }
     }
 
-    /// 记一个响应块；返回 Some(info) 表示到出图点了。速率按两次出图之间的字节差算，
-    /// 再做一点平滑，免得采样窗口边界上数字乱跳
+    /// 记一个响应块；返回 Some(info) 表示到出图点了。
+    ///
+    /// 速率**只在出图时刻**算一次：两次出图之间的字节差 ÷ 间隔，再过 EMA。
+    /// 以前是每块都算并每块都平滑——一个窗口里来几百个块，EMA 被应用几百次，
+    /// 历史窗口的权重按 0.7^N 蒸发，显示值实际等于「当前窗口的瞬时平均」，
+    /// 文件切换的空档一来就砸到底、下一窗口又猛拉回，数字看着就是乱的。
+    /// 块内只累计字节，节奏交给窗口。
     pub fn record(&mut self, p: &TransferProgress, items_done: u32) -> Option<ActivityInfo> {
         let e = self
             .inflight
@@ -276,16 +281,25 @@ impl NetActivity {
             .map(|t| now.duration_since(t) >= ACTIVITY_WINDOW)
             .unwrap_or(true);
         let done = self.done();
-        if let Some(prev) = self.last_emit {
-            let dt = now.duration_since(prev).as_secs_f64();
-            if dt > 0.0 {
-                let inst = done.saturating_sub(self.last_bytes) as f64 / dt;
-                self.rate = if self.rate > 0.0 { self.rate * 0.7 + inst * 0.3 } else { inst };
-            }
+        // 重试会把同一枚文件的 p.done 拉回起点 ⇒ done() 整体回退。这不是「下载变慢」，
+        // 是计数基线换了文件：把基线挪过去、本窗口作废，绝不让它经 inst 把速率砸向 0
+        if done < self.last_bytes {
+            self.last_emit = Some(now);
+            self.last_bytes = done;
+            return None;
         }
         if !due {
             return None;
         }
+        let mut rate = self.rate;
+        if let Some(prev) = self.last_emit {
+            let dt = now.duration_since(prev).as_secs_f64();
+            if dt > 0.0 {
+                let inst = (done - self.last_bytes) as f64 / dt;
+                rate = if rate > 0.0 { rate * 0.7 + inst * 0.3 } else { inst };
+            }
+        }
+        self.rate = rate;
         self.last_emit = Some(now);
         self.last_bytes = done;
         Some(self.snapshot(items_done))

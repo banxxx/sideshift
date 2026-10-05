@@ -1,19 +1,40 @@
 use super::*;
 
-/// Aikar's flags：官方推荐的 G1GC 调优参数组（4G+ 内存口径）
-const AIKAR_FLAGS: &str = "-XX:+UseG1GC -XX:+ParallelRefProcEnabled -XX:MaxGCPauseMillis=200 \
--XX:+UnlockExperimentalVMOptions -XX:+DisableExplicitGC -XX:+AlwaysPreTouch \
--XX:G1NewSizePercent=30 -XX:G1MaxNewSizePercent=40 -XX:G1HeapRegionSize=8M \
--XX:G1ReservePercent=20 -XX:G1HeapWastePercent=5 -XX:G1MixedGCCountTarget=4 \
--XX:InitiatingHeapOccupancyPercent=15 -XX:G1MixedGCLiveThresholdPercent=90 \
--XX:G1RSetUpdatingPauseTimePercent=5 -XX:SurvivorRatio=32 -XX:+PerfDisableSharedMem \
--XX:MaxTenuringThreshold=1";
+/// Aikar's flags：官方推荐的 G1GC 调优参数组（4–12G 内存口径，逐字对照 aikar.co 2020-04-25 版）。
+/// `use_aikar_flags` 开启时随 `-Xms`/`-Xmx` 一起拼进 start 脚本
+///
+/// 按官方原文做的两处自适应（2026-10 核对）：
+/// - **大堆档**：内存超 12G 时官方明确要改五个参数（新生代 40/50、区域 16M、预留 15、IHOP 20），
+///   原样发 4–12G 口径在大堆上会收到官方说的「老年代回收变多就退回去」的反效果；
+/// - **Java 线**：`PerfDisableSharedMem` 是 **JDK 9 才有的选项**，Java 8 上直接
+///   `Unrecognized VM option → Could not create the Java Virtual Machine`（服务器拒启，不是性能问题）。
+///   老线（≤1.16.5，Java 8）改发 `-XX:-UsePerfData`——Java 8 就有的同目的选项（关掉整个 perf 数据，
+///   比只禁 mmap 更激进，但那一档的诉求「别往盘上写 hsperfdata」是同一个）
+fn aikar_flags(memory_mb: u32, java_major: u32) -> String {
+    let size_tuned = if memory_mb > 12 * 1024 {
+        "-XX:G1NewSizePercent=40 -XX:G1MaxNewSizePercent=50 -XX:G1HeapRegionSize=16M          -XX:G1ReservePercent=15 -XX:InitiatingHeapOccupancyPercent=20"
+    } else {
+        "-XX:G1NewSizePercent=30 -XX:G1MaxNewSizePercent=40 -XX:G1HeapRegionSize=8M          -XX:G1ReservePercent=20 -XX:InitiatingHeapOccupancyPercent=15"
+    };
+    let perf = if java_major >= 9 {
+        "-XX:+PerfDisableSharedMem"
+    } else {
+        "-XX:-UsePerfData"
+    };
+    format!(
+        "-XX:+UseG1GC -XX:+ParallelRefProcEnabled -XX:MaxGCPauseMillis=200          -XX:+UnlockExperimentalVMOptions -XX:+DisableExplicitGC -XX:+AlwaysPreTouch          {size_tuned} -XX:G1HeapWastePercent=5 -XX:G1MixedGCCountTarget=4          -XX:G1MixedGCLiveThresholdPercent=90 -XX:G1RSetUpdatingPauseTimePercent=5          -XX:SurvivorRatio=32 {perf} -XX:MaxTenuringThreshold=1"
+    )
+}
 
 /// 内存 + Aikar + 用户附加参数 → 一行 JVM 参数（换行剔除，防注入第二行命令）
 pub(super) fn jvm_args(options: &ConversionOptions) -> String {
     let mut parts = vec![format!("-Xmx{}M", options.memory_mb)];
     if options.use_aikar_flags {
-        parts.push(AIKAR_FLAGS.to_string());
+        // Aikar 要求 Xms 与 Xmx 相同（行业惯例，也是 AlwaysPreTouch 的生效前提：
+        // 只预触到初始堆，不设 -Xms 时 JVM 默认初始堆是物理内存的 1/64，预触利益全失）
+        parts.push(format!("-Xms{}M", options.memory_mb));
+        let major = options.java_version.trim().parse().unwrap_or(17);
+        parts.push(aikar_flags(options.memory_mb, major));
     }
     let extra = options.extra_jvm_args.trim();
     if !extra.is_empty() {
@@ -145,4 +166,95 @@ pub(super) fn resolve_shape(installed: Option<&Installed>) -> Result<RunShape, B
         "{} 顶层既没有 run 脚本也没有可直启的 jar",
         dir.display()
     )))
+}
+
+#[cfg(test)]
+mod aikar_tests {
+    use super::*;
+
+    fn opts(memory: u32, java: &str, aikar: bool) -> ConversionOptions {
+        ConversionOptions {
+            mc_version: "1.20.1".into(),
+            loader_version: "47.4.10".into(),
+            java_version: java.into(),
+            java_path: String::new(),
+            memory_mb: memory,
+            generate_scripts: true,
+            nogui: false,
+            agree_eula: true,
+            server_port: 25565,
+            motd: String::new(),
+            max_players: 20,
+            gamemode: "survival".into(),
+            difficulty: "easy".into(),
+            online_mode: true,
+            level_seed: String::new(),
+            use_aikar_flags: aikar,
+            extra_jvm_args: String::new(),
+            output_override: String::new(),
+            keep_dirs: Vec::new(),
+            keep_files: Vec::new(),
+            allow_missing_mods: false,
+            install_loader_locally: true,
+            reuse_loader_installs: true,
+            verify_after_build: false,
+        }
+    }
+
+    /// 关掉开关时只有 -Xmx（不夹带 -Xms 与任何调优参数）
+    #[test]
+    fn aikar_off_is_just_xmx() {
+        let args = jvm_args(&opts(4096, "17", false));
+        assert_eq!(args, "-Xmx4096M");
+    }
+
+    /// 开启时 Xms == Xmx：官方硬要求，也是 AlwaysPreTouch 只预触到初始堆的生效前提
+    #[test]
+    fn aikar_on_pins_xms_to_xmx() {
+        let args = jvm_args(&opts(6144, "17", true));
+        assert!(args.contains("-Xmx6144M"));
+        assert!(args.contains("-Xms6144M"));
+        let xms = args.find("-Xms").unwrap();
+        let xmx = args.find("-Xmx").unwrap();
+        assert_eq!(xms, xmx + "-Xmx6144M".len() + 1, "-Xms 应紧跟 -Xmx 之后");
+    }
+
+    /// 4-12G 口径（官方基础档）：新生代 30/40、区域 8M、预留 20、IHOP 15
+    #[test]
+    fn base_tier_matches_aikar_2020_for_common_heaps() {
+        let args = jvm_args(&opts(8192, "17", true));
+        assert!(args.contains("G1NewSizePercent=30"));
+        assert!(args.contains("G1MaxNewSizePercent=40"));
+        assert!(args.contains("G1HeapRegionSize=8M"));
+        assert!(args.contains("G1ReservePercent=20"));
+        assert!(args.contains("InitiatingHeapOccupancyPercent=15"));
+        assert!(args.contains("PerfDisableSharedMem"), "JDK9+ 用官方原参数");
+        assert!(!args.contains("UsePerfData"));
+    }
+
+    /// 超 12G 换官方大堆档：40/50、16M、15、20——官方明说 12G 以上要改这五个
+    #[test]
+    fn heaps_over_12g_switch_to_the_large_heap_tier() {
+        let args = jvm_args(&opts(16384, "21", true));
+        assert!(args.contains("G1NewSizePercent=40"));
+        assert!(args.contains("G1MaxNewSizePercent=50"));
+        assert!(args.contains("G1HeapRegionSize=16M"));
+        assert!(args.contains("G1ReservePercent=15"));
+        assert!(args.contains("InitiatingHeapOccupancyPercent=20"));
+        // 边界：12G 整仍走基础档（官方口径「12GB or less 不动参数」）
+        let edge = jvm_args(&opts(12288, "21", true));
+        assert!(edge.contains("G1NewSizePercent=30"));
+    }
+
+    /// Java 8 线（老 Forge 1.16.5-）没有 PerfDisableSharedMem（JDK 9 才有，
+    /// Java 8 上直接「Could not create the Java Virtual Machine」拒启），
+    /// 换成 Java 8 就有的同目的选项 -XX:-UsePerfData
+    #[test]
+    fn java8_line_swaps_in_the_legacy_perf_option() {
+        let args = jvm_args(&opts(4096, "8", true));
+        assert!(!args.contains("PerfDisableSharedMem"));
+        assert!(args.contains("-XX:-UsePerfData"));
+        // 其余参数照发：Java 8 全部认得
+        assert!(args.contains("UseG1GC") && args.contains("MaxTenuringThreshold=1"));
+    }
 }

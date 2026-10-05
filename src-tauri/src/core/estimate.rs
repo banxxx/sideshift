@@ -3,6 +3,7 @@
 //! 但一个字节也不传输：大小取实测字段、缺失回落 HEAD Content-Length，缓存命中照扣。
 
 use std::collections::HashSet;
+use std::path::Path;
 
 use crate::core::detector;
 use crate::core::downloader::{Downloader, Fetch, ItemSpec};
@@ -45,6 +46,7 @@ pub async fn estimate(
     plan: &[PlanMod],
     options: &ConversionOptions,
     dl: &Downloader,
+    cache_dir: &Path,
 ) -> DownloadEstimate {
     let mut out = DownloadEstimate {
         download_bytes: 0,
@@ -200,6 +202,24 @@ pub async fn estimate(
                 }
             }
             None => out.complete = false,
+        }
+    }
+
+    // 3.3 补充：本机安装的**安装期下载**。Forge / NeoForge 的 `--installServer` 会在安装时
+    // 从 maven 拉取服务端库文件（几十 MB 量级），清单在 installer jar 里、逐个大小要 HEAD
+    // 几十发 ⇒ 不静态预估，按复用状态二分：
+    // - 复用命中（完整末态已装）⇒ 安装期零下载；
+    // - 没命中 ⇒ 记不完整，让前端如实说「另有安装期下载，以实际为准」。
+    //   Fabric 没有本机安装（server jar 即装即用），不进这一档
+    if options.install_loader_locally && parsed.manifest.loader != LoaderKind::Fabric {
+        let hit = crate::core::installer::reuse_hit(
+            cache_dir,
+            parsed.manifest.loader,
+            &options.mc_version,
+            &options.loader_version,
+        );
+        if !hit {
+            out.complete = false;
         }
     }
     out

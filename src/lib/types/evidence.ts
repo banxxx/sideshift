@@ -46,7 +46,8 @@ export type SideFlag = "required" | "optional" | "unsupported";
 
 /**
  * jar 字节码结构提示（不是证据层级，只影响「要不要靠文件名猜」）：
- * serverCode = jar 内确有服务端注册，名称关键字层被按住没删它；
+ * serverCode = jar 内确有服务端注册：名称关键字层的误删被按住，
+ * 平台声明判出的剔除与字节矛盾时同样被按住（改保留并标待人工）；
  * clientOnlyShape = 只订阅客户端注册、形状像纯客户端（仅提示，处置不变）
  */
 export type BytecodeHint = "serverCode" | "clientOnlyShape";

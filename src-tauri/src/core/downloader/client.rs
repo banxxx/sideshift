@@ -173,6 +173,42 @@ impl Downloader {
         let first_err: Arc<std::sync::Mutex<Option<DownloadError>>> =
             Arc::new(std::sync::Mutex::new(None));
 
+        // 复用闸：dest 已经在（上一轮失败/取消留下的落位）且内容对得上 ⇒ 直接报完成，
+        // 不进两条取件通道。重试因此秒过已下载/已抽取的部分——这正是「失败保留暂存」
+        // 的另一半：暂存留住之后，这里负责认出它们。校验口径与缓存命中同一条
+        // （声明了 sha1 就流式验一道；包内抽取的文件由 rename 原子落地，存在即完整），
+        // 放 spawn_blocking：几十 MB 的逐文件读不能占 async 线程
+        let (reused, items) = tokio::task::spawn_blocking(move || {
+            let (reused, rest): (Vec<ItemSpec>, Vec<ItemSpec>) =
+                items.into_iter().partition(|i| {
+                    i.dest.is_file()
+                        && i.sha1
+                            .as_deref()
+                            .map_or(true, |h| verify_cache_for(i, &i.dest))
+                });
+            let outcomes: Vec<ItemOutcome> = reused
+                .iter()
+                .map(|i| ItemOutcome {
+                    file_name: i.file_name.clone(),
+                    source: match &i.fetch {
+                        Fetch::ZipEntry { .. } => FetchSource::Pack,
+                        Fetch::Local(_) => FetchSource::Local,
+                        Fetch::Url(_) => FetchSource::Network,
+                    },
+                    cached: true,
+                    bytes: std::fs::metadata(&i.dest).map(|m| m.len()).unwrap_or(0),
+                    retries: 0,
+                    dest: i.dest.clone(),
+                })
+                .collect();
+            (outcomes, rest)
+        })
+        .await
+        .unwrap_or_default();
+        for oc in reused {
+            offline::report(done.as_ref(), total, &*on_done, oc);
+        }
+
         let (offline, net): (Vec<ItemSpec>, Vec<ItemSpec>) = items
             .into_iter()
             .partition(|i| !matches!(i.fetch, Fetch::Url(_)));

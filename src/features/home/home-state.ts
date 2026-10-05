@@ -84,7 +84,16 @@ export function useActiveTask() {
         if (!alive.current) return;
         setReady(true);
         if (!list) return;
-        setActive(pickActive(list));
+        let picked = pickActive(list);
+        // 实况小窗要**完整**日志：list_tasks 为列表页轻载把每条任务裁到末 8 行，
+        // 直接用会让首页控制台与复制按钮都只有 8 条。选中的那一条补一发单任务
+        // 查询（get_task 不裁，全量最多到后端日志环的 600 条上限）
+        if (picked) {
+            const full = await api.getTask(picked.id).catch(() => undefined);
+            if (!alive.current) return;
+            if (full) picked = full;
+        }
+        setActive(picked);
     }, []);
 
     const scheduleRefresh = useCallback(() => {

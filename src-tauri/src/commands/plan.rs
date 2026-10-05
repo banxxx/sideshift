@@ -1,3 +1,5 @@
+use std::path::Path;
+
 use super::*;
 
 /* ---------------- 转换方案 ---------------- */
@@ -183,7 +185,7 @@ pub async fn classify_pack(
         .filter_map(|(path, p)| p.env.map(|e| (path.clone(), e)))
         .collect();
     // 结构事实单独一张表：不进证据阶梯，只在 detector 里当名称层的闸门
-    let code: env::CodeMap = probes
+    let mut code: env::CodeMap = probes
         .iter()
         .filter(|(_, p)| p.code != env::CodeFacts::default())
         .map(|(path, p)| (path.clone(), p.code))
@@ -216,7 +218,18 @@ pub async fn classify_pack(
         }
     }
 
-    let plan = detector::build_plan(&parsed, strip, &ev, &code);
+    let mut plan = detector::build_plan(&parsed, strip, &ev, &code);
+    // 剔除行补验：声明判剔但没扫过字节的行在这里补上，矛盾会被 detector 按住（见 helper）。
+    // src 已被上面那个 spawn_blocking 闭包 move 走，从解析结果里现取（同一个值）
+    let mut plan = ensure_strip_facts(
+        &parsed,
+        plan,
+        strip,
+        &mut ev,
+        &mut code,
+        Path::new(parsed.manifest.source_path.as_deref().unwrap_or_default()),
+    )
+    .await;
     let offline_final = env_source.is_off() || pending.is_empty();
     // 这一包是否已经有一轮联网反查在飞。**必须在下面立标记之前读**——那个标记写的就是
     // 「本轮还要联网」，先写后读会永远读到「有人在跑」，于是第二轮起不来、剩下的行再没人查。
@@ -304,7 +317,8 @@ pub async fn classify_pack(
             )
             .await
             .unwrap_or_default();
-            let (plan, file) = {
+            // —— 锁一：收尾标记 + 合并 touched + 克隆工作表（补扫在锁外做）——
+            let work = {
                 let mut g = lock(&state);
                 // 本轮收尾：只摘自己的标记。必须在下面换包那道闸门**之前**清——换包时这一趟会
                 // 直接 return，写在闸门后面就永远清不掉；而标记留着，下次回到这个包会被
@@ -324,16 +338,47 @@ pub async fn classify_pack(
                         g.env_evidence.insert(path.clone(), *one);
                     }
                 }
-                let plan = last_parsed_of(&g).map(|p| {
+                let parsed = last_parsed_of(&g);
+                let strip = g.settings.strip_client_only;
+                let src = parsed
+                    .as_ref()
+                    .and_then(|p| p.manifest.source_path.clone())
+                    .unwrap_or_default();
+                parsed.map(|p| (p, strip, src, g.env_evidence.clone(), g.env_code.clone()))
+            };
+            let Some((parsed, strip, src, mut ev_w, mut code_w)) = work else {
+                return;
+            };
+            // —— 锁外：剔除行补验（可能把矛盾剔除按回保留）——
+            let base_plan = detector::build_plan(&parsed, strip, &ev_w, &code_w);
+            let plan_v = ensure_strip_facts(
+                &parsed,
+                base_plan,
+                strip,
+                &mut ev_w,
+                &mut code_w,
+                Path::new(&src),
+            )
+            .await;
+            // —— 锁二：补扫产出并回共享表、按共享表重算推事件 ——
+            let plan = {
+                let mut g = lock(&state);
+                // 补扫期间换了包：不是同一个包就不落库、不推事件
+                if g.env_evidence_file.as_deref() != Some(file_name.as_str()) {
+                    return;
+                }
+                g.env_evidence = ev_w;
+                g.env_code = code_w;
+                last_parsed_of(&g).map(|p| {
                     detector::build_plan(
                         &p,
                         g.settings.strip_client_only,
                         &g.env_evidence,
                         &g.env_code,
                     )
-                });
-                (plan, file_name.clone())
+                })
             };
+            let file = file_name.clone();
             if let Some(plan) = plan {
                 emit_classified(&app, &file, plan, true, complete);
             }
@@ -346,7 +391,68 @@ pub async fn classify_pack(
     })
 }
 
-/// 推自动分类结果。分类明细不写日志行——日志量级就是前端性能预算（十五轮定案）
+
+/// 剔除行字节码补验：判进剔除分组的包内行，若还没有字节码事实就补扫一遍，返回重算后的方案。
+///
+/// 为什么要补：首轮扫描的 `want_code` 有意跳过「声明已答上」的行（省掉逐 class 走常量池的成本），
+/// 但声明类证据——mrpack env、索引结论、联网反查——都可能错。实测（FarmingTales 包，2026-10）：
+/// GeckoLib 是打包者塞进 overrides 的索引外文件，hash 反查落空，被 Modrinth 项目级
+/// `server_side=optional` 判成客户端模组——服务端缺它直接起不来。detector 的矛盾否决
+/// （`bytecode_vetoed_strip`）要有 `server_code` 事实在手才生效，这一步就是那笔账的补付：
+/// 只扫 Remove 分组里没有事实的包内行，命中服务端标记即提前收工。
+/// 补扫若解出 jar 自证（rank 0），同样并进证据表——`put` 会让它压过声明层
+async fn ensure_strip_facts(
+    parsed: &ParsedPack,
+    plan: Vec<PlanMod>,
+    strip: bool,
+    ev: &mut env::EvidenceMap,
+    code: &mut env::CodeMap,
+    src: &Path,
+) -> Vec<PlanMod> {
+    // 手动模式没有自动剔除，Remove 分组为空，自然无事可做
+    if !strip || src.as_os_str().is_empty() {
+        return plan;
+    }
+    let need: Vec<String> = plan
+        .iter()
+        .filter(|m| m.disposition == ModDisposition::Remove)
+        .filter_map(|m| m.src_path.clone())
+        .filter(|p| !code.contains_key(p))
+        .collect();
+    if need.is_empty() {
+        return plan;
+    }
+    let src_buf = src.to_path_buf();
+    let reqs: Vec<env::ProbeReq> = need
+        .iter()
+        .map(|p| env::ProbeReq {
+            path: p.clone(),
+            want_sha1: false,
+            want_code: true,
+        })
+        .collect();
+    let probes = tauri::async_runtime::spawn_blocking(move || env::probe_jars(&src_buf, &reqs))
+        .await
+        .unwrap_or_default();
+    let mut changed = false;
+    for (path, probe) in probes {
+        if let Some(e) = probe.env {
+            env::put(ev, &path, e);
+            changed = true;
+        }
+        if probe.code != env::CodeFacts::default() && code.get(&path) != Some(&probe.code) {
+            code.insert(path.clone(), probe.code);
+            changed = true;
+        }
+    }
+    if changed {
+        detector::build_plan(parsed, strip, ev, code)
+    } else {
+        plan
+    }
+}
+
+/// 推自动分类结果。分类明细不写日志行——日志量级就是前端性能预算（十五轮定案）分类明细不写日志行——日志量级就是前端性能预算（十五轮定案）
 fn emit_classified(
     app: &AppHandle,
     file_name: &str,
@@ -365,3 +471,98 @@ fn emit_classified(
     );
 }
 
+#[cfg(test)]
+mod strip_rescan_tests {
+    use super::*;
+    use crate::core::env::fixtures::{class_bytes, zip_bytes};
+    use crate::core::parser::{PackFile, ParsedPack};
+    use crate::models::PackManifest;
+
+    /// 完整复刻 GeckoLib 场景（FarmingTales 包，2026-10 实测）：
+    /// mrpack 声明有区分度、且把这一行判成剔除（server=unsupported）——
+    /// 首轮扫描因此跳过它的字节码（want_code=false）。补扫解出 jar 里
+    /// 确有服务端注册 ⇒ detector 按住剔除，改保留 + 待人工
+    #[tokio::test]
+    async fn strip_declared_row_gets_a_bytecode_second_chance() {
+        // 源包：一个含服务端注册 class 的 Forge jar（mods.toml 无端字段）
+        let jar = zip_bytes(&[
+            (
+                "META-INF/mods.toml",
+                br#"modId = "geckolib"
+displayName = "GeckoLib"
+"#,
+            ),
+            (
+                "com/example/Setup.class",
+                class_bytes(&["com/example/Setup", "DeferredRegister", "net/minecraft/server/"]).as_slice(),
+            ),
+        ]);
+        let dir = std::env::temp_dir().join(format!("ss-strip-rescan-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let pack_path = dir.join("pack.zip");
+        std::fs::write(&pack_path, zip_bytes(&[("overrides/mods/[前置]geckolib-forge-1.20.1-4.8.4.jar", &jar)])).unwrap();
+
+        // mrpack 清单：区分度由另一行的 optional 提供（真实打包工具的整表刷法），
+        // geckolib 行被判剔除（server=unsupported）
+        let row = |name: &str, server: SideFlag, client: SideFlag| PackFile {
+            path: format!("overrides/mods/{name}"),
+            file_name: name.into(),
+            url: String::new(),
+            sha1: None,
+            size_bytes: 10,
+            in_pack: true,
+            env_server: Some(server),
+            env_client: Some(client),
+            depends: Vec::new(),
+            cf: None,
+        };
+        let parsed = ParsedPack {
+            manifest: PackManifest {
+                file_name: "p.mrpack".into(),
+                loader: LoaderKind::Forge,
+                mc_version: "1.20.1".into(),
+                mod_count: 2,
+                size_bytes: 0,
+                parsed: true,
+                error: None,
+                source_path: Some(pack_path.display().to_string()),
+            },
+            mod_files: vec![
+                row("[前置]geckolib-forge-1.20.1-4.8.4.jar", SideFlag::Unsupported, SideFlag::Required),
+                row("some-client-thing.jar", SideFlag::Optional, SideFlag::Required),
+            ],
+            extra_files: Vec::new(),
+            loader_version: None,
+            root_prefix: String::new(),
+        };
+
+        let mut ev = env::EvidenceMap::new();
+        let mut code = env::CodeMap::new();
+        let plan = detector::build_plan(&parsed, true, &ev, &code);
+        assert_eq!(
+            plan[0].disposition,
+            ModDisposition::Remove,
+            "补扫前：mrpack 声明把它判进剔除分组（声明可能是错的）"
+        );
+
+        // 补扫：解出服务端注册 ⇒ detector 的矛盾否决生效
+        let plan = ensure_strip_facts(
+            &parsed,
+            plan,
+            true,
+            &mut ev,
+            &mut code,
+            Path::new(&pack_path),
+        )
+        .await;
+        assert_eq!(
+            plan[0].disposition,
+            ModDisposition::Keep,
+            "字节里确有服务端注册，剔除被按住"
+        );
+        assert!(plan[0].needs_review, "矛盾必须亮给人看");
+        assert_eq!(plan[0].bytecode_hint, Some(BytecodeHint::ServerCode));
+
+        let _ = std::fs::remove_dir_all(dir);
+    }
+}

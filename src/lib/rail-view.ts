@@ -201,8 +201,9 @@ export function taskToRail(task: ConversionTask): TaskRailView {
 
 /**
  * 任务日志 → 轨道控制台行（全量）。
- * Home 缩略小窗与任务详情页读同一份日志尾（Home 侧数据来自 list_tasks，
- * 后端已裁到末 8 行），控制台框定高滚动，行数不再影响卡片高度。
+ * Home 缩略小窗与任务详情页读同一份日志：列表接口为轻载裁到末 8 行，
+ * 首页实况对选中的任务补一发单任务查询拿全量（见 home-state 的 refresh），
+ * 控制台框定高滚动，行数不再影响卡片高度。
  */
 export function taskLogs(task: ConversionTask): RailLog[] {
     const finished = task.status !== "queued" && task.status !== "running";

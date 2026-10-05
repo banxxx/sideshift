@@ -156,7 +156,19 @@ pub fn build_plan(
                     }
                 }
             };
-            let bytecode_hint = if vetoed {
+            let mut strip = verdict(client, server) == Verdict::Strip;
+            // 字节码否决扩展：jar 里确有服务端注册（common setup / 注册表 / 网络层——
+            // 加载器自己的 API，不参与混淆，假阳性率实测很低）却被判剔除——声明与字节
+            // 矛盾，宁保留+人工，不静默错删。实测案例（FarmingTales 包）：GeckoLib 是
+            // 打包者塞进 overrides 的索引外文件（hash 反查落空），被 Modrinth 项目级
+            // server_side=optional 判成客户端模组，服务端缺它直接起不来。
+            // 覆盖 (必,可) 与 (·,不支持) 两种剔除；改判后强制待人工，让人看得见这台保险
+            let bytecode_vetoed_strip = strip && chosen.is_some() && facts.server_code;
+            if bytecode_vetoed_strip {
+                strip = false;
+            }
+            let client_only = strip && strip_client_only;
+            let bytecode_hint = if vetoed || bytecode_vetoed_strip {
                 Some(BytecodeHint::ServerCode)
             } else if chosen.is_none() && !name_hit && facts.client_only_shape {
                 Some(BytecodeHint::ClientOnlyShape)
@@ -164,8 +176,6 @@ pub fn build_plan(
                 None
             };
 
-            let strip = verdict(client, server) == Verdict::Strip;
-            let client_only = strip && strip_client_only;
             // 判不出两端的行（上面每层都没答上、名称表也没猜中）：不悄悄留在服务端包里，
             // 归进剔除分组并强制人工确认——要它的服主自己勾回来，比默认塞进包里安全。
             // 例外：关键字表（Via* 那类）本身就是「有服务端价值、默认保留」的口径，不并进来；
@@ -187,7 +197,8 @@ pub fn build_plan(
                     ModDisposition::Keep
                 },
                 client_only,
-                needs_review: needs_review || review,
+                // 字节码按住的剔除矛盾（自动剔除开着才标：手动模式本就没有自动剔除）
+                needs_review: needs_review || review || (bytecode_vetoed_strip && strip_client_only),
                 auto_supplement: false,
                 size_bytes: f.size_bytes,
                 // 只有「有 URL 可下且物理不在包内」才是真联网下载；
@@ -743,26 +754,50 @@ mod tests {
     }
 
     #[test]
-    fn bytecode_never_overrides_a_real_evidence_layer() {
-        // 上面任何一层答上之后，字节码层完全闭嘴：既不 veto（没东西要 veto）、
-        // 也不提示（结论已经有了，再提示只会误导）
-        let mut map = EvidenceMap::new();
+    fn server_code_vetoes_a_strip_verdict_even_from_evidence() {
+        //（GeckoLib 案例，2026-10 实测）jar 字节里确有服务端注册，声明却说服务端不要——
+        // 平台声明会错（作者把库模组的 server_side 标成 optional，服务端缺它起不来），
+        // 字节不会。宁保留+人工，不静默剔出一个起不来的服务端。
+        // 旧契约「证据层答上后字节码闭嘴」由此推翻：假阳性的代价只是多保留一个待人工，
+        // 假阴性的代价是服务端缺件开不起
+        let parsed = pack(vec![file("geckolib-forge-1.20.1-4.8.4.jar", (None, None))]);
+
+        // (必,可)：Modrinth 项目级声明把 GeckoLib 判成客户端模组的那一档
+        let mut project = EvidenceMap::new();
         add(
-            &mut map,
-            "mods/sodium-0.5.13.jar",
+            &mut project,
+            "mods/geckolib-forge-1.20.1-4.8.4.jar",
+            SideFlag::Required,
+            SideFlag::Optional,
+            EnvSource::ModrinthProject,
+        );
+        let plan = build_plan(
+            &parsed,
+            true,
+            &project,
+            &facts("mods/geckolib-forge-1.20.1-4.8.4.jar", true, false),
+        );
+        assert_eq!(plan[0].disposition, ModDisposition::Keep);
+        assert!(plan[0].needs_review, "矛盾必须亮给人看");
+        assert_eq!(plan[0].bytecode_hint, Some(BytecodeHint::ServerCode));
+
+        // (必,不支持)：矛盾更狠的一档，同样按住
+        let mut meta = EvidenceMap::new();
+        add(
+            &mut meta,
+            "mods/geckolib-forge-1.20.1-4.8.4.jar",
             SideFlag::Required,
             SideFlag::Unsupported,
             EnvSource::JarMetadata,
         );
-        let parsed = pack(vec![file("sodium-0.5.13.jar", (None, None))]);
         let plan = build_plan(
             &parsed,
             true,
-            &map,
-            &facts("mods/sodium-0.5.13.jar", true, true),
+            &meta,
+            &facts("mods/geckolib-forge-1.20.1-4.8.4.jar", true, false),
         );
-        assert_eq!(plan[0].disposition, ModDisposition::Remove);
-        assert_eq!(plan[0].bytecode_hint, None);
+        assert_eq!(plan[0].disposition, ModDisposition::Keep);
+        assert!(plan[0].needs_review);
     }
 
     #[test]

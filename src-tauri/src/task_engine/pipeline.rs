@@ -48,8 +48,22 @@ pub fn spawn_pipeline(app: &AppHandle, state: &Arc<AppState>, id: String) {
     let (a, s) = (app.clone(), state.clone());
     tauri::async_runtime::spawn(async move {
         run_pipeline(a.clone(), s.clone(), id.clone()).await;
-        // 失败与取消不走成功收尾，暂存目录统一在这里回收
-        remove_task_staging(&s, &id);
+        // 暂存目录只在**成功**后回收（产物已经打包，落位文件没用了）。
+        // 失败与取消**保留**：重试沿用同一 id、同一方案，取件阶段对已落位的文件
+        // 逐个校验直接复用（`download_all` 的复用闸），不用把几百 MB 重新来一遍。
+        // 磁盘占用由删除任务（进回收站）与启动清扫兜底
+        let succeeded = s
+            .inner
+            .lock()
+            .map(|g| {
+                g.tasks
+                    .get(&id)
+                    .is_some_and(|t| t.status == TaskStatus::Success)
+            })
+            .unwrap_or(false);
+        if succeeded {
+            remove_task_staging(&s, &id);
+        }
         if let Some(next) = release_and_next(&a, &s, &id) {
             spawn_pipeline(&a, &s, next);
         }
