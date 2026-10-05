@@ -304,11 +304,16 @@ fn install(app: &AppHandle, cancel: &AtomicBool, req: Request) -> Result<Outcome
         ));
     }
     let (output_dir, cache_dir) = data_root::layout_in(&root);
-    for dir in [&root, &output_dir, &cache_dir] {
+    for dir in [&root, &output_dir] {
         std::fs::create_dir_all(dir).map_err(|e| {
             format!("建目录 {} 失败：{e}（程序已装好，装完后在设置里另选目录即可）", dir.display())
         })?;
     }
+    // 缓存目录走 claim 而不是 create_dir_all：这一趟是它第一次出现在这台机器上，
+    // 顺手盖上归属标记，卸载壳才认它是我们名下的（判据见 data_root::claim_cache_root）
+    data_root::claim_cache_root(&cache_dir).map_err(|e| {
+        format!("建目录 {} 失败：{e}（程序已装好，装完后在设置里另选目录即可）", cache_dir.display())
+    })?;
     pct(app, Stage::Data, 94.0);
 
     // 写进**应用将来会用的那个配置目录**（上面那行已拼出路径）：安装版把配置放在 exe 同级的

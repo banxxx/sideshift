@@ -43,6 +43,42 @@ pub const NSIS_UNINSTALLER_NAME: &str = "uninstall.exe";
 #[allow(dead_code)]
 pub const NSIS_UNINSTALLER_STASHED: &str = "nsis-uninstall.exe";
 
+/* ---------------- 缓存目录里「我们名下」的条目 ---------------- */
+
+/// 四个缓存桶：`{cache}\{名}\`，每个都装一类可再生数据，设置页那张卡按桶清理。
+/// 名字单源在这里而不是各写入方各留一份：卸载壳能编到的只有本文件（`#[path]` 共享面），
+/// 它要删的清单必须和写入方建目录时用的是同一份字符串。写入方从本文件 `pub use` 回去
+pub const CACHE_FILES_DIR: &str = "files";
+pub const CACHE_TASKS_DIR: &str = "tasks";
+pub const CACHE_INSTALLS_DIR: &str = "installs";
+pub const CACHE_UPDATE_DIR: &str = "update";
+/// 三张躺在缓存根（不在任何桶里）的索引：`cf-files-index.json` / `env-index.json` /
+/// `java-index.json`。它们刻意放在可清理目录**之外**（不可再生或再生很贵），但字节确实
+/// 是我们在缓存根里落的 ⇒ 卸载要收，设置页的清理不认它们
+pub const CACHE_CF_INDEX: &str = "cf-files-index.json";
+pub const CACHE_ENV_INDEX: &str = "env-index.json";
+pub const CACHE_JAVA_INDEX: &str = "java-index.json";
+
+/// 卸载壳在缓存目录里**只允许删**这些名字，表外的字节一个不碰。判据来自人在设置里选的
+/// 目录可能正是他自己的东西（`D:\Games`、`Documents`），照着整目录递归删等于把用户文件带走
+///
+/// 新增缓存类目必须同时登记进这里，否则卸载完留在用户机器上没人收
+#[allow(dead_code)]
+pub const CACHE_OWNED: &[&str] = &[
+    CACHE_FILES_DIR,
+    CACHE_TASKS_DIR,
+    CACHE_INSTALLS_DIR,
+    CACHE_UPDATE_DIR,
+    CACHE_CF_INDEX,
+    CACHE_ENV_INDEX,
+    CACHE_JAVA_INDEX,
+];
+
+/// 归属标记：躺在这颗目录里的缓存目录才「是我们建的」。由 [claim_cache_root] 盖，
+/// 卸载壳读它决定敢不敢动手（见那里对判据的解释）
+#[allow(dead_code)]
+pub const CACHE_MARKER: &str = ".sideshift-cache";
+
 /// 低于此剩余空间的盘不参与预选：宁可用默认的用户目录，也不替用户把整盘塞满
 const MIN_FREE_BYTES: u64 = 10 * 1024 * 1024 * 1024;
 
@@ -71,6 +107,38 @@ pub fn layout_in(root: &Path) -> (PathBuf, PathBuf) {
         root.join(OUTPUT_DIR_NAME),
         root.join(CACHE_DIR_NAME),
     )
+}
+
+/// 给缓存目录盖上「这个目录是我们建的」标记，并确保目录本身在（安装壳靠这一句建出缓存目录）。
+/// 已经有标记就什么都不做。
+///
+/// 判据为什么必须是非递归的 `create_dir`：人在设置里可以把缓存指到任何**已存在**的目录
+/// （`D:\Games`、`C:\Users\me\Documents`），那些目录不是我们造的，一旦盖章就等于授权卸载壳
+/// 往里面删东西。`create_dir_all` 分不出最后一段是它建的还是本来就在 ⇒ 不能用它判定。
+/// 父段不存在时 `create_dir` 失败，这时整条链都只能是本次造的 ⇒ 再走 `create_dir_all`，
+/// 成功同样有资格盖章。
+///
+/// 标记只覆盖「装上/改目录那一刻」；在这之前缓存目录就已经存在的老安装拿不到它，卸载壳对那种
+/// 情况按「缓存目录正好等于规则算出来的那个」放行，见 `uninstaller` 的归属判定。
+///
+/// 主应用与安装壳盖标记、卸载壳只读那颗文件 ⇒ 本文件被卸载壳 `#[path]` 编走时这里是死代码
+#[allow(dead_code)]
+pub fn claim_cache_root(cache_dir: &Path) -> std::io::Result<()> {
+    let marker = cache_dir.join(CACHE_MARKER);
+    if marker.is_file() {
+        return Ok(());
+    }
+    let created = match std::fs::create_dir(cache_dir) {
+        Ok(()) => true,
+        // 本来就在：不是本次造的，不盖章，但这不算失败
+        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => false,
+        Err(_) => !cache_dir.exists() && std::fs::create_dir_all(cache_dir).is_ok(),
+    };
+    // 盖不上标记只是让卸载时少删一点，不值得让装好的包报错
+    if created {
+        let _ = std::fs::write(&marker, b"");
+    }
+    Ok(())
 }
 
 /// 本机可用盘，按剩余空间从多到少。非 Windows 返回空 → 一律回落用户目录
@@ -353,5 +421,65 @@ mod tests {
             "便携包的数据根必须落在 exe 同级"
         );
         std::fs::remove_dir_all(dir).ok();
+    }
+
+    /// 归属标记只在「这个缓存目录是本次建出来的」时盖。人已存在的目录（设置里指到
+    /// `D:\Games` 那一类）绝不能盖章——盖了等于授权卸载壳往用户自己的地盘里删东西
+    #[test]
+    fn claim_stamps_only_a_directory_it_created() {
+        let base = temp_dir("claim");
+        let fresh = base.join(CACHE_DIR_NAME);
+        claim_cache_root(&fresh).unwrap();
+        assert!(fresh.is_dir(), "缓存目录该由这一次调用建出来");
+        assert!(
+            fresh.join(CACHE_MARKER).is_file(),
+            "本次建的目录必须盖上归属标记"
+        );
+
+        // 已经存在的目录：不盖章，也不报错（人在设置里指到自己已有的文件夹就是这个形态）
+        let pre = base.join("already");
+        std::fs::create_dir_all(&pre).unwrap();
+        claim_cache_root(&pre).unwrap();
+        assert!(
+            !pre.join(CACHE_MARKER).exists(),
+            "本来就在的目录不是我们造的，不能盖章"
+        );
+
+        // 父段也不存在 ⇒ 整条链都是本次造的，照样有资格盖章（安装壳第一次装就是这一档）
+        let deep = base.join("E").join(DIR_NAME).join(CACHE_DIR_NAME);
+        claim_cache_root(&deep).unwrap();
+        assert!(deep.is_dir());
+        assert!(deep.join(CACHE_MARKER).is_file(), "整条链都是本次建的就该盖章");
+
+        // 已有标记 ⇒ 幂等，不重复建、不重复写
+        claim_cache_root(&fresh).unwrap();
+        assert!(fresh.join(CACHE_MARKER).is_file());
+        std::fs::remove_dir_all(base).ok();
+    }
+
+    /// 卸载壳的删除清单必须列全四个桶 + 三张根索引：漏一条就是卸载后留在用户机器上没人收
+    #[test]
+    fn owned_cache_entries_list_buckets_and_indexes() {
+        assert_eq!(
+            CACHE_OWNED,
+            &[
+                CACHE_FILES_DIR,
+                CACHE_TASKS_DIR,
+                CACHE_INSTALLS_DIR,
+                CACHE_UPDATE_DIR,
+                CACHE_CF_INDEX,
+                CACHE_ENV_INDEX,
+                CACHE_JAVA_INDEX,
+            ]
+        );
+        assert_eq!(
+            CACHE_OWNED.len(),
+            CACHE_OWNED
+                .iter()
+                .copied()
+                .collect::<std::collections::HashSet<&str>>()
+                .len(),
+            "清单里有重名"
+        );
     }
 }

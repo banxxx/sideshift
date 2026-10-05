@@ -1,5 +1,6 @@
 //! SideShift 卸载壳：把 NSIS 原生卸载对话框换成与安装壳同一套界面；真正的删除仍交给原生卸载器。
-//! 壳自己动手删的目录只有整合包缓存（数据根），因为 NSIS 不知道数据根在哪。
+//! 壳自己下手的只有整合包缓存里的条目清单（`data_root::CACHE_OWNED`）——数据根的位置由人挑，
+//! NSIS 不知道它在哪，而整目录递归删在一个指错了的缓存目录上等于删用户的文件。
 //! 命令行决定身份，三条分支：`--uninstall-child <目录>` → 这份（%TEMP% 副本）跑界面；
 //! `/S` `/P` `/UPDATE` `_?=` 任一 → 是外部安装程序/脚本在调，原样转发给原生卸载器并照抄退出码
 //! （`_?=` 必须补 `/UPDATE` 同转，否则升级途中的清理会被当成真卸载连用户设置一起端掉）；
@@ -75,7 +76,8 @@ struct Snapshot {
 
 /// 卸载完之后界面要复述的两条路径：Rust 侧**卸载之后**实测还在的那两个目录，
 /// 不是开屏那份快照（卸载途中盘被拔掉、目录被人手删，这里得跟着变）。
-/// `cache_leftover` 只在「该删而没删掉」时才有值，正常卸载它是 None
+/// `cache_leftover` = 缓存目录还在，两种都算：按清单收完但里面留着别人的东西，
+/// 和整个目录按归属判据不该动（完成页那句「缓存未清除」两种都是真话）
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct Outcome {
@@ -90,18 +92,20 @@ struct Progress {
     done: bool,
 }
 
-/// 卸载现场：数据目录里那两个「跟着设置走」的位置。
+/// 卸载现场：数据目录里那些「跟着设置走」的位置，加上按规则算出来的数据根本身。
 ///
 /// 必须在 NSIS 动手**之前**问清：判定要读的 `settings.json` / `installer.json` 就躺在
 /// `{install}\appdata` 里，卸载钩子下一步把它端掉，事后再问只会得到"剩余空间最大的预选盘"
 /// 那个默认值 —— 人在安装时挑过别处的话那是**另一个**目录，拿它去删缓存就是删错东西
 struct Scene {
+    /// 规则算出来的数据根：缓存与产物都收空之后，剩这一个空壳要顺手撤掉
+    root: PathBuf,
     /// 转换产物：卸载不碰，完成页要点名它留在哪
     output: PathBuf,
-    /// 整合包缓存：这次卸载要一并删掉的那个目录
+    /// 整合包缓存：这次卸载要按清单收掉条目（并只在收空之后撤掉目录本身）的那个目录
     cache: PathBuf,
-    /// 缓存目录可信到能让壳动手删吗。假 ⇒ 不删，也不在进度里计（宁可留着也不删错）
-    deletable: bool,
+    /// 这个缓存目录是我们**造**的吗（判据见 `owns_cache`）。否 ⇒ 一条都不删，进度里也不计
+    ours: bool,
 }
 
 /// 只取缓存与产物两个字段的 settings.json 副本。列成两个字段而不是整个 `AppSettings`：
@@ -120,23 +124,24 @@ struct SavedDirs {
 fn scene(install: &Path, identifier: &str) -> Option<Scene> {
     let home = home_dir()?;
     let config = config_dir_of(install, identifier);
-    let (by_rule, by_rule_cache) =
-        data_root::layout_in(&data_root::suggested_root(&home, &config));
+    let root = data_root::suggested_root(&home, &config);
+    let (by_rule, by_rule_cache) = data_root::layout_in(&root);
     let saved = std::fs::read_to_string(config.join(data_root::SETTINGS_FILE))
         .ok()
         .and_then(|t| serde_json::from_str::<SavedDirs>(&t).ok());
     let (output, cache) = match saved {
         Some(s) => (
-            absolute_or(s.output_dir, by_rule),
-            absolute_or(s.cache_dir, by_rule_cache),
+            absolute_or(s.output_dir, &by_rule),
+            absolute_or(s.cache_dir, &by_rule_cache),
         ),
-        None => (by_rule, by_rule_cache),
+        None => (by_rule.clone(), by_rule_cache.clone()),
     };
-    let ok_to_delete = deletable(&cache, &output, &home);
+    let ok_to_delete = owns_cache(&cache, &by_rule_cache, &output);
     Some(Scene {
+        root,
         output,
         cache,
-        deletable: ok_to_delete,
+        ours: ok_to_delete,
     })
 }
 
@@ -156,26 +161,32 @@ fn config_dir_of(install: &Path, identifier: &str) -> PathBuf {
 }
 
 /// 设置里存过的绝对路径才算数：空串是老版本没写过这个字段，相对路径不知道相对于谁
-fn absolute_or(raw: String, fallback: PathBuf) -> PathBuf {
+fn absolute_or(raw: String, fallback: &Path) -> PathBuf {
     let p = PathBuf::from(raw.trim());
     if !raw.trim().is_empty() && p.is_absolute() {
         p
     } else {
-        fallback
+        fallback.to_path_buf()
     }
 }
 
-/// 这个缓存目录能不能交给壳去 `remove_dir_all`。四条判据全站在"删错的代价"那一侧：
-/// 宁可留一份没删干净的缓存，也不能顺着一条看不准的路径把人家的目录端掉
-fn deletable(cache: &Path, output: &Path, home: &Path) -> bool {
-    cache.is_absolute()
-        // 段数不到 3 的是盘根本身或它的直接子级（`E:\`、`C:\Users`）——缓存不可能长这样
-        && cache.components().count() >= 3
-        // 早先把用户目录当过数据根的那些人，home 里躺着的可能是他全部的文件
-        && cache != home
-        // 两个目录撞在一处、或产物就建在缓存底下：这一刀不下去，产物优先
-        && output != cache
-        && !output.starts_with(cache)
+/// 这个缓存目录是不是我们**造**出来的。两条判据任一成立才算：
+/// ① 目录里躺着归属标记——主应用与安装壳只在「这个目录由这一次调用建出来」时盖章
+///    （判据见 `data_root::claim_cache_root`），所以它证明的是目录是我们造的，不是往里写过东西；
+/// ② 没有标记，但目录正好等于按规则算出来的那一个。标记是这次才有的就绪状态，之前装好的
+///    安装拿不到它，而那个位置从建出来起就只有我们用。
+///
+/// 人在设置里把缓存指到自己**已有**的目录（`D:\Games`、`C:\Users\me\Documents` 那一类）时
+/// 两条都不成立 ⇒ 一个条目都不删，只在完成页用「缓存未清除」那行点名它。这里不对称的代价
+/// 很清楚：删错一次收不回来，留一份没删干净的缓存只是占着磁盘。
+///
+/// 产物优先：output 就是缓存、或建在缓存底下时不删——清单里那四个桶是目录，一旦产物落在
+/// `cache\files\` 这类位置上，按清单收等于把用户的整合包端走
+fn owns_cache(cache: &Path, by_rule: &Path, output: &Path) -> bool {
+    if output == cache || output.starts_with(cache) {
+        return false;
+    }
+    cache.join(data_root::CACHE_MARKER).is_file() || cache == by_rule
 }
 
 fn home_dir() -> Option<PathBuf> {
@@ -184,9 +195,56 @@ fn home_dir() -> Option<PathBuf> {
         .map(PathBuf::from)
 }
 
-/// 壳自己删缓存的重试次数。`remove_dir_all` 失败时通常已经删掉了一半（杀软正拿着某个文件），
-/// 判据用"目录还在不在"而不是错误码，重试就是接着删剩下那半
+/// 壳自己删缓存的重试次数。删不动通常是杀软正攥着某个文件，这时往往已经删掉了一半，
+/// 判据用"清单里还有没有东西"而不是错误码，重试就是接着收剩下那半
 const CACHE_TRIES: usize = 3;
+
+/// 收缓存：一轮把 `data_root::CACHE_OWNED` 点到的名字各删一次，收尾用**非递归**的 `remove_dir`。
+///
+/// 为什么不整目录递归删：缓存目录的位置来自 `settings.json` 里的一串字符，那可以是任何人
+/// 挑的目录（`owns_cache` 只证明目录是我们造的，不证明里面只有我们的东西）。清单里每一项
+/// 都出自常量 ⇒ 拼出来的路径每一段都在我们名下，`remove_dir_all` 才敢往下扎。
+/// 表外还有东西就说明这目录被人用过，壳没能力判断那些归谁，于是留着目录本身、在完成页报一句
+///
+/// 标记最后撤：它是这一路"归我们"的凭据，中途没了会让重试认错目录
+fn clear_cache(cache: &Path) {
+    for name in data_root::CACHE_OWNED {
+        let entry = cache.join(name);
+        // 桶是整目录（里面全是可再生数据），索引是躺在根上的一张表；删不动就留给下一轮
+        if entry.is_dir() {
+            let _ = std::fs::remove_dir_all(&entry);
+        } else if entry.exists() {
+            let _ = std::fs::remove_file(&entry);
+        }
+    }
+    let _ = std::fs::remove_file(cache.join(data_root::CACHE_MARKER));
+    let _ = std::fs::remove_dir(cache);
+}
+
+/// 清单里还有东西吗。空桶目录也算数——它同样归我们，收到零字节也得收掉，不然重试的
+/// 停止条件会把「还剩一个空壳」读成「已经收空」而提前停手
+fn owned_left(cache: &Path) -> bool {
+    data_root::CACHE_OWNED
+        .iter()
+        .any(|name| cache.join(name).exists())
+}
+
+/// 清单里那些条目的字节合计。进度分母只算我们真会下手的东西：否则「缓存目录里还躺着
+/// 四十 GB 别人的文件」会被读成「还没删完」，进度条永远到不了该到的位置
+fn owned_bytes(cache: &Path) -> u64 {
+    data_root::CACHE_OWNED
+        .iter()
+        .map(|name| entry_bytes(&cache.join(name)))
+        .sum()
+}
+
+fn entry_bytes(entry: &Path) -> u64 {
+    match entry.metadata() {
+        Ok(m) if m.is_dir() => dir_bytes(entry),
+        Ok(m) => m.len(),
+        Err(_) => 0,
+    }
+}
 
 
 /// 卸载对象所在目录（= NSIS 的 `$INSTDIR`）。启动那一刻定死，命令只读它
@@ -264,7 +322,7 @@ fn emit(app: &AppHandle, pct: f64, done: bool) {
     );
 }
 
-/// 真正的卸载，两段：① 静默跑官方 `uninstall.exe /S` 删程序与老布局；② 壳自己删整合包缓存。
+/// 真正的卸载，两段：① 静默跑官方 `uninstall.exe /S` 删程序与老布局；② 壳按清单收整合包缓存。
 /// 进度按"还剩多少字节"算，成败按残骸判。
 ///
 /// 为什么不看退出码：NSIS 的 `Delete` 失败既不报错也不改退出码（那句 `RMDir "$INSTDIR"` 跑到
@@ -289,7 +347,7 @@ fn uninstall(app: &AppHandle, install: &Path) -> Result<Outcome, String> {
     };
     // 缓存那份字节在动手前量一次并**冻住**：阶段① 每 150ms 重走一遍 GB 级的缓存树，
     // 既抢磁盘又把循环本身拖成"一秒一圈"，而那段时间缓存确实一点没动
-    let cache_bytes = if sc.deletable { dir_bytes(&sc.cache) } else { 0 };
+    let cache_bytes = if sc.ours { owned_bytes(&sc.cache) } else { 0 };
     let total = bytes_of(&program) + cache_bytes;
     let started = Instant::now();
     let mut child = std::process::Command::new(&entry)
@@ -315,21 +373,27 @@ fn uninstall(app: &AppHandle, install: &Path) -> Result<Outcome, String> {
     }
     let _ = child.wait();
 
-    // ② 缓存：这一段没有别的进程在配合，删不动就是真被占着，重试几次是给它让路
-    if sc.deletable {
+    // ② 缓存：这一段没有别的进程在配合，删不动就是真被占着，重试是给它在让路。
+    //    只按清单收（见 clear_cache），收空了就停手——目录本身还可能留着别人放的东西，
+    //    那不是"再来三轮"能解决的，硬来反而会把不该下的手下下去
+    if sc.ours {
         for _ in 0..CACHE_TRIES {
-            if !sc.cache.is_dir() {
-                break;
-            }
-            let _ = std::fs::remove_dir_all(&sc.cache);
+            clear_cache(&sc.cache);
             emit(
                 app,
-                pct_of(total, bytes_of(&program) + dir_bytes(&sc.cache), started),
+                pct_of(total, bytes_of(&program) + owned_bytes(&sc.cache), started),
                 false,
             );
+            if !owned_left(&sc.cache) {
+                break;
+            }
             std::thread::sleep(Duration::from_millis(300));
         }
     }
+    // 数据根那一层壳目录：缓存收空之后通常只剩它一个空壳。这里用**非递归**的 remove_dir，
+    // "它已经空了"就是唯一判据——里面还留着没删掉的缓存条目或用户的产物时它必然删不动，
+    // 于是这一行不需要任何额外的检查
+    let _ = std::fs::remove_dir(&sc.root);
     emit(app, 100.0, true);
     Ok(Outcome {
         output_dir: existing(&sc.output),
@@ -489,7 +553,7 @@ fn dev_dir() -> Option<PathBuf> {
 /// 复制而不是"原地跑完再自删"：正在运行的 exe 删不掉，而这次卸载的目标目录就是它所在的那个
 fn relaunch_from_temp(install: &Path) -> Result<(), String> {
     let exe = std::env::current_exe().map_err(|e| format!("读自身路径失败：{e}"))?;
-    let dir = std::env::temp_dir().join(format!("sideshift-uninstall-{}", std::process::id()));
+    let dir = temp_dir_named(COPY_DIR_PREFIX);
     std::fs::create_dir_all(&dir).map_err(|e| format!("建临时目录 {} 失败：{e}", dir.display()))?;
     let copy = dir.join(SHELL_EXE);
     std::fs::copy(&exe, &copy).map_err(|e| format!("复制到 {} 失败：{e}", copy.display()))?;
@@ -501,11 +565,74 @@ fn relaunch_from_temp(install: &Path) -> Result<(), String> {
     Ok(())
 }
 
+/// %TEMP% 里我们名下的两个目录：壳自己的副本、WebView2 的 profile。
+/// 名字只有这一处能造出来——收尾删的是按同一个 pid 拼出的这两个名字，两边各写一遍就是
+/// 「改了名就删不到」那种残留
+fn temp_dir_named(prefix: &str) -> PathBuf {
+    std::env::temp_dir().join(format!("{prefix}-{}", std::process::id()))
+}
+
+const COPY_DIR_PREFIX: &str = "sideshift-uninstall";
+const VIEW_DIR_PREFIX: &str = "sideshift-uninstall-view";
+
+/// 退出前安排一次延迟自删：%TEMP% 那两处此刻正被这个进程攥着（跑着的 exe 与它的 WebView profile），
+/// 自己删不动，所以交给一条等两秒的 `cmd`——它不攥着我们的镜像文件。官方 NSIS 收它自己那份
+/// %TEMP% 副本走的也是同一条路，这是这一件事的通行做法而不是土办法。
+///
+/// 删的名字只从 [temp_dir_named] 拼出来（不是把任意路径传进来）：`rd /s /q` 拿在一个安装目录上
+/// 就是连用户的产物一起端走，这条口子上不留这种可能
+fn schedule_temp_cleanup() {
+    let dirs = [
+        temp_dir_named(COPY_DIR_PREFIX),
+        temp_dir_named(VIEW_DIR_PREFIX),
+    ];
+    let Some(line) = delayed_delete_line(&dirs) else {
+        return;
+    };
+    cleanup_with(&line);
+}
+
+/// 拼出那条 `cmd` 命令行。路径里带引号时返回 None：`cmd` 会把整串再解析一遍，那种路径能把
+/// 后面的话变成参数。宁可不删（残骸留在 %TEMP%，那是系统清理本来就会扫的地方）
+fn delayed_delete_line(dirs: &[PathBuf]) -> Option<String> {
+    let parts: Vec<String> = dirs
+        .iter()
+        .filter(|d| {
+            let s = d.as_os_str().to_string_lossy();
+            !s.contains('"') && !s.is_empty()
+        })
+        .map(|d| format!("rd /s /q \"{}\"", d.display()))
+        .collect();
+    if parts.is_empty() {
+        return None;
+    }
+    // /S：cmd 剥掉最外层那对引号、其余原样执行，所以每条 `rd` 自己那对引号留得住
+    Some(format!(
+        "/S /C \"ping -n 3 127.0.0.1 >nul & {}\"",
+        parts.join(" & ")
+    ))
+}
+
+/// Windows 走 `cmd`；其它平台（只有测试会走到）没有那份副本可删，就地清空
+#[cfg(windows)]
+fn cleanup_with(line: &str) {
+    use std::os::windows::process::CommandExt;
+    /// 不弹那个黑框：卸载完用户已经看到「已卸载」那一页了
+    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+    let mut cmd = std::process::Command::new("cmd");
+    // raw_arg：这条串要交给 cmd 自己解析，std 的转义（`\"`）它不认
+    cmd.raw_arg(line);
+    let _ = cmd.creation_flags(CREATE_NO_WINDOW).spawn();
+}
+
+#[cfg(not(windows))]
+fn cleanup_with(_line: &str) {}
+
 fn run_ui(install: PathBuf) {
     // WebView2 的 profile 必须放 %TEMP%，不能要默认值：Tauri 在 data_directory 为 None 时会强塞
     // `%LOCALAPPDATA%\{identifier}`，而那正是本次卸载要清掉的老布局目录之一——一个正在跑自己的
     // 卸载器，不该把要删的那个目录锁住
-    let webview = std::env::temp_dir().join(format!("sideshift-uninstall-view-{}", std::process::id()));
+    let webview = temp_dir_named(VIEW_DIR_PREFIX);
     let _ = std::fs::create_dir_all(&webview);
 
     tauri::Builder::default()
@@ -583,6 +710,8 @@ fn main() {
             .map(|p| PathBuf::from(p.trim_matches('"')))
             .unwrap_or_else(own_dir);
         run_ui(dir);
+        // 界面关了才算这一趟结束：那两份 %TEMP% 残骸（副本 exe + WebView profile）归这段收
+        schedule_temp_cleanup();
         return;
     }
 
@@ -613,6 +742,9 @@ fn main() {
         }
     }
     run_ui(dir);
+    // 走到这里的是"就地跑界面"那一档（dev 预览，或复制失败）：没有副本 exe，但 WebView 那份
+    // profile 照样落在 %TEMP%，收尾口径与 ① 相同
+    schedule_temp_cleanup();
 }
 
 #[cfg(test)]
@@ -682,6 +814,25 @@ mod tests {
         std::fs::remove_dir_all(&dir).ok();
     }
 
+    /// 收尾删的只能是 %TEMP% 里我们自己那两个带 pid 的名字；路径里带引号时宁可一个都不删
+    #[test]
+    fn temp_cleanup_only_touches_our_own_names() {
+        let copy = temp_dir_named(COPY_DIR_PREFIX);
+        let view = temp_dir_named(VIEW_DIR_PREFIX);
+        let line = delayed_delete_line(&[copy.clone(), view.clone()]).expect("正常路径要拼得出命令");
+        assert!(line.starts_with("/S /C \"ping"), "cmd 的 /S 与那一下延迟都得在：{line}");
+        assert!(line.contains(&copy.display().to_string()), "没带上副本那一份：{line}");
+        assert!(line.contains(&view.display().to_string()), "没带上 WebView profile：{line}");
+        // 名字必须带 pid：只到前缀等于把别的进程（或下一次卸载）的残骸也端走
+        assert!(line.contains(&format!("-{}", std::process::id())));
+        assert_eq!(
+            delayed_delete_line(&[PathBuf::from(r#"C:\坏"引号"\SideShift"#)]),
+            None,
+            "带引号的路径会把后面的话变成参数"
+        );
+        assert_eq!(delayed_delete_line(&[]), None, "没有要删的东西就不该拼出命令");
+    }
+
     /// 失败文案必须点名还剩什么：只有一句"被占用"的话，人不知道去哪找那个占用者
     #[test]
     fn residue_names_what_is_left() {
@@ -700,27 +851,85 @@ mod tests {
         dir
     }
 
-    /// 删缓存是整个改动里唯一不可逆的一刀，四条判据逐条测：`remove_dir_all` 没有第二次机会
+    /// 删缓存条目是整个改动里唯一不可逆的一刀。判据是「这个目录是我们造的」，两种凭据
+    /// 与三种不该下的手逐条测——`remove_dir_all` 没有第二次机会
     #[test]
-    fn cache_deletion_never_trusts_a_loose_path() {
-        let home = PathBuf::from(if cfg!(windows) { "C:\\Users\\ban" } else { "/home/ban" });
-        let root = home.join("SideShift");
-        let out = root.join("output");
+    fn cache_ownership_needs_proof_the_dir_was_ours() {
+        let base = scratch("owns-cache");
+        let by_rule = base.join("by-rule").join("cache");
+        let output = base.join("output");
+        let chosen = base.join("shared").join("mc-cache");
+        std::fs::create_dir_all(&by_rule).unwrap();
+        std::fs::create_dir_all(&output).unwrap();
+        std::fs::create_dir_all(&chosen).unwrap();
+
         assert!(
-            deletable(&root.join("cache"), &out, &home),
-            "正常那一对（缓存是产物的兄弟目录）必须删得掉，否则这次改动等于没做"
+            !owns_cache(&chosen, &by_rule, &output),
+            "人指过去的既有目录不是我们造的，一个条目都不能删"
         );
-        assert!(!deletable(Path::new("cache"), &out, &home), "相对路径不知道相对于谁");
+        std::fs::write(chosen.join(data_root::CACHE_MARKER), b"").unwrap();
         assert!(
-            !deletable(Path::new(if cfg!(windows) { "E:\\" } else { "/" }), &out, &home),
-            "盘根不是缓存目录"
+            owns_cache(&chosen, &by_rule, &output),
+            "盖了归属标记就该认下这是我们造的目录"
         );
-        assert!(!deletable(&home, &out, &home), "用户目录更不是");
-        assert!(!deletable(&out, &out, &home), "两个目录指向同一处：产物优先");
+
+        // 没有标记、但位置正是规则算出来的那一个：标记是这次才加的就绪状态，
+        // 之前装好的安装要靠这一条才清得掉
+        assert!(owns_cache(&by_rule, &by_rule, &output), "老安装（没标记 + 等于规则那个）要收得干净");
+
+        // 产物落在缓存里：按清单收会把整合包一起端走，这一刀不下去
         assert!(
-            !deletable(&root, &out, &home),
-            "产物建在缓存底下：删缓存会把产物一起端走"
+            !owns_cache(&by_rule, &by_rule, &by_rule.join(data_root::CACHE_FILES_DIR)),
+            "产物建在某个桶里：不删"
         );
+        assert!(
+            !owns_cache(&by_rule, &by_rule, &by_rule),
+            "产物就是缓存本身：不删"
+        );
+
+        std::fs::remove_dir_all(&base).ok();
+    }
+
+    /// 清单外的一律不碰，收尾只看目录空没空——这两条是「按清单删」相对于「整目录递归删」
+    /// 唯一多出来的能力
+    #[test]
+    fn clear_cache_removes_only_what_the_list_names() {
+        let base = scratch("clear-cache");
+        let cache = base.join("cache");
+        std::fs::create_dir_all(&cache).unwrap();
+        for name in data_root::CACHE_OWNED {
+            // 桶是目录、索引是文件，两支都要走到
+            if name.ends_with(".json") {
+                std::fs::write(cache.join(name), "{}").unwrap();
+            } else {
+                std::fs::create_dir_all(cache.join(name).join("sub")).unwrap();
+                std::fs::write(cache.join(name).join("sub").join("blob.bin"), "x").unwrap();
+            }
+        }
+        // 表外的东西：人自己放的，或老版本漏进清单的
+        std::fs::create_dir_all(cache.join("我的整合包")).unwrap();
+        std::fs::write(cache.join("notes.txt"), "x").unwrap();
+        std::fs::write(cache.join(data_root::CACHE_MARKER), "").unwrap();
+        assert!(owned_left(&cache));
+
+        clear_cache(&cache);
+
+        assert!(!owned_left(&cache), "清单里的条目该一个不剩");
+        assert!(cache.is_dir(), "里面还留着别人的东西：目录本身必须留下");
+        assert!(cache.join("我的整合包").is_dir(), "表外的目录不许碰");
+        assert!(cache.join("notes.txt").is_file(), "表外的文件不许碰");
+        assert!(
+            !cache.join(data_root::CACHE_MARKER).exists(),
+            "标记随条目一起撤：留着等于留下一句谎"
+        );
+
+        // 别人的东西挪走之后再走一轮：这次目录空了，顺手撤掉壳
+        std::fs::remove_dir_all(cache.join("我的整合包")).unwrap();
+        std::fs::remove_file(cache.join("notes.txt")).unwrap();
+        clear_cache(&cache);
+        assert!(!cache.exists(), "收空了就该把缓存目录本身也撤掉");
+
+        std::fs::remove_dir_all(&base).ok();
     }
 
     /// 人在设置里改过缓存目录 ⇒ 默认布局算出来的那个 `cache` 就不是它，照着删是删错目录
@@ -741,7 +950,20 @@ mod tests {
 
         let sc = scene(&install, "com.poso.sideshift").expect("临时目录里读得出现场");
         assert_eq!(sc.cache, chosen, "设置里那个路径才是这台机器的缓存");
-        assert!(sc.deletable, "自定义缓存离产物足够远，该删");
+        assert!(
+            !sc.ours,
+            "既没标记又不等于规则算出来的那个 ⇒ 不认归属，一个条目都不该删"
+        );
+
+        // 盖上归属标记（应用自己建出这个目录时就是这一态）才认
+        std::fs::create_dir_all(&chosen).unwrap();
+        std::fs::write(chosen.join(data_root::CACHE_MARKER), "").unwrap();
+        assert!(
+            scene(&install, "com.poso.sideshift")
+                .unwrap()
+                .ours,
+            "有标记就该认下这是我们造的目录"
+        );
 
         std::fs::remove_dir_all(&install).ok();
     }
@@ -765,11 +987,11 @@ mod tests {
     #[test]
     fn only_an_absolute_saved_path_overrides_the_rule() {
         let fb = PathBuf::from(if cfg!(windows) { "F:\\SideShift\\cache" } else { "/mc/cache" });
-        assert_eq!(absolute_or("   ".into(), fb.clone()), fb, "空串是没改过，不是改成了空目录");
-        assert_eq!(absolute_or("relative/cache".into(), fb.clone()), fb, "相对路径不可信");
+        assert_eq!(absolute_or("   ".into(), &fb), fb, "空串是没改过，不是改成了空目录");
+        assert_eq!(absolute_or("relative/cache".into(), &fb), fb, "相对路径不可信");
         // 带首尾空格的绝对路径：trim 之后仍然要采信（settings.json 里存过什么格式不由壳决定）
         let padded = format!("  {}  ", fb.display());
-        assert_eq!(absolute_or(padded, fb.clone()), fb);
+        assert_eq!(absolute_or(padded, &fb), fb);
     }
 
     /// 进度是卸载中唯一的反馈：分子不能大于分母，也不能倒挂

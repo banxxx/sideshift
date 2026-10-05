@@ -27,9 +27,9 @@ pub fn urlencoding(s: &str) -> String {
     out
 }
 
-/// 下载缓存的根子目录名：`{cache}\files\{键}\{文件名}`。布局只在这里写一次，
-/// 清理侧（`core::cleanup`）引的是这个常量，否则两边各拼一遍字符串迟早分叉
-pub const CACHE_FILES_DIR: &str = "files";
+/// 下载缓存的根子目录名：`{cache}\files\{键}\{文件名}`。字面量在 `core::data_root`（那张表
+/// 同时是卸载壳的删除清单），这里把它接进本模块的命名空间，清理侧仍引这一个名字
+pub use crate::core::data_root::CACHE_FILES_DIR;
 /// 半成品后缀：`{文件名}.part{尝试序号}`（写侧是 client 的 `temp_path`，判侧是 `is_partial_name`）
 pub(crate) const PART_MARKER: &str = ".part";
 

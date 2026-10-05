@@ -26,8 +26,9 @@ use crate::core::downloader::{
 };
 use crate::models::{UpdateChannel, UpdateStage, UpdateStatus};
 
-/// 缓存里的第 6 类：`{cache}\update\{版本}\`。**目录名只在这里写一次**，清理侧引的是这个常量
-pub const CACHE_UPDATE_DIR: &str = "update";
+/// 缓存里的第 6 类：`{cache}\update\{版本}\`。字面量在 `core::data_root`（那张表同时是
+/// 卸载壳的删除清单），清理侧引的是这一个名字
+pub use crate::core::data_root::CACHE_UPDATE_DIR;
 
 /// 进度与阶段的事件名。一条载荷 = 整个 `UpdateStatus`，前端不必把两张表拼起来才知道「在下第几版」
 pub const EVENT_PROGRESS: &str = "update://progress";

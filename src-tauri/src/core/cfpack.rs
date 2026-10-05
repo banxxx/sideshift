@@ -17,7 +17,8 @@ use super::downloader::{CfFileMeta, Downloader};
 use super::parser::{CfRef, ParsedPack};
 use crate::models::CfLink;
 
-const INDEX_FILE: &str = "cf-files-index.json";
+/// 字面量单源在 `core::data_root`（那张表同时是卸载壳的删除清单）
+const INDEX_FILE: &str = super::data_root::CACHE_CF_INDEX;
 
 /// 一次在线轮里同时发几发。CF 门口有限流（经镜像同样存在），并发拉高只是把 429 提前；
 /// 与 env 那侧的麦块档同宽（4）；官方反查那档已经抬到 16，这一档不跟着抬——它撞的是 CF 门口

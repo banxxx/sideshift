@@ -21,7 +21,8 @@ const NEOFORGE_VERSIONS: &str =
 /// 与 `env-index.json` 同级，也就是躺在 `files\` 与 `tasks\` 这两个可清理目录**之外** ⇒ 设置页
 /// 那张缓存卡看不见它（它不是「越攒越大的那类东西」：一条一个整数，全官方版本封顶一千来条）。
 /// 存的是不可变事实——某个 MC 版本要哪档 Java 永远不会改 ⇒ 命中即用，不设 TTL。
-const JAVA_INDEX_FILE: &str = "java-index.json";
+/// 字面量单源在 `core::data_root`（那张表同时是卸载壳的删除清单）
+const JAVA_INDEX_FILE: &str = crate::core::data_root::CACHE_JAVA_INDEX;
 
 /// MC 版本清单：piston-meta 一次全量返回，内容周级才动 ⇒ 进程内问一次就够（规矩见 `OnceTable`）
 static MC_VERSIONS: OnceTable<VersionOption> = OnceTable::new();

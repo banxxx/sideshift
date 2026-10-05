@@ -6,9 +6,9 @@ use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
 
-use crate::core::downloader::{CACHE_FILES_DIR, is_partial_name};
-use crate::core::update::fetch::{CACHE_UPDATE_DIR, busy as update_running};
-use crate::task_engine::CACHE_TASKS_DIR;
+use crate::core::data_root::{CACHE_FILES_DIR, CACHE_TASKS_DIR, CACHE_UPDATE_DIR};
+use crate::core::downloader::is_partial_name;
+use crate::core::update::fetch::busy as update_running;
 use crate::models::{CacheUsage, CleanReport};
 
 /// 「未使用」的天数门槛。缓存文件的 mtime 在每次命中复用时都会被刷新

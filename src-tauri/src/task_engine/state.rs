@@ -53,6 +53,13 @@ impl AppState {
             templates: load_templates(app),
             ..Default::default()
         };
+        // 缓存目录归属盖章：只有本次真的建出这个目录才算「我们造的」，卸载壳凭这颗标记
+        // 决定敢不敢删里面的条目（判据与为什么不能拿 `create_dir_all` 判定，见
+        // `core::data_root::claim_cache_root`）。放在这里而不是每个写入点：设置里的
+        // `cache_dir` 在这一步就已经定下来了
+        let _ = crate::core::data_root::claim_cache_root(&std::path::PathBuf::from(
+            &inner.settings.cache_dir,
+        ));
         load_tasks(app, &mut inner);
         sweep_task_staging(&inner);
         Self {

@@ -14,7 +14,8 @@ use super::evidence::{evidence_from_modrinth, put, rank, Evidence, EvidenceMap};
 use super::ident::{is_slug, slugs_from_file_name};
 use super::jar::JarProbe;
 
-const INDEX_FILE: &str = "env-index.json";
+/// 字面量单源在 `core::data_root`（那张表同时是卸载壳的删除清单）
+const INDEX_FILE: &str = crate::core::data_root::CACHE_ENV_INDEX;
 
 /// 本地索引里一条结论的保鲜期。端声明基本是静态的，但「作者后来修正了服务端支持」
 /// 与「镜像快照滞后」都是真事：过期的结论照常垫底（在线轮被掐时它不至于裸奔），

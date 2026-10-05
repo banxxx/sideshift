@@ -378,9 +378,9 @@ pub fn install(
     }
 }
 
-/// 复用缓存的桶名。第 8 步的清理面板与这里必须同一个字面量（照 `CACHE_FILES_DIR` 的规矩：
-/// 布局常量集中在写入方，两边各写一遍字符串迟早分叉）
-pub const INSTALLS_DIR_NAME: &str = "installs";
+/// 复用缓存的桶名：`{cache}/installs/{loader}/{mc}-{loader ver}`。字面量在 `core::data_root`
+/// （那张表同时是卸载壳的删除清单），清理面板与这里引的是同一个名字
+pub use crate::core::data_root::CACHE_INSTALLS_DIR;
 /// 装完才原子改名进真名 ⇒ 复用侧永远看不见半截；这个后缀本身即「上次没走完」的记号
 const PARTIAL_SUFFIX: &str = ".partial";
 /// 净化后一段键名的长度上限：真版本号不到 20 字符，长得离谱只可能是在灌路径
@@ -431,7 +431,7 @@ fn segment(loader: LoaderKind) -> &'static str {
 /// 官方给的那枚 server jar 本身就是安装器 + 启动器，交给服务器首启自装）。
 pub fn install_dir(cache_dir: &Path, loader: LoaderKind, mc_version: &str, loader_version: &str) -> PathBuf {
     cache_dir
-        .join(INSTALLS_DIR_NAME)
+        .join(CACHE_INSTALLS_DIR)
         .join(segment(loader))
         .join(format!("{}-{}", sanitize(mc_version), sanitize(loader_version)))
 }
@@ -681,7 +681,7 @@ mod tests {
     #[test]
     fn install_dir_cannot_be_steered_out_of_the_bucket() {
         let base = Path::new(if cfg!(windows) { "E:\\cache" } else { "/cache" });
-        let bucket = base.join(INSTALLS_DIR_NAME).join("forge");
+        let bucket = base.join(CACHE_INSTALLS_DIR).join("forge");
         for bad in [
             "../../../../Windows/System32",
             "..\\..\\..\\x",
@@ -807,7 +807,7 @@ mod tests {
 
         assert!(matches!(err, InstallError::Spawn(_)), "{err}");
         assert!(!scratch.exists(), "本次建的空目录不能留下");
-        assert!(!cache.join(INSTALLS_DIR_NAME).exists(), "复用关着就不该碰缓存桶");
+        assert!(!cache.join(CACHE_INSTALLS_DIR).exists(), "复用关着就不该碰缓存桶");
         std::fs::remove_dir_all(cache).ok();
     }
 

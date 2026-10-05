@@ -30,6 +30,16 @@
     RMDir /r "$APPDATA\${BUNDLEID}"
     RMDir /r "$LOCALAPPDATA\${BUNDLEID}"
 
+    ; 注册表里剩下那两处，同样照上面那条理由来清：模板把它们和那两个目录一起挂在
+    ; `$DeleteAppDataCheckboxState = 1` 底下，而静默卸载根本不建那一页（那个变量只由那一页的
+    ; BM_GETCHECK 赋值）⇒ 人不勾选就永远留着他机器上的 `Software\poso`。
+    ; hive 直接给 HKCU：这侧的安装档是 currentUser，写入的那侧就是它。
+    ; `Installer Language` 是主键里的一个值，删主键就连它一起删——模板那句 DeleteRegValue
+    ; 是给 SHCTX=HKLM 的安装补 HKCU 那一侧的，我们没那个分叉
+    DeleteRegKey HKCU "${MANUPRODUCTKEY}"
+    ; 厂商键只在空了的时候删：同一台机器上还有别家 poso 的产品时不该连坐
+    DeleteRegKey /ifempty HKCU "${MANUKEY}"
+
     ; 清完才轮得到这句：模板自己那句 `RMDir "$INSTDIR"` 跑得太早，那时 appdata 还在里面
     RMDir "$INSTDIR"
   ${EndIf}

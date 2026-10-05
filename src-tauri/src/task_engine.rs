@@ -21,6 +21,7 @@ pub use schedule::{cancel, create_task, remove_task_staging, retry_task, StartRe
 pub use state::{has_active_tasks, AppState, Inner};
 pub use trash::{drain_trash, entries as trash_entries, restore_task, trash_task, TrashEntry};
 
-/// 单条任务的暂存目录名：`{cache}\tasks\{任务 id}\staging`。写它的（pipeline/schedule）与
-/// 判它是不是孤儿的（core::cleanup）都引这一个常量，分叉了就是「清理漏掉残留」那种查半天的 bug
-pub const CACHE_TASKS_DIR: &str = "tasks";
+/// 单条任务的暂存目录名：`{cache}\tasks\{任务 id}\staging`。字面量在 `core::data_root`
+/// （那张表同时是卸载壳的删除清单），写它的（pipeline/schedule）与判它是不是孤儿的
+/// （core::cleanup）都引这一个名字，分叉了就是「清理漏掉残留」那种查半天的 bug
+pub use crate::core::data_root::CACHE_TASKS_DIR;

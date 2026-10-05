@@ -13,6 +13,10 @@ pub fn set_settings(app: AppHandle, state: S<'_>, settings: AppSettings) -> Resu
     let settings = settings.normalized();
     // 先落盘再改内存：写失败时内存仍是旧值，前端据此回滚，不会出现「界面已生效、重启又变回去」
     task_engine::save_settings(&app, &settings)?;
+    // 换目录后给新那口缓存盖章（判据见 `core::data_root::claim_cache_root`：只有本次真的
+    // 建出来的目录才算我们造的）。盖不上不影响能用，只影响卸载时敢不敢删它
+    let _ =
+        crate::core::data_root::claim_cache_root(&std::path::PathBuf::from(&settings.cache_dir));
     lock(&state).settings = settings;
     Ok(())
 }

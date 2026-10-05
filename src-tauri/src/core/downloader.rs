@@ -25,8 +25,9 @@ pub use types::{
     DownloadError, Fetch, FetchSource, ItemSpec, TransferProgress, app_code, net_code,
     net_timeout_code, reqwest_code,
 };
-// 缓存布局的两个事实交给清理侧用（core::cleanup）：目录名与半成品判据，写与删共用一份
-pub use util::{is_partial_name, CACHE_FILES_DIR};
+// 半成品判据交给清理侧用（core::cleanup）：写与删共用一份。缓存目录名不在这里，单源是
+// `core::data_root` 那张表（卸载壳的删除清单引的是同一份）
+pub use util::is_partial_name;
 // 应用更新那条链借三件现成的事实：同一个 UA（GitHub 侧认的是同一个应用）、
 // 半成品后缀与种类码出口。它自己不走 Downloader——那个客户端设了整请求 120s 上限，
 // 十几 MB 的包在弱网下本来就该跑几分钟（见 core::update::fetch）
