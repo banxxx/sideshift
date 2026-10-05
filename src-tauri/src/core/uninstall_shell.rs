@@ -3,9 +3,13 @@
 //!
 //! 两处消费的差异只有三件：壳字节来自**各自的 build.rs 内嵌**（各自的 OUT_DIR）、
 //! 什么时候跑（安装壳在装完那一刻、主应用在每次启动自愈）、入口判定的宽严
-//! （安装壳面对的键是 NSIS 刚写入的，文件名判据即充分；主应用的自愈面对的是
-//! 可能来自任何地方的键，必须验目录归属——见 `classify_entry` 的 `own_dir`）。
-//! 其余行为逐字一致：**改一处必改另一处**。
+//! （两者都验目录归属，见 `classify_entry`）。其余行为逐字一致：**改一处必改另一处**。
+//!
+//! 「投递失败只有一句 Note、不打日志也不弹窗」是刻意的设计而非疏漏：Note 的产生场景
+//! 在构建端已被消灭（release 构建缺壳由 build.rs 硬失败，见主应用 build.rs），剩下的
+//! 只有运行期罕见的注册表/IO 失败——每一种的后果都是「退回原生卸载器，控制面板照常
+//! 可卸」，功能上没有损失；release 是 windows 子系统没有控制台，为一种自愈的降级态
+//! 专门起一条 UI 通知，与它「用户没做错任何事」的性质不匹配。
 
 use std::path::Path;
 
@@ -72,11 +76,10 @@ pub fn self_heal(exe_dir: &Path, config_dir: &Path) -> Option<String> {
     }
 }
 
-/// 入口判定。
-///
-/// `own_dir = None`：键是 NSIS 刚写入的（安装壳场景），文件名判据即充分；
-/// `own_dir = Some(dir)`：键可能来自任何地方（主应用启动自愈的场景），入口指着的
-/// `uninstall.exe` 必须就在 `dir` 里才动手——dev 进程、可攜形态、别的安装，都自然跳过。
+/// 入口判定。`own_dir` = 当前 exe 所在的目录，**必传**：两个消费方（安装壳的首装投递、
+/// 主应用的启动自愈）面对的键都可能来自任何地方——安装壳那边 NSIS 刚写的键虽然路径必然
+/// 是本次安装目录，但「文件名 + 目录」双判据对它同样成立，没有为它省掉目录的必要。
+/// 入口指着的卸载器必须就在 `own_dir` 里才动手：dev 进程、可攜形态、别的安装，都自然跳过。
 ///
 /// 已经指向壳（哪怕在别的目录）永远判 `Already` 不改写：Already 不写任何东西，是安全的；
 /// 真正的改写只发生在原生入口上，而那一条被目录守卫拦住。
@@ -84,7 +87,7 @@ pub fn classify_entry(
     existing: Option<&str>,
     names: &Names,
     install_dir: &Path,
-    own_dir: Option<&Path>,
+    own_dir: &Path,
 ) -> Entry {
     let Some(raw) = existing.map(str::trim).filter(|s| !s.is_empty()) else {
         return Entry::Foreign;
@@ -101,13 +104,11 @@ pub fn classify_entry(
     if name != names.native.to_ascii_lowercase() {
         return Entry::Foreign;
     }
-    if let Some(own) = own_dir {
-        let Some(entry_dir) = Path::new(unquoted).parent() else {
-            return Entry::Foreign;
-        };
-        if !same_dir(entry_dir, own) {
-            return Entry::Foreign;
-        }
+    let Some(entry_dir) = Path::new(unquoted).parent() else {
+        return Entry::Foreign;
+    };
+    if !same_dir(entry_dir, own_dir) {
+        return Entry::Foreign;
     }
     Entry::Rewrite(format!("\"{}\"", install_dir.join(names.shell).display()))
 }
@@ -139,7 +140,7 @@ pub fn deliver(names: &Names, install_dir: &Path, config_dir: &Path) -> Deliver 
             "卸载界面没换成自带的那套：读卸载注册表键失败。控制面板里的卸载仍然可用".into(),
         );
     };
-    match classify_entry(existing.as_deref(), names, install_dir, Some(install_dir)) {
+    match classify_entry(existing.as_deref(), names, install_dir, install_dir) {
         Entry::Already if target.is_file() => Deliver::Already,
         // 入口已是壳但文件不在（被人动了）：补投一份，注册表不用改
         Entry::Already => match write_shell(&target) {
@@ -307,23 +308,23 @@ mod tests {
         let install = Path::new("E:\\SideShift");
         // 模板写的值带引号，且 $INSTDIR 的分隔符尾注不确定 → 只认文件名
         let native = "\"E:\\SideShift\\uninstall.exe\"".to_string();
-        let Entry::Rewrite(v) = classify_entry(Some(&native), &n, install, Some(install)) else {
+        let Entry::Rewrite(v) = classify_entry(Some(&native), &n, install, install) else {
             panic!("原生入口必须改成壳");
         };
         assert_eq!(v, "\"E:\\SideShift\\SideShift-Uninstall.exe\"");
         // 升级覆盖时读回来的已经是壳：不能再改一次，也不该报任何话
         let already = format!("\"{}\"", shell_of(install, n.shell));
         assert!(matches!(
-            classify_entry(Some(&already), &n, install, Some(install)),
+            classify_entry(Some(&already), &n, install, install),
             Entry::Already
         ));
         // 大小写与正斜杠都不是判据（同一目录的另一种写法；own_dir 守卫只拦**别的**目录）
         assert!(matches!(
-            classify_entry(Some("e:/sideshift/UNINSTALL.EXE"), &n, install, Some(install)),
+            classify_entry(Some("e:/sideshift/UNINSTALL.EXE"), &n, install, install),
             Entry::Rewrite(_)
         ));
-        assert!(matches!(classify_entry(None, &n, install, Some(install)), Entry::Foreign));
-        assert!(matches!(classify_entry(Some("   "), &n, install, Some(install)), Entry::Foreign));
+        assert!(matches!(classify_entry(None, &n, install, install), Entry::Foreign));
+        assert!(matches!(classify_entry(Some("   "), &n, install, install), Entry::Foreign));
     }
 
     fn shell_of(dir: &Path, name: &str) -> String {
@@ -340,20 +341,20 @@ mod tests {
         // 装好的应用的原生入口：dev 进程不许碰
         let native_elsewhere = format!("\"{}\"", installed_dir.join(n.native).display());
         assert!(matches!(
-            classify_entry(Some(&native_elsewhere), &n, dev_dir, Some(dev_dir)),
+            classify_entry(Some(&native_elsewhere), &n, dev_dir, dev_dir),
             Entry::Foreign
         ));
         // 指向别处的壳同名文件：判 Already（不改写任何东西，是安全的——
         // 真正的改写只发生在原生入口上，那一条已被上面的目录守卫拦住）
         let shell_elsewhere = format!("\"{}\"", installed_dir.join(n.shell).display());
         assert!(matches!(
-            classify_entry(Some(&shell_elsewhere), &n, dev_dir, Some(dev_dir)),
+            classify_entry(Some(&shell_elsewhere), &n, dev_dir, dev_dir),
             Entry::Already
         ));
         // 反过来：dev 目录里自己的原生入口（测试二进制覆盖安装的场景）⇒ 改
         let native_own = format!("\"{}\"", dev_dir.join(n.native).display());
         assert!(matches!(
-            classify_entry(Some(&native_own), &n, dev_dir, Some(dev_dir)),
+            classify_entry(Some(&native_own), &n, dev_dir, dev_dir),
             Entry::Rewrite(_)
         ));
     }
@@ -365,7 +366,7 @@ mod tests {
         let install = Path::new("E:\\SideShift");
         for bad in ["\"E:\\\"", "E:\\", "\"uninstall.exe\"", "\"\""] {
             assert!(
-                matches!(classify_entry(Some(bad), &n, install, Some(install)), Entry::Foreign),
+                matches!(classify_entry(Some(bad), &n, install, install), Entry::Foreign),
                 "{bad:?} 不该被判成可改写"
             );
         }
