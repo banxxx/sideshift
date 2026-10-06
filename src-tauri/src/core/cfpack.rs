@@ -15,7 +15,7 @@ use serde::Deserialize;
 
 use super::downloader::{CfFileMeta, Downloader};
 use super::parser::{CfRef, ParsedPack};
-use crate::models::CfLink;
+use crate::models::{CfLink, SideFlag};
 
 /// 字面量单源在 `core::data_root`（那张表同时是卸载壳的删除清单）
 const INDEX_FILE: &str = super::data_root::CACHE_CF_INDEX;
@@ -84,6 +84,17 @@ impl CfIndex {
     fn set_link(&mut self, r: &CfRef, link: CfLink) {
         if let Some(m) = self.map.get_mut(&key_of(r)) {
             m.link = Some(link);
+        }
+    }
+
+    /// 把项目级聚合出的端标签升进内层（原值必须是「已问过、内层 None」）。
+    /// 聚合答 None（项目里真没有一个文件勾过端标签）也升级：把「问过、没有」钉死，
+    /// 否则每轮都对同一批行重发聚合请求
+    pub fn upgrade_env(&mut self, r: &CfRef, sides: Option<(SideFlag, SideFlag)>) {
+        if let Some(m) = self.map.get_mut(&key_of(r)) {
+            if m.env_checked() && m.sides().is_none() {
+                m.env = Some(sides);
+            }
         }
     }
 
@@ -177,6 +188,24 @@ pub fn unprobed_refs(parsed: &ParsedPack, index: &CfIndex) -> Vec<CfRef> {
     for f in &parsed.mod_files {
         let Some(r) = &f.cf else { continue };
         if index.get(r).is_some() && index.link_of(r).is_none() && !out.contains(r) {
+            out.push(r.clone());
+        }
+    }
+    out
+}
+
+/// 文件级端标签**没勾**的那些编号（外层已问、内层 None）：作者上传那一份时没勾
+/// Client/Server（老构建普遍如此），但 CF 网页上仍展示项目级「Environment」——
+/// 从 mod 对象的 `latestFiles` 聚合（`curseforge_project_sides`）给这些行兜底。
+/// 聚合答上的行把内层值升成 Some(Some(..))，下一次进同一个包不再聚合
+pub fn env_unlabeled_refs(parsed: &ParsedPack, index: &CfIndex) -> Vec<CfRef> {
+    let mut out: Vec<CfRef> = Vec::new();
+    for f in &parsed.mod_files {
+        let Some(r) = &f.cf else { continue };
+        let unlabeled = index
+            .get(r)
+            .is_some_and(|m| m.env_checked() && m.sides().is_none());
+        if unlabeled && !out.contains(r) {
             out.push(r.clone());
         }
     }
@@ -294,6 +323,17 @@ pub async fn ensure(
         let need_env = env_unchecked_refs(parsed, &index);
         if !need_env.is_empty() {
             resolve_online(dl, &mut index, cache_dir, &need_env).await;
+        }
+        // 文件级没勾标签的行：CF 网页的项目级「Environment」聚合兜底（latestFiles）。
+        // 聚合答上/答不上都升级内层值，这条腿对这份索引同样永久收队
+        let unlabeled = env_unlabeled_refs(parsed, &index);
+        if !unlabeled.is_empty() {
+            let ids: Vec<String> = unlabeled.iter().map(|r| r.mod_id.clone()).collect();
+            let sides = dl.curseforge_project_sides(&ids).await;
+            for r in &unlabeled {
+                index.upgrade_env(r, sides.get(&r.mod_id).copied().flatten());
+            }
+            index.save(cache_dir);
         }
         let refs = unprobed_refs(parsed, &index);
         if !refs.is_empty() {
@@ -514,6 +554,42 @@ mod tests {
         assert_eq!(out.mod_files[1].cf.as_ref().unwrap().env, None);
     }
 
+    /// 项目级聚合腿：只收「已问过、文件级没勾标签」的行；聚合答案（含 None）
+    /// 升进内层后该行永久收队
+    #[test]
+    fn unlabeled_refs_and_upgrade_env_pin_the_verdict() {
+        use crate::models::SideFlag;
+        let mut index = CfIndex::default();
+        // 已问过、没勾标签（内层 None）
+        index.put(
+            &cf_ref("1", "2"),
+            CfFileMeta { file_name: "a.jar".into(), size_bytes: 5, sha1: None, env: Some(None), link: None },
+        );
+        // 连问都没问过（外层 None）
+        index.put(
+            &cf_ref("9", "9"),
+            CfFileMeta { file_name: "b.jar".into(), size_bytes: 5, sha1: None, env: None, link: None },
+        );
+        let p = pack(vec![row("1", "2"), row("9", "9")]);
+        let need = env_unlabeled_refs(&p, &index);
+        assert_eq!(need.len(), 1, "只聚合「问过但没勾」的行");
+        assert_eq!(need[0].mod_id, "1");
+
+        // 聚合答上 → 升级内层，行上可读、收队
+        index.upgrade_env(&cf_ref("1", "2"), Some((SideFlag::Required, SideFlag::Required)));
+        assert!(env_unlabeled_refs(&p, &index).is_empty(), "升过级的不重问");
+        let out = enrich(&p, &index);
+        assert_eq!(
+            out.mod_files[0].cf.as_ref().unwrap().env,
+            Some((SideFlag::Required, SideFlag::Required))
+        );
+
+        // 聚合答 None（项目里真没人勾标签）→ 也钉死「问过、没有」
+        index.upgrade_env(&cf_ref("9", "9"), None);
+        assert!(env_unlabeled_refs(&p, &index).is_empty(), "答 None 也收队");
+        assert_eq!(out.mod_files[1].cf.as_ref().unwrap().env, None, "None 不是声明");
+    }
+
     /// 热索引：一轮下来名字照常贴回，但**一行缺件都不许冒出来**——索引答过的行不算缺件，
     /// 把「索引里有」演成「拿不到字节」等于用一个假状态拦下一个能构建的包
     #[tokio::test]
@@ -535,3 +611,4 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 }
+

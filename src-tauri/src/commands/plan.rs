@@ -218,10 +218,10 @@ pub async fn classify_pack(
         }
     }
 
-    let mut plan = detector::build_plan(&parsed, strip, &ev, &code);
+    let plan = detector::build_plan(&parsed, strip, &ev, &code);
     // 剔除行补验：声明判剔但没扫过字节的行在这里补上，矛盾会被 detector 按住（见 helper）。
     // src 已被上面那个 spawn_blocking 闭包 move 走，从解析结果里现取（同一个值）
-    let mut plan = ensure_strip_facts(
+    let plan = ensure_strip_facts(
         &parsed,
         plan,
         strip,
@@ -312,11 +312,30 @@ pub async fn classify_pack(
                     &pending,
                     &mut ev,
                     env_source,
-                    mcmod,
                 ),
             )
             .await
             .unwrap_or_default();
+            // CF slug 搜索反查：Modrinth 全落空的行用 jar 内 modId 直查 CF（收录远大于
+            // Modrinth，且 CF slug 与 modId 同形率高，实测 biomesize 一击命中）。
+            // 命中的行带项目级端标签（EnvSource::CfFile），下一层百科只兜仍然无结论的
+            let _ = tokio::time::timeout(
+                env::CF_SEARCH_BUDGET,
+                env::resolve_via_cf_search(&dl, &mut index, &cache_dir, &targets, &mut ev),
+            )
+            .await;
+            // 百科补全腿**独立于平台墙钟**：它串行且慢（一行两发，96 行预算能跑 1-3 分钟），
+            // 挤在平台腿的 60 秒里只会被掐腰——那正是「百科里有数据的模组大量停在需人工」
+            // 的原因（2026-10 实测 FarmingTales 包：6/6 模组百科都有正确声明）。
+            // 单独给它一段自己的时间；到点掐掉时已答的行照常落盘，下一轮（重开页/重新分类）
+            // 靠索引命中接着跑剩下的，渐进覆盖。mcmod 关着时零请求
+            if mcmod {
+                let _ = tokio::time::timeout(
+                    env::MCMOD_BUDGET,
+                    env::resolve_via_mcmod(&dl, &mut index, &cache_dir, &targets, &mut ev),
+                )
+                .await;
+            }
             // —— 锁一：收尾标记 + 合并 touched + 克隆工作表（补扫在锁外做）——
             let work = {
                 let mut g = lock(&state);
@@ -349,9 +368,9 @@ pub async fn classify_pack(
             let Some((parsed, strip, src, mut ev_w, mut code_w)) = work else {
                 return;
             };
-            // —— 锁外：剔除行补验（可能把矛盾剔除按回保留）——
+            // —— 锁外：剔除行补验（可能把矛盾剔除按回保留）；方案在锁二按合并后的表重算 ——
             let base_plan = detector::build_plan(&parsed, strip, &ev_w, &code_w);
-            let plan_v = ensure_strip_facts(
+            let _plan_v = ensure_strip_facts(
                 &parsed,
                 base_plan,
                 strip,
@@ -566,3 +585,131 @@ displayName = "GeckoLib"
         let _ = std::fs::remove_dir_all(dir);
     }
 }
+
+#[cfg(test)]
+mod e2e_diag {
+    use super::*;
+    use crate::core::downloader::Downloader;
+    use std::path::PathBuf;
+
+    /// 端到端诊断（真联网、真实包路径）：跑完整分类链路并打印每行的判定与来源。
+    /// `cargo test --lib e2e_diag -- --ignored --nocapture`
+    #[tokio::test]
+    #[ignore = "真联网：需要真实 mrpack 路径"]
+    async fn e2e_diag_farmingtales() {
+        let path = r"E:\Tencent\QQNT Files\FarmingTales_ForgeⅡ v1.5.1.mrpack";
+        if !std::path::Path::new(path).is_file() {
+            println!("包不存在，跳过");
+            return;
+        }
+        let parsed = parser::parse(std::path::Path::new(path));
+        let cache_dir = PathBuf::from(r"E:\SideShift\cache");
+        let dl = Downloader::new(cache_dir.clone(), 4).with_modrinth_mirror(true);
+
+        // —— 离线段（与 classify_pack 同构，抽不掉因 state 耦合）——
+        let src = parsed.manifest.source_path.clone().unwrap_or_default();
+        let informative = detector::mrpack_env_informative(&parsed.mod_files);
+        let mut index = env::EnvIndex::load(&cache_dir);
+        let need_jar: Vec<env::ProbeReq> = parsed
+            .mod_files
+            .iter()
+            .filter(|f| f.in_pack)
+            .map(|f| env::ProbeReq {
+                path: f.path.clone(),
+                want_sha1: f.sha1.is_none(),
+                want_code: true, // 诊断模式：全扫字节码
+            })
+            .collect();
+        let probes = if src.is_empty() || need_jar.is_empty() {
+            Default::default()
+        } else {
+            tauri::async_runtime::spawn_blocking(move || {
+                env::probe_jars(&PathBuf::from(&src), &need_jar)
+            })
+            .await
+            .unwrap_or_default()
+        };
+        let mut ev: env::EvidenceMap = probes
+            .iter()
+            .filter_map(|(path, p)| p.env.map(|e| (path.clone(), e)))
+            .collect();
+        let code: env::CodeMap = probes
+            .iter()
+            .filter(|(_, p)| p.code != env::CodeFacts::default())
+            .map(|(path, p)| (path.clone(), p.code))
+            .collect();
+        let mut targets = env::targets_for(&parsed.mod_files, informative);
+        env::apply_probes(&probes, &mut targets);
+        let pending = env::apply_index(&index, &targets, &mut ev);
+        let plan = detector::build_plan(&parsed, true, &ev, &code);
+        let remove_before = plan.iter().filter(|m| m.disposition == ModDisposition::Remove).count();
+        let review_before = plan.iter().filter(|m| m.needs_review).count();
+        println!("[离线] Remove={remove_before} 待人工={review_before} pending={}", pending.rows.len());
+
+        // —— 在线段 ——
+        let _ = env::resolve_online(
+            &dl, &mut index, &cache_dir, &targets, &pending, &mut ev, EnvLookupSource::Official,
+        )
+        .await;
+        let _ = tokio::time::timeout(
+            env::CF_SEARCH_BUDGET,
+            env::resolve_via_cf_search(&dl, &mut index, &cache_dir, &targets, &mut ev),
+        )
+        .await;
+        let _ = tokio::time::timeout(
+            env::MCMOD_BUDGET,
+            env::resolve_via_mcmod(&dl, &mut index, &cache_dir, &targets, &mut ev),
+        )
+        .await;
+        let plan = detector::build_plan(&parsed, true, &ev, &code);
+
+        // —— 诊断打印 ——
+        let mut by_source: std::collections::BTreeMap<String, usize> = Default::default();
+        let mut pending_names: Vec<String> = Vec::new();
+        for m in &plan {
+            let slot = by_source.entry(format!("{:?}", m.env_source)).or_insert(0);
+            *slot += 1;
+            if m.needs_review {
+                let ev = ev.get(m.src_path.as_deref().unwrap_or(""));
+                pending_names.push(format!(
+                    "{} [{:?}/{:?} {:?}]",
+                    m.id,
+                    m.client_side,
+                    m.server_side,
+                    ev.map(|e| e.source)
+                ));
+            }
+        }
+        println!("[终态] 按来源分布: {by_source:?}");
+        println!("[终态] Remove={} Keep={} 需人工={}", plan.iter().filter(|m| m.disposition == ModDisposition::Remove).count(), plan.iter().filter(|m| m.disposition == ModDisposition::Keep).count(), plan.iter().filter(|m| m.needs_review).count());
+        println!("--- 仍需人工的行（前 30）---");
+        for n in pending_names.iter().take(30) {
+            println!("  {n}");
+        }
+    }
+}
+
+
+    /// 单行 mcmod 链路验证（真联网）：FTB Library 实测百科有词条 3184。
+    /// 目的：确认「搜索 → 词条 → 名字闸 → 运行环境」整条小链在哪一环断
+    #[tokio::test]
+    #[ignore = "真联网"]
+    async fn mcmod_leg_single_line_probe() {
+        let dl = Downloader::new(std::env::temp_dir().join("ss-diag"), 1);
+        let mut index = env::EnvIndex::default();
+        let mut out = env::EvidenceMap::new();
+        let targets = vec![env::Target {
+            path: "overrides/mods/[FTB]ftb-library-forge-2001.2.12.jar".into(),
+            sha1: None,
+            cf_fingerprint: None,
+            in_pack: true,
+            project_id: None,
+            slugs: vec!["ftblibrary".into()],
+            title: Some("FTB Library".into()),
+        }];
+        // 缓存目录指到临时区：cwd 指仓库目录的话证据缓存（env-index.json）会落进源码树
+        let cache_dir = std::env::temp_dir().join("ss-diag-mcmod");
+        env::resolve_via_mcmod(&dl, &mut index, &cache_dir, &targets, &mut out).await;
+        println!("mcmod 腿结果: {:?}", out.get(&targets[0].path));
+        assert!(out.contains_key(&targets[0].path), "FTB Library 百科有词条且名字同形，应当答上");
+    }

@@ -184,7 +184,7 @@ impl Downloader {
                     i.dest.is_file()
                         && i.sha1
                             .as_deref()
-                            .map_or(true, |h| verify_cache_for(i, &i.dest))
+                            .map_or(true, |_h| verify_cache_for(i, &i.dest))
                 });
             let outcomes: Vec<ItemOutcome> = reused
                 .iter()

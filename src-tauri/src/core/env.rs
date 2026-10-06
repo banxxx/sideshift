@@ -22,9 +22,14 @@ pub use code::{CodeFacts, CodeMap};
 pub use evidence::{put, rank, Evidence, EvidenceMap};
 pub use ident::targets_for;
 pub use index::{
-    apply_index, apply_probes, resolve_added_build, resolve_local_jar, resolve_online, EnvIndex,
-    ONLINE_BUDGET,
+    apply_index, apply_probes, resolve_added_build, resolve_local_jar, resolve_online,
+    EnvIndex, MCMOD_BUDGET, ONLINE_BUDGET,
 };
+// 补全腿由命令层自带预算独立调（不进平台腿墙钟），crate 内可达即可
+pub(crate) use index::{resolve_via_cf_search, resolve_via_mcmod};
+#[cfg(test)]
+pub(crate) use index::Target;
+pub use index::CF_SEARCH_BUDGET;
 pub use jar::{probe_jars, probe_local_jar, ProbeReq};
 
 /// 测试夹具：造 zip / class 字节。jar 层与 code 层的用例都要用，放这一处避免各写一份

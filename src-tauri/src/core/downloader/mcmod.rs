@@ -54,19 +54,31 @@ impl Downloader {
     ) -> Result<McmodPage<Vec<McmodHit>>, DownloadError> {
         let q = query.trim();
         if q.is_empty() {
+            eprintln!("[mcmod] 搜索词为空，跳过");
             return Ok(McmodPage::Absent);
         }
         let url = format!("{MCMOD_SEARCH}?key={}", urlencoding(q));
-        match self.mcmod_html(&url).await? {
-            McmodPage::Blocked => Ok(McmodPage::Blocked),
-            McmodPage::Absent => Ok(McmodPage::Absent),
-            McmodPage::Answered(html) => {
+        match self.mcmod_html(&url).await {
+            Ok(McmodPage::Blocked) => {
+                eprintln!("[mcmod] 搜索被拦（人机验证）：{q}");
+                Ok(McmodPage::Blocked)
+            }
+            Ok(McmodPage::Absent) => {
+                eprintln!("[mcmod] 搜索结果为空：{q}");
+                Ok(McmodPage::Absent)
+            }
+            Ok(McmodPage::Answered(html)) => {
                 let hits = search_hits(&html);
+                eprintln!("[mcmod] 搜索 {q:?} → 解析出 {} 条词条", hits.len());
                 if hits.is_empty() {
                     Ok(McmodPage::Absent)
                 } else {
                     Ok(McmodPage::Answered(hits))
                 }
+            }
+            Err(e) => {
+                eprintln!("[mcmod] 搜索请求失败：{e}");
+                Err(e)
             }
         }
     }
@@ -79,10 +91,17 @@ impl Downloader {
     ) -> Result<McmodPage<McmodEntry>, DownloadError> {
         let url = format!("{MCMOD_CLASS}/{}.html", urlencoding(id));
         match self.mcmod_html(&url).await? {
-            McmodPage::Blocked => Ok(McmodPage::Blocked),
-            McmodPage::Absent => Ok(McmodPage::Absent),
+            McmodPage::Blocked => {
+                eprintln!("[mcmod] 词条页被拦：{id}");
+                Ok(McmodPage::Blocked)
+            }
+            McmodPage::Absent => {
+                eprintln!("[mcmod] 词条页无运行环境字段：{id}");
+                Ok(McmodPage::Absent)
+            }
             McmodPage::Answered(html) => {
                 let Some((client, server)) = env_sides(&html) else {
+                    eprintln!("[mcmod] 词条 {id} 运行环境字段解析失败（改版?）");
                     return Ok(McmodPage::Absent);
                 };
                 // 名字是第二道闸（调用方拿它复核「这页就是我要的那个模组」）；
@@ -265,26 +284,56 @@ pub(crate) fn norm_name(s: &str) -> String {
 /// 括号前那段与本体逐字相同，取它等于把分支的端声明安到本体头上；搜出来的同名衍生模组
 /// （`FTBQuests Optimizer`）同理，模糊匹配会把别的模组的声明当成这一枚的依据，那正是「误判」里最糟的一种
 pub(crate) fn name_forms(display: &str) -> Vec<String> {
-    let mut forms = vec![norm_name(display)];
-    let bare = match display.find(']') {
-        Some(p) if display.starts_with('[') => display[p + 1..].trim_start(),
-        _ => display,
-    };
-    if bare != display {
-        forms.push(norm_name(bare));
+    // 词条名常带「别名段」：`FTBLibrary / FTB GUI Library` 的斜杠前是本名、后是别名。
+    // 先按 `/` 拆段（整串 + 各段），每段再做括号提取——别名段整串归一化会把
+    // 本名与别名拼成一串，候选（本名）永远等形失败（2026-10 端到端实测的断点）
+    let mut segs: Vec<&str> = display.split('/').map(str::trim).collect();
+    if segs.len() == 1 {
+        // 无斜杠：走原有的方括号/括号提取
+        let bare = match display.find(']') {
+            Some(p) if display.starts_with('[') => display[p + 1..].trim_start(),
+            _ => display,
+        };
+        if bare != display {
+            segs.push(bare);
+        }
     }
-    for (open, close) in [('(', ')'), ('（', '）')] {
-        if let (Some(a), Some(b)) = (bare.rfind(open), bare.rfind(close)) {
-            if a < b {
-                forms.push(norm_name(&bare[a + open.len_utf8()..b]));
+    let mut forms = Vec::new();
+    for seg in &segs {
+        let base = norm_name(seg);
+        if base.is_empty() {
+            continue;
+        }
+        // 每段内再做括号提取（括号里的别名/限定语单独成 form）
+        for (open, close) in [('(', ')'), ('（', '）')] {
+            if let (Some(a), Some(b)) = (seg.rfind(open), seg.rfind(close)) {
+                if a < b {
+                    let inner = norm_name(&seg[a + open.len_utf8()..b]);
+                    if !inner.is_empty() {
+                        forms.push(inner);
+                    }
+                }
             }
         }
+        forms.push(base);
     }
     forms.retain(|f| !f.is_empty());
     forms
 }
 
-/// 词条名 ↔ 查询候选（jar 自报显示名 + 文件名/slug 候选）是否同一个模组
+/// 词条名 ↔ 查询候选（jar 自报显示名 + 文件名/slug 候选）是否同一个模组。
+///
+/// 三级比对（宽松度递增，都只在**词级**进行）：
+/// 1. 整串等形（`norm_name` 后）；
+/// 2. 尾部复数 s（实测 Biome Sizes ↔ Biomesize）；
+/// 3. **候选是词条名的连续前缀词**：候选按词切开（`ftb-library` → [ftb, library]），
+///    词条名也按词切开（"FTBLibrary / FTB GUI Library" → [ftblibrary, ftb, gui, library]），
+///    候选词序列在词条词序列里按序出现且**首词相同** ⇒ 同一个模组。
+///    这是 2026-10 端到端诊断实测的主断点：百科词条名常带副标题/别名
+///    （"FTBLibrary / FTB GUI Library"、"[FTBL] FTBLibrary（旧版）"），
+///    整串比对永远失败，38 个「需人工」里一大批死在这一环。
+///    门槛：候选至少 2 个词、且候选词覆盖后剩余的词条词 ≥ 2 时要求候选首词 ≥5 字符——
+///    副标题是别名不是衍生的判据：别名跟本体同端声明（百科编辑就那么填的）
 pub(crate) fn mcmod_confident(cands: &[String], display: &str) -> bool {
     let want: Vec<String> = cands
         .iter()
@@ -292,7 +341,130 @@ pub(crate) fn mcmod_confident(cands: &[String], display: &str) -> bool {
         .filter(|c| !c.is_empty())
         .collect();
     let forms = name_forms(display);
-    want.iter().any(|w| forms.contains(w))
+    // 1+2：整串等形与复数对
+    if want
+        .iter()
+        .any(|w| forms.iter().any(|f| w == f || plural_pair(w, f)))
+    {
+        return true;
+    }
+    // 3：候选词序列是词条词序列的连续前缀。比对前剥掉开头的 `[标签]`：
+    // words_of 只按非字母数字断词，`[FTBL] FTBLibrary…` 的首词是 "ftbl" 而不是
+    // "ftblibrary"，前缀比对就永远落空（2026-10 端到端实测的最后一个断点）
+    let entry_words = words_of(strip_leading_tag(display));
+    want.iter().any(|w| prefix_words_match(w, &entry_words))
+}
+
+/// 剥掉词条名开头的 `[缩写]` 标签段（`[FTBL] FTBLibrary…` → `FTBLibrary…`）。
+/// 没有方括号开头、或方括号后没有剩词时不剥，原样返回
+fn strip_leading_tag(display: &str) -> &str {
+    match display.strip_prefix('[').and_then(|rest| rest.find(']')) {
+        Some(close) => {
+            let rest = display[close + 1..].trim_start();
+            if rest.is_empty() {
+                display
+            } else {
+                rest
+            }
+        }
+        None => display,
+    }
+}
+
+/// 切词：非字母数字处全断（空格/斜杠/括号/标点/CJK 均为界），小写化。
+/// "FTBLibrary / FTB GUI Library" → [ftblibrary, ftb, gui, library]
+fn words_of(s: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut cur = String::new();
+    for c in s.chars() {
+        if c.is_alphanumeric() {
+            cur.extend(c.to_lowercase());
+        } else if !cur.is_empty() {
+            out.push(std::mem::take(&mut cur));
+        }
+    }
+    if !cur.is_empty() {
+        out.push(cur);
+    }
+    out
+}
+
+/// 候选（串）按词切开后是否构成词条词序列的**连续前缀**。
+/// `ftb-library` → [ftb, library]；词条 [ftblibrary, ftb, gui, library] 的前缀
+/// [ftblibrary] 不匹配，但 [ftb, library] 也不是前缀（首词是 ftblibrary）——
+/// 所以同时试「候选整串作为一个词」与「候选按词切开」两种切法
+fn prefix_words_match(want: &str, entry_words: &[String]) -> bool {
+    // 候选本身就是归一化整串（无空格）：与词条首词比对
+    if entry_words.first().is_some_and(|f| f == want) {
+        // 词条还有余词（副标题/别名）时，要求余词是首词的**驼峰切词的延续**——
+        // "FTBLibrary / FTB GUI Library" 的余词 [ftb, gui, library] 里 [ftb] 正是
+        // "ftblibrary" 驼峰切词 [ftb, library] 的首段 ⇒ 别名展开，放行；
+        // "FTBQuests Optimizer" 的余词 [optimizer] 与 [ftb, quests] 对不上 ⇒ 拒
+        return entry_words.len() == 1
+            || subsequence(&camel_words(&entry_words[0]), &entry_words[1..]);
+    }
+    // 多词候选（显示名带空格，如 "ftb library"）：按词切开比对前缀
+    let v = words_of(want);
+    if v.len() >= 2 && v.len() <= entry_words.len() && entry_words[..v.len()] == v[..] {
+        // 首词太短且后面拖着长副标题时不认（防 "jei xxx" 混进 "JEI Something Else"）
+        let first = v[0].chars().count();
+        if entry_words.len() - v.len() >= 2 && first < 4 {
+            return false;
+        }
+        return true;
+    }
+    // 前缀形态："ftb" ↔ "ftblibrary"（候选是首词的前缀，≥4 字符）
+    if entry_words.first().is_some_and(|f| f.starts_with(want) && want.chars().count() >= 4) {
+        return true;
+    }
+    // 缩写形态：候选是词条首词 camel 切词的**合并**（"FTBLibrary" → [ftb, library]
+    // 合并为 "ftblibrary"）——"[FTBL] FTBLibrary（旧版）" 这类词条的首词展开与候选对上
+    let parts = camel_words(entry_words[0].as_str());
+    if parts.len() >= 2 && parts.concat() == want.to_lowercase() {
+        return true;
+    }
+    false
+}
+
+/// 驼峰/连字符切词："ftblibrary" → [ftb, library]；"G1RSet" → [g, r, set]（粗糙但够用——
+/// 它只用于与词条余词做子序列比对，不是名字本身的解析）
+fn camel_words(s: &str) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    let mut cur = String::new();
+    for c in s.chars() {
+        if c.is_ascii_lowercase() {
+            cur.push(c);
+        } else if c.is_ascii_uppercase() {
+            if !cur.is_empty() {
+                out.push(std::mem::take(&mut cur));
+            }
+            cur.push(c.to_ascii_lowercase());
+        } else {
+            // 数字并入当前词，分隔符断词
+            if c.is_ascii_digit() {
+                cur.push(c);
+            } else if !cur.is_empty() {
+                out.push(std::mem::take(&mut cur));
+            }
+        }
+    }
+    if !cur.is_empty() {
+        out.push(cur);
+    }
+    out
+}
+
+/// sub 是否是 super_seq 的子序列（按序出现，可跳）
+fn subsequence(sub: &[String], super_seq: &[String]) -> bool {
+    let mut it = super_seq.iter();
+    sub.iter().all(|s| it.any(|t| t == s))
+}
+/// 仅差一个尾部 's' 的两串（其余逐字相同）且短侧 ≥5 字符
+fn plural_pair(a: &str, b: &str) -> bool {
+    let (short, long) = if a.len() <= b.len() { (a, b) } else { (b, a) };
+    long.starts_with(short)
+        && long.get(short.len()..) == Some("s")
+        && short.chars().count() >= 5
 }
 
 #[cfg(test)]
@@ -360,6 +532,22 @@ mod tests {
             "JustEnoughItems (Legacy)"
         ));
         assert!(!mcmod_confident(&["coppered-equipment".into()], "Exline's Copper Equipment"));
+        // 复数容忍：词条 "Biome Sizes" ↔ jar 内 displayName "Biomesize"（实测案例）
+        assert!(mcmod_confident(&["Biomesize".into()], "Biome Sizes"));
+        // 复数容忍的门槛：短侧 ≥5 字符，"jei" ↔ "jeis" 不放开
+        assert!(!mcmod_confident(&["jei".into()], "JEIs"));
+        // 词级前缀（2026-10 端到端诊断的主断点）：词条名带副标题/别名
+        assert!(mcmod_confident(
+            &["FTB Library".into(), "ftblibrary".into()],
+            "FTBLibrary / FTB GUI Library"
+        ));
+        assert!(mcmod_confident(
+            &["ftblibrary".into()],
+            "[FTBL] FTBLibrary（旧版） (FTBLibrary (Forge) (Legacy))"
+        ), "括号/方括号/CJK 都是词界：ftblibrary 是首词");
+        // 词级前缀的防线：衍生分支不能靠前缀混进来（首词不同即拒）
+        assert!(!mcmod_confident(&["just-enough-items".into()], "JustEnoughItems (Legacy)"));
+        assert!(!mcmod_confident(&["sodium".into()], "Iris/Oculus & GeckoLib Compat"));
         assert!(!mcmod_confident(&["".into()], "钠 (Sodium)"));
     }
 

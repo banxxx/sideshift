@@ -470,6 +470,91 @@ impl Downloader {
         out
     }
 
+    /// 一批 CF mod 的**项目级**端标签（`POST /v1/mods`，响应的 mod 对象带 `latestFiles`）。
+    ///
+    /// 为什么需要它：CF 文件级端标签（`cf_sides`）的覆盖率取决于作者**上传那一份时**勾没勾
+    /// Client/Server——老构建普遍没勾，文件级落空；而 CF 网页上人人可见的「Environment」
+    /// 展示的就是项目级聚合（最新文件的端标签）。聚合口径：`latestFiles` 里**最后一个**
+    /// 带端标签的文件（按列表序即最新序），勾了哪侧就是哪侧，两侧都没勾的文件跳过。
+    /// 全都没有 ⇒ None（这一项真没有声明，不编）。给文件级标签为 None 的行当兜底
+    pub async fn curseforge_project_sides(
+        &self,
+        ids: &[String],
+    ) -> HashMap<String, Option<(SideFlag, SideFlag)>> {
+        let mut out = HashMap::new();
+        let nums: Vec<u64> = ids.iter().filter_map(|s| s.trim().parse().ok()).collect();
+        if nums.is_empty() {
+            return out;
+        }
+        if let Ok(v) = self
+            .post_json(
+                &format!("{CURSEFORGE_API}/mods"),
+                &serde_json::json!({ "modIds": nums }),
+            )
+            .await
+        {
+            if let Some(arr) = v["data"].as_array() {
+                for m in arr {
+                    let id = ident(&m["id"]);
+                    if id.is_empty() {
+                        continue;
+                    }
+                    // latestFiles 列表序即新到旧（实测），取最后一个带端标签的：
+                    // 作者最近一次关心端声明时的写法，比最早那份更接近当前支持状态
+                    let mut sides = None;
+                    for f in m["latestFiles"].as_array().map(Vec::as_slice).unwrap_or_default() {
+                        if let Some(s2) = cf_sides(f) {
+                            sides = Some(s2);
+                        }
+                    }
+                    out.insert(id, sides);
+                }
+            }
+        }
+        out
+    }
+
+    /// 按 slug 搜项目并聚合**项目级**端标签（`GET /v1/mods/search?gameId=432&slug=…`）。
+    ///
+    /// 这是 CF 作为主判定源的通道：jar 内 `mods.toml` 的 modId 与 CF slug 高度一致
+    /// （实测 `biomesize` 一击命中 "Biome Sizes"），对 Modrinth 未收录的 CF 独占模组
+    /// 是唯一可靠的反查入口。聚合口径与 `curseforge_project_sides` 相同：
+    /// `latestFiles` 里最后一个带端标签的文件。
+    /// `Ok(None)` = 搜索无此 slug、返回项目的 slug 与查询词同形失败、或真没有端标签——
+    /// 三种都不算故障（找不到就留给下一层）
+    pub async fn curseforge_slug_sides(
+        &self,
+        slug: &str,
+    ) -> Result<Option<(SideFlag, SideFlag)>, DownloadError> {
+        let slug = slug.trim();
+        if slug.is_empty() {
+            return Ok(None);
+        }
+        let url = format!(
+            "{CURSEFORGE_API}/mods/search?gameId={MC_GAME_ID}&slug={}",
+            urlencoding(slug)
+        );
+        let v = self.get_json(&url).await?;
+        let m = &v["data"][0];
+        let id = ident(&m["id"]);
+        if id.is_empty() {
+            return Ok(None);
+        }
+        // 同形闸：返回项目的 slug 必须与查询词归一化相等——
+        // 搜索接口对 slug 的匹配是前缀/包含式的，不验就可能是另一个模组
+        let returned = m["slug"].as_str().unwrap_or_default();
+        if returned.trim() != slug.trim() {
+            return Ok(None);
+        }
+        let mut sides = None;
+        for f in m["latestFiles"].as_array().map(Vec::as_slice).unwrap_or_default() {
+            if let Some(s2) = cf_sides(f) {
+                sides = Some(s2);
+            }
+        }
+        Ok(sides)
+    }
+
     /// 单个项目的展示信息（`GET /v1/mods/{modId}`）：详情页直跳一枚前置时补齐详情页要的
     /// 那几样，作者/简介/图标/下载量都在这一发响应里。CF 没有项目级端声明，两侧恒空——
     /// 详情页的端标签会退到版本行那份构建级标签（`file_entry`），与搜索结果同一口径
@@ -952,5 +1037,39 @@ mod tests {
             files.len(),
             briefs.len()
         );
+    }
+
+    /// 项目级端标签聚合：latestFiles 里取**最后一个**带 Client/Server 标签的文件
+    /// （列表序即新到旧）；全程没勾的项目答 None
+    #[test]
+    fn project_sides_take_the_latest_tagged_file() {
+        let resp = serde_json::json!({
+            "data": [
+                { "id": 238222, "latestFiles": [
+                    { "id": 1, "gameVersions": ["1.19.2", "Fabric"] },
+                    { "id": 2, "gameVersions": ["1.19.2", "Fabric", "Client", "Server"] },
+                    { "id": 3, "gameVersions": ["1.19.2", "Fabric", "Client"] }
+                ]},
+                { "id": 999, "latestFiles": [
+                    { "id": 4, "gameVersions": ["1.12.2", "Forge"] }
+                ]}
+            ]
+        });
+        let mut sides = HashMap::new();
+        for m in resp["data"].as_array().unwrap() {
+            let id = ident(&m["id"]);
+            let mut got = None;
+            for f in m["latestFiles"].as_array().map(Vec::as_slice).unwrap_or_default() {
+                if let Some(s2) = cf_sides(f) {
+                    got = Some(s2);
+                }
+            }
+            sides.insert(id, got);
+        }
+        use crate::models::SideFlag;
+        // id=238222：最后一个带标签的是 id=3（只勾 Client）
+        assert_eq!(sides["238222"], Some((SideFlag::Required, SideFlag::Unsupported)));
+        // id=999：没有一个文件勾端标签 → None
+        assert_eq!(sides["999"], None);
     }
 }

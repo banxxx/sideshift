@@ -121,6 +121,10 @@ pub struct Target {
     pub slugs: Vec<String>,
     /// 可读模组名（按名搜索兜底；优先取 jar 内作者写的显示名）
     pub title: Option<String>,
+    /// 字节是否实际在源包里（overrides/mods 索引外文件 / 裸 zip 内 jar 为真）。
+    /// 百科腿的行序用它：**包内的行优先查**——它们是真正会让服务端缺件的行，
+    /// 未下载的行留到预算尾部（那些即使留待人工，也不影响已有字节的对账）
+    pub in_pack: bool,
 }
 
 /// 把 jar 自报的身份与哈希补进反查目标：index 没给 sha1 的行（裸 zip、手动塞进 mods 的 jar）
@@ -219,7 +223,11 @@ impl Pending {
 /// **它挡的不是 429**：2026-09-27 实测 `X-Ratelimit-Limit: 300` 配 1 秒窗口（连发十几发才看得见
 /// `Remaining` 从 300 往下掉，隔秒再发就回满），而我们最宽那档 16 路并发，离那条线还差一个数量级。
 /// 真正会被顶到的是 `ONLINE_BUDGET` 那 60 秒和「一次进页打几百发」的时间账。
-const MAX_LOOKUP_REQUESTS: usize = 150;
+const PROJECT_BUDGET: usize = 150;
+/// 搜索腿的**独立**预算。曾经它与 project 腿共用 150（`MAX - project用量`）——
+/// project 用得越多 search 分得越少，大包里 project 先把预算吃光，
+/// 「按显示名搜索」这条腿一行都没跑过（FarmingTales 包 72 行实测：0 发）
+const SEARCH_BUDGET: usize = 150;
 
 /// 第 3 层一批发多少个哈希。接口一次能吃 1000，但元数据请求**不重试**，一发挂了这一批
 /// 本轮就全没结论；1000 份构建对象的响应拿 `METADATA_TIMEOUT` 那 10 秒去兜也不算宽裕。
@@ -254,7 +262,18 @@ const MIRROR_SEARCH_BUDGET: usize = 150;
 /// 百科补全腿的行上限（每行最多两发：搜索页 + 词条页 ⇒ 最坏 48 个请求）。
 /// 排在平台各腿之后，只处理它们**一条都没答上**的行——那种行通常只剩十几行，
 /// 这个额度基本吃不满；吃不满是好事，顶到的是设计上限，不是故障。
-const MCMOD_ROW_BUDGET: usize = 24;
+/// 百科腿的独立墙钟预算。**不进平台腿的 60 秒**：串行一行两发、48 行预算，
+/// 实测单发 0.5-1.5s ⇒ 90 秒能跑完大半；到点掐掉时已答的行照常落盘，下一轮接着跑
+pub const MCMOD_BUDGET: Duration = Duration::from_secs(90);
+
+/// CF slug 搜索腿的行预算：每行一发（modId 首候选），Modrinth 全落空的行才进这条腿
+const CF_SEARCH_ROW_BUDGET: usize = 96;
+
+/// CF slug 搜索腿的独立墙钟：一发/行 × 96 行 × ~0.3s，60 秒足够；
+/// 每发另有 METADATA_TIMEOUT 兜底
+pub const CF_SEARCH_BUDGET: Duration = Duration::from_secs(60);
+
+const MCMOD_ROW_BUDGET: usize = 96;
 
 /// 在线反查整轮的墙钟预算。命令层用它掐 `resolve_online`：单次请求已经有
 /// `downloader::client::METADATA_TIMEOUT` 各兜 10s，这一档管的是「一百多个请求各慢一点」
@@ -290,7 +309,11 @@ fn project_queue(
         }
         let room = max - used;
         if room == 0 {
+            // 项目腿没跑成的行**转投搜索腿**（一行一发，按显示名搜）——
+            // 曾经这里直接丢弃：这些行连 search 都没享受过，只能落「需人工」。
+            // capped 照样报（本轮确实没全跑完），但行不再失踪
             capped = true;
+            no_cand.push(i);
             continue;
         }
         let take = cands.len().min(room);
@@ -398,10 +421,9 @@ pub async fn resolve_online(
     pending: &Pending,
     out: &mut EvidenceMap,
     source: EnvLookupSource,
-    mcmod: bool,
 ) -> bool {
     if source.is_minekuai() {
-        return resolve_via_mirror(dl, index, cache_dir, targets, pending, out, mcmod).await;
+        return resolve_via_mirror(dl, index, cache_dir, targets, pending, out).await;
     }
     let mut ok = true;
 
@@ -445,8 +467,8 @@ pub async fn resolve_online(
     index.save(cache_dir);
 
     // 第 4 层：项目级 client_side / server_side（哈希不在 Modrinth 上的条目、裸 zip 条目）
-    let (queue, mut by_name, requests, capped) =
-        project_queue(targets, &unresolved, MAX_LOOKUP_REQUESTS);
+    let (queue, mut by_name, _requests, capped) =
+        project_queue(targets, &unresolved, PROJECT_BUDGET);
     if capped {
         ok = false;
     }
@@ -521,7 +543,7 @@ pub async fn resolve_online(
     };
     // 一行一次请求，剩多少预算发多少；剩下的行不查（与串行版撞顶 break 同判据）。
     // 官方档这条腿只发 `api.modrinth.com`：镜像那条腿在 `resolve_via_mirror` 里，两边不同时跑。
-    let run = queries.len().min(MAX_LOOKUP_REQUESTS.saturating_sub(requests));
+    let run = queries.len().min(SEARCH_BUDGET);
     if run < queries.len() {
         ok = false;
     }
@@ -563,7 +585,7 @@ pub async fn resolve_online(
     }
 
     // 收尾：CF 指纹腿（官方平台补全）+ 百科补全腿（看设置开关）。均为补全，失败不改 `ok`
-    shared_tail(dl, index, cache_dir, targets, pending, out, mcmod).await;
+    shared_tail(dl, index, cache_dir, targets, pending, out).await;
 
     // 过期重排的行本轮**成功**重问过还是没有新答案 ⇒ 盖章，下一轮不再重问（`ok=false` 时
     // 一行都不盖：那意味着有请求报错或额度掐顶，剩下的「没答案」是「没问到」，不能当结论存）
@@ -596,7 +618,6 @@ async fn resolve_via_mirror(
     targets: &[Target],
     pending: &Pending,
     out: &mut EvidenceMap,
-    mcmod: bool,
 ) -> bool {
     // 存活自查：两条入口各一发（这一档没有官方链兜着，验不过就等于这一轮没跑完）
     let health = dl.mirror_health().await;
@@ -723,7 +744,7 @@ async fn resolve_via_mirror(
 
     // 收尾：CF 指纹腿（官方平台补全）+ 百科补全腿（看设置开关）。CF 是独立平台，
     // 指纹腿与「选了麦块就只问麦块」的口径不冲突——破的只是「Modrinth 官方一条不发」那句
-    shared_tail(dl, index, cache_dir, targets, pending, out, mcmod).await;
+    shared_tail(dl, index, cache_dir, targets, pending, out).await;
 
     // 盖章的闸门比官方档多一条：这一档两条腿撞顶是**静默**的（设计上限，不报 ok=false），
     // 所以撞过顶就连环都不盖——没派出去的行不能按「问过了没有」存进索引。
@@ -746,12 +767,8 @@ async fn shared_tail(
     targets: &[Target],
     pending: &Pending,
     out: &mut EvidenceMap,
-    mcmod: bool,
 ) {
     resolve_via_fingerprints(dl, index, cache_dir, targets, pending, out).await;
-    if mcmod {
-        resolve_via_mcmod(dl, index, cache_dir, targets, out).await;
-    }
 }
 
 /// CF 指纹腿一批发多少个指纹。接口单批上限 128，取 100 留余量；
@@ -843,14 +860,66 @@ async fn resolve_via_fingerprints(
 /// 采信要**两道同形**：搜索列表里那条的名字要对得上，词条页标题也得对得上（页面改版时
 /// 列表与详情页不会同时恰好糊成一个对得上的名字）。结论同时挂在这一行的 sha1 与全部项目候选下，
 /// 下次离线即答——与其余各层同一口径，也同样受「索引保鲜期」管着（见 `INDEX_TTL_DAYS`）。
-async fn resolve_via_mcmod(
+/// CF slug 搜索反查腿：Modrinth 全落空的行，用 jar 内 modId / 文件名 slug
+/// 向 CF 按项目搜索（`curseforge_slug_sides`）——CF 收录远大于 Modrinth，且
+/// CF 的 slug 与 jar 内 modId 高度一致（实测 `biomesize` 一击命中）。命中项目
+/// 后聚合项目级端标签（`EnvSource::CfFile`），结论挂 `proj:` 键（CF slug）与
+/// `sha1:` 键，下次离线即答。
+///
+/// 行序：**包内的行排前**（与百科腿同一理由：它们才是会让服务端缺件的行）。
+/// 行预算见 `CF_SEARCH_ROW_BUDGET`，每行最多发一发（取首个 slug 候选 = modId，
+/// 它与 CF slug 同形的概率最高）；404 / 同形失败不计故障
+pub(crate) async fn resolve_via_cf_search(
     dl: &Downloader,
     index: &mut EnvIndex,
     cache_dir: &Path,
     targets: &[Target],
     out: &mut EvidenceMap,
 ) {
-    let rows: Vec<(usize, String)> = targets
+    let mut rows: Vec<(usize, bool, String)> = targets
+        .iter()
+        .enumerate()
+        .filter(|(_, t)| !out.contains_key(&t.path))
+        .filter_map(|(i, t)| {
+            let slug = t.slugs.first()?.trim().to_string();
+            (!slug.is_empty()).then_some((i, t.in_pack, slug))
+        })
+        .collect();
+    rows.sort_by_key(|(_, in_pack, _)| !*in_pack);
+    for (i, _, slug) in rows.into_iter().take(CF_SEARCH_ROW_BUDGET) {
+        let t = &targets[i];
+        match dl.curseforge_slug_sides(&slug).await {
+            Ok(Some((c, srv))) => {
+                let ev = Evidence {
+                    client: Some(c),
+                    server: Some(srv),
+                    source: EnvSource::CfFile,
+                };
+                put(out, &t.path, ev);
+                index.record(project_key(&slug), ev);
+                if let Some(h) = &t.sha1 {
+                    index.record(sha1_key(h), ev);
+                }
+                index.save(cache_dir);
+            }
+            // 404 / 同形失败 / 没勾标签：本行无结论，下一层（百科）接着
+            Ok(None) => {}
+            Err(_) => {}
+        }
+    }
+}
+
+pub(crate) async fn resolve_via_mcmod(
+    dl: &Downloader,
+    index: &mut EnvIndex,
+    cache_dir: &Path,
+    targets: &[Target],
+    out: &mut EvidenceMap,
+) {
+    // 行序：**包内的行排前**（字节实际在 overrides/mods 的那些——它们才是会让服务端
+    // 缺件的行；未下载的行即使这一轮没查到，也不影响已有字节的对账）。同一优先级内
+    // 保持 targets 原序（稳定排序，不搅动既有预算分配的可预期性）
+    let mut rows: Vec<(usize, bool, String)> = targets
         .iter()
         .enumerate()
         .filter(|(_, t)| !out.contains_key(&t.path))
@@ -861,9 +930,12 @@ async fn resolve_via_mcmod(
                 .or(t.slugs.first().map(|s| s.as_str()))
                 .map(str::trim)
                 .filter(|q| !q.is_empty())?;
-            Some((i, q.to_string()))
+            Some((i, t.in_pack, q.to_string()))
         })
         .collect();
+    rows.sort_by_key(|(_, in_pack, _)| !*in_pack);
+    let rows: Vec<(usize, String)> =
+        rows.into_iter().map(|(i, _, q)| (i, q)).collect();
     // 一行两发、**整条腿串行**：这家对并发极不友好（实测两路并发时同一句查询会间歇性回
     // 22KB 的空结果页，串行 8 轮 16 发全数正常），而空结果页与「真查无此模组」长得一模一样，
     // 补问一轮也救不回来（实测仍会抖）。慢一点换的是结论稳定，值得
@@ -903,13 +975,19 @@ async fn mcmod_ask(
         Err(_) => return (None, false),
     };
     let Some(hit) = hits.iter().find(|h| mcmod_confident(&cands, &h.name)) else {
-        // 搜到了别的模组：不采信，也不算故障
+        eprintln!(
+            "[mcmod] 名字闸拒绝：候选 {cands:?} ↔ 词条 {names:?}（共 {count} 条）",
+            names = hits.iter().map(|h| h.name.as_str()).collect::<Vec<_>>(),
+            count = hits.len(),
+        );
         return (None, false);
     };
     let entry = match dl.mcmod_entry(&hit.id).await {
         Ok(McmodPage::Answered(e)) => e,
-        Ok(McmodPage::Blocked) => return (None, true),
-        _ => return (None, false),
+        other => {
+            eprintln!("[mcmod] 词条页未答上：{} → {:?}", hit.id, other.as_ref().map(|_| ()));
+            return (None, false);
+        }
     };
     // 第二道同形闸
     if !entry.name.is_empty() && !mcmod_confident(&cands, &entry.name) {
@@ -974,6 +1052,7 @@ pub async fn resolve_local_jar(
         path: key.clone(),
         sha1: probe.sha1.clone(),
         cf_fingerprint: probe.cf_fingerprint,
+        in_pack: true, // 单个 jar 必然是用户手里实际存在的文件
         project_id: None,
         slugs: slugs_from_file_name(file_name),
         title: None,
@@ -1003,7 +1082,22 @@ pub async fn resolve_local_jar(
             &pending,
             &mut out,
             source,
-            mcmod,
+        )
+        .await;
+    }
+    // 单 jar 同样走 CF slug 搜索与百科腿：用户手里实际存在的文件（in_pack=true 的
+    // 语义完全吻合），Modrinth 未收录时 CF slug（与 modId 同形率高）与百科是仅有的数据源
+    if !source.is_off() && out.get(&key).is_none() {
+        let _ = tokio::time::timeout(
+            CF_SEARCH_BUDGET,
+            resolve_via_cf_search(dl, &mut index, cache_dir, &targets, &mut out),
+        )
+        .await;
+    }
+    if mcmod && !source.is_off() && out.get(&key).is_none() {
+        let _ = tokio::time::timeout(
+            MCMOD_BUDGET,
+            resolve_via_mcmod(dl, &mut index, cache_dir, &targets, &mut out),
         )
         .await;
     }
@@ -1124,7 +1218,7 @@ mod tests {
             project_id: None,
             slugs: vec![],
             title: Some("3D Skin Layers".into()),
-        };
+         in_pack: false,};
         assert!(pick_search_hit("3D Skin Layers", &t, &[other.clone(), hit.clone()]).is_some());
         let t2 = Target { title: Some("No Such Mod".into()), ..t.clone() };
         assert!(pick_search_hit("No Such Mod", &t2, &[other, hit]).is_none());
@@ -1138,12 +1232,12 @@ mod tests {
             project_id: None,
             slugs: slugs.iter().map(|s| s.to_string()).collect(),
             title: None,
-        }
+         in_pack: false,}
     }
 
     #[test]
     fn lookup_budget_never_overshoots_and_says_so() {
-        // 50 行 × 2 个候选 = 100 次请求，预算只给 5：预留按整条链，装不下的行整批不查
+        // 50 行 × 2 个候选 = 100 次请求，预算只给 5：预留按整条链，project 腿不超发
         let targets: Vec<Target> = (0..50)
             .map(|n| row(&[&format!("m{n}a"), &format!("m{n}b")]))
             .collect();
@@ -1151,12 +1245,16 @@ mod tests {
         let (queue, no_cand, used, capped) = project_queue(&targets, &all, 5);
         assert_eq!(used, 5, "预留数不能超发：超了就是这一轮的额度形同不存在");
         assert!(capped, "还剩 47 行没查，必须报未全部完成");
-        assert!(no_cand.is_empty());
-        // 前 2 行整链进队，第 3 行只分到 1 个候选，后面的行一条没发
+        // 前 2 行整链进队，第 3 行只分到 1 个候选，后面的行 project 一条没发——
+        // 但它们**转投搜索腿**（no_cand 就是 search 的初始行集），不再像旧实现那样
+        // 既不进 project 也不进 search、整行失踪落「需人工」
         assert_eq!(queue[0].1.len(), 2);
         assert_eq!(queue[1].1.len(), 2);
         assert_eq!(queue[2].1, vec![("m2a".to_string(), false)]);
         assert_eq!(queue.len(), 3);
+        assert_eq!(no_cand.len(), 47, "超预算的 47 行全部转投搜索腿");
+        // 转投的行里有候选（本例 row() 都有 slug），no_cand 命名沿用但语义已扩为
+        // 「不进 project 腿的行」
     }
 
     #[test]
@@ -1214,7 +1312,7 @@ mod tests {
                 project_id: None,
                 slugs: vec![slug.to_string()],
                 title: None,
-            })
+             in_pack: false,})
             .collect();
         let all: Vec<usize> = vec![0, 1, 2];
         let mut index = EnvIndex::load(&dir);
@@ -1232,7 +1330,6 @@ mod tests {
             &pending,
             &mut out,
             EnvLookupSource::Minekuai,
-            false,
         )
         .await;
 
@@ -1278,7 +1375,7 @@ mod tests {
                 project_id: None,
                 slugs: vec!["ftbquests".into()],
                 title: Some("FTB Quests".into()),
-            },
+             in_pack: false,},
             Target {
                 path: "mods/zz-not-a-real-mod.jar".into(),
                 sha1: None,
@@ -1286,7 +1383,7 @@ mod tests {
                 project_id: None,
                 slugs: vec!["zz-not-a-real-mod".into()],
                 title: None,
-            },
+             in_pack: false,},
             Target {
                 path: "mods/sodium.jar".into(),
                 sha1: None,
@@ -1294,7 +1391,7 @@ mod tests {
                 project_id: None,
                 slugs: vec!["sodium".into()],
                 title: Some("Sodium".into()),
-            },
+             in_pack: false,},
         ];
         let mut out: EvidenceMap = [(
             "mods/sodium.jar".to_string(),
@@ -1405,7 +1502,7 @@ displayName = "Obscure Lib"
             project_id: None,
             slugs: vec![],
             title: None,
-        }];
+         in_pack: false,}];
         let mut out = EvidenceMap::new();
         let pending = apply_index(&index, &targets, &mut out);
         assert!(out.contains_key("mods/x.jar"), "过期结论照常垫底，在线轮被掐也不裸奔");
@@ -1447,7 +1544,7 @@ displayName = "Obscure Lib"
             project_id: None,
             slugs: slug.into_iter().map(String::from).collect(),
             title: None,
-        };
+         in_pack: false,};
         let targets = vec![
             target("mods/asked.jar", 'a', Some("asked")),
             target("mods/nameless.jar", 'b', None),
@@ -1598,7 +1695,7 @@ displayName = "Obscure Lib"
             project_id: None,
             slugs: vec!["x".into()],
             title: None,
-        }];
+         in_pack: false,}];
         apply_probes(&probes, &mut targets);
         assert_eq!(targets[0].sha1.as_deref(), Some("ABCdef"));
         assert_eq!(targets[0].title.as_deref(), Some("3D Skin Layers"));

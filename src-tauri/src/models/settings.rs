@@ -264,8 +264,7 @@ impl Default for AppSettings {
             download_source: DownloadSource::Official,
             concurrency: 6,
             env_lookup_source: EnvLookupSource::Official,
-            // 百科补全腿默认关：非官方行为（HTML 解析 + 社区二手声明），见字段注释
-            env_lookup_mcmod: false,
+            env_lookup_mcmod: true,
             update_channel: None,
             // Modrinth 镜像默认开：透明代理无正确性风险，官方兜底消化可用性风险（见字段注释）
             modrinth_mirror: true,

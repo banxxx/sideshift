@@ -196,8 +196,6 @@ mod aikar_tests {
             keep_files: Vec::new(),
             allow_missing_mods: false,
             install_loader_locally: true,
-            reuse_loader_installs: true,
-            verify_after_build: false,
         }
     }
 

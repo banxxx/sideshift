@@ -24,8 +24,8 @@ export const mockDefaultSettings: AppSettings = {
     stripClientOnly: true,
     // 与 Rust 一致：默认问官方。选 `minekuai` 才能演「先自查存活 → 镜像答上 → 官方腿一条不发」
     envLookupSource: "official",
-    // 与 Rust 一致：百科腿默认关（非官方行为 + HTML 解析脆弱，见类型注释）
-    envLookupMcmod: false,
+    // 与 Rust 一致：百科腿默认开（只在平台各腿全空时串行补查）
+    envLookupMcmod: true,
     verifyAfterBuild: false,
     downloadSource: "official",
     concurrency: 6,
