@@ -2,7 +2,7 @@
 name = "sideshift"
 # 版本号唯一真源在根目录 package.json（tauri.conf.json 与前端构建注入都读它）。
 # 这里跟着同步只为让 CARGO_PKG_VERSION 不说假话，实际外显取自 app.package_info()。
-version = "1.0.0-beta.3"
+version = "1.0.0-beta.4"
 description = "SideShift: Minecraft 模组包转换工具"
 authors = ["banxxx"]
 edition = "2021"
