@@ -90,7 +90,7 @@ impl CfIndex {
     /// 把项目级聚合出的端标签升进内层（原值必须是「已问过、内层 None」）。
     /// 聚合答 None（项目里真没有一个文件勾过端标签）也升级：把「问过、没有」钉死，
     /// 否则每轮都对同一批行重发聚合请求
-    pub fn upgrade_env(&mut self, r: &CfRef, sides: Option<(SideFlag, SideFlag)>) {
+    pub fn upgrade_env(&mut self, r: &CfRef, sides: Option<(Option<SideFlag>, Option<SideFlag>)>) {
         if let Some(m) = self.map.get_mut(&key_of(r)) {
             if m.env_checked() && m.sides().is_none() {
                 m.env = Some(sides);
@@ -528,7 +528,7 @@ mod tests {
         use crate::models::SideFlag;
         let mut index = CfIndex::default();
         let mut tagged = meta("oculus-1-2.jar", 10, Some("ab"));
-        tagged.env = Some(Some((SideFlag::Required, SideFlag::Unsupported)));
+        tagged.env = Some(Some((Some(SideFlag::Required), None)));
         index.put(&cf_ref("1", "2"), tagged);
         // 老条目：env 外层 None = 本功能上线前写的，端标签还没问过
         index.put(
@@ -549,7 +549,7 @@ mod tests {
         let out = enrich(&p, &index);
         assert_eq!(
             out.mod_files[0].cf.as_ref().unwrap().env,
-            Some((SideFlag::Required, SideFlag::Unsupported))
+            Some((Some(SideFlag::Required), None))
         );
         assert_eq!(out.mod_files[1].cf.as_ref().unwrap().env, None);
     }
@@ -576,12 +576,12 @@ mod tests {
         assert_eq!(need[0].mod_id, "1");
 
         // 聚合答上 → 升级内层，行上可读、收队
-        index.upgrade_env(&cf_ref("1", "2"), Some((SideFlag::Required, SideFlag::Required)));
+        index.upgrade_env(&cf_ref("1", "2"), Some((Some(SideFlag::Required), Some(SideFlag::Required))));
         assert!(env_unlabeled_refs(&p, &index).is_empty(), "升过级的不重问");
         let out = enrich(&p, &index);
         assert_eq!(
             out.mod_files[0].cf.as_ref().unwrap().env,
-            Some((SideFlag::Required, SideFlag::Required))
+            Some((Some(SideFlag::Required), Some(SideFlag::Required)))
         );
 
         // 聚合答 None（项目里真没人勾标签）→ 也钉死「问过、没有」

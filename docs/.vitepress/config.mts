@@ -33,6 +33,7 @@ const zh: Pack = {
                 { text: "自动分类", link: "/guide/classification" },
                 { text: "设置说明", link: "/guide/settings" },
                 { text: "应用更新", link: "/guide/update" },
+                { text: "更新记录", link: "/guide/changelog" },
             ],
         },
         {

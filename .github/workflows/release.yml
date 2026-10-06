@@ -59,6 +59,14 @@ jobs:
             exit 1
           fi
 
+      # 短日志闸门：这一版的三行日志在 release-notes/<版本>.md，缺文件即 fail——「忘了写」当场
+      # 暴露，而不是把上一版的正文原样发出去。形状（行数/单行宽度/空行/markdown）也在这里判，
+      # 因为超出的后果不是报错而是弹窗第 4 行末尾被无声截断。排在构建之前，几秒就能 fail
+      - name: 核对更新日志已填写
+        if: startsWith(github.ref, 'refs/tags/')
+        shell: bash
+        run: node scripts/check-release-notes.mjs "${GITHUB_REF_NAME#v}"
+
       - name: 安装依赖
         run: pnpm install --frozen-lockfile
 
@@ -100,7 +108,9 @@ jobs:
           path: release-dist/*
           if-no-files-found: error
 
-      # 正式发版：create 已存在时（上一次跑挂在中途）退到 upload --clobber，重跑是幂等的
+      # 正式发版：create 已存在时（上一次跑挂在中途）退到 upload --clobber，重跑是幂等的。
+      # 正文不再让 GitHub 自动生成（--generate-notes 塞的是 compare 链接与提交列表，弹窗读不懂），
+      # 改成读 release-notes/<版本>.md；已存在的 release 也顺手改正文，重跑一次就刷成这一版的
       - name: 发布 GitHub Release（仅 tag 推送）
         if: startsWith(github.ref, 'refs/tags/')
         env:
@@ -108,8 +118,13 @@ jobs:
         shell: bash
         run: |
           VERSION=$(node -p "require('./package.json').version")
+          # 路径跟着 tag 走（剥掉 v），和上面那道闸门用的是同一个串：闸门认过的文件就是发出去的文件
+          NOTES="release-notes/${GITHUB_REF_NAME#v}.md"
           EXTRA=""
           case "$VERSION" in *-*) EXTRA="--prerelease";; esac
-          gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1 \
-            || gh release create "$GITHUB_REF_NAME" --title "$GITHUB_REF_NAME" --generate-notes $EXTRA
+          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            gh release edit "$GITHUB_REF_NAME" --notes-file "$NOTES"
+          else
+            gh release create "$GITHUB_REF_NAME" --title "$GITHUB_REF_NAME" --notes-file "$NOTES" $EXTRA
+          fi
           gh release upload "$GITHUB_REF_NAME" release-dist/* --clobber

@@ -6,7 +6,7 @@ import { AlertTriangle, Archive, Check, CircleCheck, CircleX, FileText, Minus, P
 import { useEffect, useState } from "react";
 import * as api from "@/lib/api";
 import { t, useBackendText, tSource, useT } from "@/lib/i18n";
-import { formatDuration, formatSize, formatStamp, loaderLabel, truncateMiddle } from "@/lib/format";
+import { formatDuration, formatSize, formatStamp, loaderLabel, reviewHoldReason, truncateMiddle } from "@/lib/format";
 import type {
     CheckResult,
     ConversionReport,
@@ -475,7 +475,8 @@ function ChangeList({
                             </span>
                             {m.needsReview && (
                                 <span className="text-[10px] leading-[14px] text-gold">
-                                    {t("report.sides-unknown", "未判定出两端 · 请核对服务端是否需要")}
+                                    {reviewHoldReason(m).trimStart() ||
+                                        t("report.sides-unknown", "未判定出两端 · 请核对服务端是否需要")}
                                 </span>
                             )}
                             {m.cfBlocked && m.disposition !== "remove" && (

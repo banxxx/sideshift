@@ -71,6 +71,25 @@ fn code_of(inner: &task_engine::Inner) -> &env::CodeMap {
     }
 }
 
+/// jar 自报身份（mod_id + 硬依赖）只随 env_evidence 一起写入、一起作废，同一个包名闸门
+fn meta_of(inner: &task_engine::Inner) -> &env::MetaMap {
+    if inner.env_evidence_file.is_some() && inner.env_evidence_file == inner.last_file {
+        &inner.env_meta
+    } else {
+        static EMPTY: std::sync::OnceLock<env::MetaMap> = std::sync::OnceLock::new();
+        EMPTY.get_or_init(env::MetaMap::new)
+    }
+}
+
+/// 复核存疑名单与 env_evidence 同生共死，同一个包名闸门
+fn doubt_of(inner: &task_engine::Inner) -> std::collections::HashSet<String> {
+    if inner.env_evidence_file.is_some() && inner.env_evidence_file == inner.last_file {
+        inner.env_doubt.clone()
+    } else {
+        Default::default()
+    }
+}
+
 /// 最近一次解析包的方案（用户勾改在前端本地模型中，start_conversion 回传最终版）
 fn current_plan(state: &S<'_>) -> Vec<PlanMod> {
     let inner = lock(&state);
@@ -81,6 +100,8 @@ fn current_plan(state: &S<'_>) -> Vec<PlanMod> {
             inner.settings.strip_client_only,
             evidence_of(&inner, &empty),
             code_of(&inner),
+            meta_of(&inner),
+            &doubt_of(&inner),
         ),
         None => Vec::new(),
     }

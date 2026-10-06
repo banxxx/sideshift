@@ -5,6 +5,7 @@ import {
     clientInstallNeeded,
     evidenceLabel,
     reviewFirst,
+    reviewHoldReason,
     sideTagLabel,
     sideTagOf,
     type SideTag,
@@ -178,10 +179,14 @@ function keepReason(m: PlanMod): string {
                 why,
                 evidence: evidenceLabel(m.envSource),
                 conflict: m.envConflict ? t("convert-modals.differs-modpack", " · 与整合包声明不一致") : "",
-                both: clientInstallNeeded(m) ? t("convert-modals.players-install", " · 玩家客户端需同装") : "",
+                both:
+                    (clientInstallNeeded(m) ? t("convert-modals.players-install", " · 玩家客户端需同装") : "") +
+                    reviewHoldReason(m),
             }
         )
-        : t("convert-modals.side-evidence", "无端证据 · 未自动判定，本行由你保留在包里{{hint}}", { hint });
+        : t("convert-modals.side-evidence", "无端证据 · 未自动判定，本行由你保留在包里{{hint}}", {
+              hint: hint + reviewHoldReason(m),
+          });
 }
 
 /** 处于该清单处置下的行说明（一律由证据推导，无证据就承认无证据） */

@@ -54,31 +54,19 @@ impl Downloader {
     ) -> Result<McmodPage<Vec<McmodHit>>, DownloadError> {
         let q = query.trim();
         if q.is_empty() {
-            eprintln!("[mcmod] 搜索词为空，跳过");
             return Ok(McmodPage::Absent);
         }
         let url = format!("{MCMOD_SEARCH}?key={}", urlencoding(q));
-        match self.mcmod_html(&url).await {
-            Ok(McmodPage::Blocked) => {
-                eprintln!("[mcmod] 搜索被拦（人机验证）：{q}");
-                Ok(McmodPage::Blocked)
-            }
-            Ok(McmodPage::Absent) => {
-                eprintln!("[mcmod] 搜索结果为空：{q}");
-                Ok(McmodPage::Absent)
-            }
-            Ok(McmodPage::Answered(html)) => {
+        match self.mcmod_html(&url).await? {
+            McmodPage::Blocked => Ok(McmodPage::Blocked),
+            McmodPage::Absent => Ok(McmodPage::Absent),
+            McmodPage::Answered(html) => {
                 let hits = search_hits(&html);
-                eprintln!("[mcmod] 搜索 {q:?} → 解析出 {} 条词条", hits.len());
                 if hits.is_empty() {
                     Ok(McmodPage::Absent)
                 } else {
                     Ok(McmodPage::Answered(hits))
                 }
-            }
-            Err(e) => {
-                eprintln!("[mcmod] 搜索请求失败：{e}");
-                Err(e)
             }
         }
     }
@@ -91,17 +79,10 @@ impl Downloader {
     ) -> Result<McmodPage<McmodEntry>, DownloadError> {
         let url = format!("{MCMOD_CLASS}/{}.html", urlencoding(id));
         match self.mcmod_html(&url).await? {
-            McmodPage::Blocked => {
-                eprintln!("[mcmod] 词条页被拦：{id}");
-                Ok(McmodPage::Blocked)
-            }
-            McmodPage::Absent => {
-                eprintln!("[mcmod] 词条页无运行环境字段：{id}");
-                Ok(McmodPage::Absent)
-            }
+            McmodPage::Blocked => Ok(McmodPage::Blocked),
+            McmodPage::Absent => Ok(McmodPage::Absent),
             McmodPage::Answered(html) => {
                 let Some((client, server)) = env_sides(&html) else {
-                    eprintln!("[mcmod] 词条 {id} 运行环境字段解析失败（改版?）");
                     return Ok(McmodPage::Absent);
                 };
                 // 名字是第二道闸（调用方拿它复核「这页就是我要的那个模组」）；

@@ -55,7 +55,10 @@ pub struct CfRef {
     /// （没问过），同样由 `cfpack::ensure` 从索引贴回。这是 CF 那侧最接近「模组自报端」的
     /// 官方声明，证据层把它当 `EnvSource::CfFile` 计（rank 见 `env::rank`）。
     /// 与 `link` 挂同一枚的理由相同：这对编号的属性，生命周期与编号一致
-    pub env: Option<(SideFlag, SideFlag)>,
+    /// 构建级端标签（CF gameVersions 的 Client/Server）。**只勾一侧时另一侧是
+    /// Option::None（未声明），不是 Unsupported**——CF 文件标签的歧义性见
+    /// `downloader::curseforge::cf_sides`（2026-10 实测 Thulium 误判的根因）
+    pub env: Option<(Option<SideFlag>, Option<SideFlag>)>,
 }
 
 #[derive(Debug, Clone)]

@@ -4,6 +4,7 @@ import type { PlanMod } from "@/lib/types";
 import { t, useT } from "@/lib/i18n";
 import { CheckBox, TagChip, Tip, TIP_TRIGGER, ToneChip } from "@/components/ui";
 import { cn } from "@/lib/utils";
+import { reviewHoldReason } from "@/lib/format";
 import { SideChip } from "./modals";
 
 export function PlanModRow({
@@ -79,7 +80,19 @@ export function badgeFor(mod: PlanMod, local: boolean): React.ReactNode {
     if (mod.cfBlocked)
         return <ToneChip tone="redstone" size="sm">{t("convert.missing-file", "拿不到文件")}</ToneChip>;
     if (mod.autoSupplement) return <TagChip>{t("convert.auto-added", "自动补齐")}</TagChip>;
-    if (mod.needsReview) return <ToneChip tone="gold" size="sm">{t("lib.needs-review", "需人工确认")}</ToneChip>;
+    if (mod.needsReview) {
+        const why = reviewHoldReason(mod);
+        const chip = <ToneChip tone="gold" size="sm">{t("lib.needs-review", "需人工确认")}</ToneChip>;
+        // 有「谁按住了」的行把理由挂悬停：卡片空间只够一枚徽章，但理由不该藏进二级弹窗
+        return why ? (
+            <span className={cn(TIP_TRIGGER, "inline-flex")}>
+                {chip}
+                <Tip label={why.trimStart()} />
+            </span>
+        ) : (
+            chip
+        );
+    }
     if (mod.disposition === "add")
         return <SideChip sides={mod} warnClient />;
     if (local) return <TagChip>{t("convert.local", "本地")}</TagChip>;

@@ -25,12 +25,15 @@ pub use index::{
     apply_index, apply_probes, resolve_added_build, resolve_local_jar, resolve_online,
     EnvIndex, MCMOD_BUDGET, ONLINE_BUDGET,
 };
-// 补全腿由命令层自带预算独立调（不进平台腿墙钟），crate 内可达即可
-pub(crate) use index::{resolve_via_cf_search, resolve_via_mcmod};
+// 补全腿与剔除复核腿由命令层自带预算独立调（不进平台腿墙钟），crate 内可达即可
+pub(crate) use index::{
+    doubted_paths, recheck_strip_rows, resolve_via_cf_search, resolve_via_mcmod,
+    strip_recheck_pending,
+};
 #[cfg(test)]
 pub(crate) use index::Target;
-pub use index::CF_SEARCH_BUDGET;
-pub use jar::{probe_jars, probe_local_jar, ProbeReq};
+pub use index::{CF_SEARCH_BUDGET, RECHECK_BUDGET};
+pub use jar::{probe_jars, probe_local_jar, JarMeta, MetaMap, ProbeReq};
 
 /// 测试夹具：造 zip / class 字节。jar 层与 code 层的用例都要用，放这一处避免各写一份
 #[cfg(test)]

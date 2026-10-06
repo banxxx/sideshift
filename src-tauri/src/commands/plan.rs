@@ -113,6 +113,8 @@ pub async fn classify_pack(
                             inner.settings.strip_client_only,
                             evidence_of(&inner, &empty),
                             code_of(&inner),
+                            meta_of(&inner),
+                            &doubt_of(&inner),
                         ),
                         // 在线层还在跑 ⇒ 结论仍会由 classified 事件再推一次，别提前收「分类中」
                         online_running_of(&inner),
@@ -190,6 +192,11 @@ pub async fn classify_pack(
         .filter(|(_, p)| p.code != env::CodeFacts::default())
         .map(|(path, p)| (path.clone(), p.code))
         .collect();
+    // jar 自报身份（mod_id + 硬依赖）：detector 依赖映射与保护回路的数据源（B 层）
+    let meta: env::MetaMap = probes
+        .iter()
+        .map(|(path, p)| (path.clone(), env::JarMeta::from(p)))
+        .collect();
     // 反查目标：index 未给哈希的行（裸 zip、手动塞入的 jar）用扫描算出的 sha1 补上——
     // 中文改名包只剩哈希与包内 id 这两条路能对上平台
     let mut targets = env::targets_for(&parsed.mod_files, informative);
@@ -210,15 +217,20 @@ pub async fn classify_pack(
                 &mut ev,
                 &f.path,
                 env::Evidence {
-                    client: Some(c),
-                    server: Some(s),
+                    client: c,
+                    server: s,
                     source: EnvSource::CfFile,
                 },
             );
         }
     }
 
-    let plan = detector::build_plan(&parsed, strip, &ev, &code);
+    // A 层复核的存疑名单（离线部分）：索引里已记过的百科反驳照常生效，
+    // 本轮在线复核的新增部分由后台轮并回（env_doubt）
+    let doubt: std::collections::HashSet<String> =
+        env::doubted_paths(&index, &targets, &ev).into_iter().collect();
+
+    let plan = detector::build_plan(&parsed, strip, &ev, &code, &meta, &doubt);
     // 剔除行补验：声明判剔但没扫过字节的行在这里补上，矛盾会被 detector 按住（见 helper）。
     // src 已被上面那个 spawn_blocking 闭包 move 走，从解析结果里现取（同一个值）
     let plan = ensure_strip_facts(
@@ -227,10 +239,16 @@ pub async fn classify_pack(
         strip,
         &mut ev,
         &mut code,
+        &meta,
+        &doubt,
         Path::new(parsed.manifest.source_path.as_deref().unwrap_or_default()),
     )
     .await;
-    let offline_final = env_source.is_off() || pending.is_empty();
+    // 在线轮的起跑条件扩了一项：除了没答上的行，还有「待剔除复核」的行时照样要跑——
+    // 全表命中索引的二次分类里，复核腿是唯一还有事可做的一层
+    let recheck_pending =
+        !env_source.is_off() && env::strip_recheck_pending(&index, &targets, &ev);
+    let offline_final = env_source.is_off() || (pending.is_empty() && !recheck_pending);
     // 这一包是否已经有一轮联网反查在飞。**必须在下面立标记之前读**——那个标记写的就是
     // 「本轮还要联网」，先写后读会永远读到「有人在跑」，于是第二轮起不来、剩下的行再没人查。
     let round_running = !offline_final && online_running_of(&lock(&state));
@@ -238,6 +256,8 @@ pub async fn classify_pack(
         let mut inner = lock(&state);
         inner.env_evidence = ev.clone();
         inner.env_code = code;
+        inner.env_meta = meta;
+        inner.env_doubt = doubt;
         inner.env_evidence_file = Some(file_name.clone());
         // 本轮确实还要联网：立个标记，让之后的缓存命中路径知道「结论还没最终化」。
         // 已有轮在跑时不重立：标记归那一轮清，我们这一趟并不起新轮，清了会把它的收尾闸门拆掉
@@ -270,6 +290,8 @@ pub async fn classify_pack(
                         g.settings.strip_client_only,
                         &g.env_evidence,
                         &g.env_code,
+                        &g.env_meta,
+                        &g.env_doubt,
                     )
                 });
                 (p, g.env_online_file.as_deref() == Some(file_name.as_str()))
@@ -336,6 +358,15 @@ pub async fn classify_pack(
                 )
                 .await;
             }
+            // A 层剔除复核腿：对「项目级/以下证据判剔除」的行追加问 CF + 百科（GeckoLib
+            // 那类作者填错声明的模组在这里被纠正）。CF 命中直接覆盖证据；百科反驳进存疑
+            // 名单。改动的行都要并回共享表：CF 覆盖改了证据，存疑行要进 env_doubt
+            let (recheck_touched, recheck_doubt) = tokio::time::timeout(
+                env::RECHECK_BUDGET,
+                env::recheck_strip_rows(&dl, &mut index, &cache_dir, &targets, &mut ev, mcmod),
+            )
+            .await
+            .unwrap_or_default();
             // —— 锁一：收尾标记 + 合并 touched + 克隆工作表（补扫在锁外做）——
             let work = {
                 let mut g = lock(&state);
@@ -352,30 +383,44 @@ pub async fn classify_pack(
                 }
                 // 只并回本轮查到的那些行，不整表覆盖：反查期间用户可能又点了一次「重新自动分类」，
                 // 那一趟刚写过一批新的离线证据（还带着新的字节码事实），整表替换会把它们抹掉
-                for path in &touched {
+                for path in touched.iter().chain(recheck_touched.iter()) {
                     if let Some(one) = ev.get(path) {
                         g.env_evidence.insert(path.clone(), *one);
                     }
                 }
+                // 复核存疑并入名单（detector 重算时按住剔除改保留+待人工）
+                g.env_doubt.extend(recheck_doubt.iter().cloned());
                 let parsed = last_parsed_of(&g);
                 let strip = g.settings.strip_client_only;
                 let src = parsed
                     .as_ref()
                     .and_then(|p| p.manifest.source_path.clone())
                     .unwrap_or_default();
-                parsed.map(|p| (p, strip, src, g.env_evidence.clone(), g.env_code.clone()))
+                parsed.map(|p| {
+                    (
+                        p,
+                        strip,
+                        src,
+                        g.env_evidence.clone(),
+                        g.env_code.clone(),
+                        g.env_meta.clone(),
+                        g.env_doubt.clone(),
+                    )
+                })
             };
-            let Some((parsed, strip, src, mut ev_w, mut code_w)) = work else {
+            let Some((parsed, strip, src, mut ev_w, mut code_w, meta_w, doubt_w)) = work else {
                 return;
             };
             // —— 锁外：剔除行补验（可能把矛盾剔除按回保留）；方案在锁二按合并后的表重算 ——
-            let base_plan = detector::build_plan(&parsed, strip, &ev_w, &code_w);
+            let base_plan = detector::build_plan(&parsed, strip, &ev_w, &code_w, &meta_w, &doubt_w);
             let _plan_v = ensure_strip_facts(
                 &parsed,
                 base_plan,
                 strip,
                 &mut ev_w,
                 &mut code_w,
+                &meta_w,
+                &doubt_w,
                 Path::new(&src),
             )
             .await;
@@ -394,6 +439,8 @@ pub async fn classify_pack(
                         g.settings.strip_client_only,
                         &g.env_evidence,
                         &g.env_code,
+                        &g.env_meta,
+                        &g.env_doubt,
                     )
                 })
             };
@@ -420,12 +467,15 @@ pub async fn classify_pack(
 /// （`bytecode_vetoed_strip`）要有 `server_code` 事实在手才生效，这一步就是那笔账的补付：
 /// 只扫 Remove 分组里没有事实的包内行，命中服务端标记即提前收工。
 /// 补扫若解出 jar 自证（rank 0），同样并进证据表——`put` 会让它压过声明层
+#[allow(clippy::too_many_arguments)]
 async fn ensure_strip_facts(
     parsed: &ParsedPack,
     plan: Vec<PlanMod>,
     strip: bool,
     ev: &mut env::EvidenceMap,
     code: &mut env::CodeMap,
+    meta: &env::MetaMap,
+    doubt: &std::collections::HashSet<String>,
     src: &Path,
 ) -> Vec<PlanMod> {
     // 手动模式没有自动剔除，Remove 分组为空，自然无事可做
@@ -465,7 +515,7 @@ async fn ensure_strip_facts(
         }
     }
     if changed {
-        detector::build_plan(parsed, strip, ev, code)
+        detector::build_plan(parsed, strip, ev, code, meta, doubt)
     } else {
         plan
     }
@@ -557,7 +607,14 @@ displayName = "GeckoLib"
 
         let mut ev = env::EvidenceMap::new();
         let mut code = env::CodeMap::new();
-        let plan = detector::build_plan(&parsed, true, &ev, &code);
+        let plan = detector::build_plan(
+            &parsed,
+            true,
+            &ev,
+            &code,
+            &Default::default(),
+            &Default::default(),
+        );
         assert_eq!(
             plan[0].disposition,
             ModDisposition::Remove,
@@ -571,6 +628,8 @@ displayName = "GeckoLib"
             true,
             &mut ev,
             &mut code,
+            &Default::default(),
+            &Default::default(),
             Path::new(&pack_path),
         )
         .await;
@@ -641,7 +700,14 @@ mod e2e_diag {
         let mut targets = env::targets_for(&parsed.mod_files, informative);
         env::apply_probes(&probes, &mut targets);
         let pending = env::apply_index(&index, &targets, &mut ev);
-        let plan = detector::build_plan(&parsed, true, &ev, &code);
+        let plan = detector::build_plan(
+            &parsed,
+            true,
+            &ev,
+            &code,
+            &Default::default(),
+            &Default::default(),
+        );
         let remove_before = plan.iter().filter(|m| m.disposition == ModDisposition::Remove).count();
         let review_before = plan.iter().filter(|m| m.needs_review).count();
         println!("[离线] Remove={remove_before} 待人工={review_before} pending={}", pending.rows.len());
@@ -661,7 +727,22 @@ mod e2e_diag {
             env::resolve_via_mcmod(&dl, &mut index, &cache_dir, &targets, &mut ev),
         )
         .await;
-        let plan = detector::build_plan(&parsed, true, &ev, &code);
+        let (_recheck_touched, recheck_doubt) = tokio::time::timeout(
+            env::RECHECK_BUDGET,
+            env::recheck_strip_rows(&dl, &mut index, &cache_dir, &targets, &mut ev, true),
+        )
+        .await
+        .unwrap_or_default();
+        println!("[复核] 存疑={} 改写={}", recheck_doubt.len(), _recheck_touched.len());
+        let doubt: std::collections::HashSet<String> = recheck_doubt.into_iter().collect();
+        let plan = detector::build_plan(
+            &parsed,
+            true,
+            &ev,
+            &code,
+            &Default::default(),
+            &doubt,
+        );
 
         // —— 诊断打印 ——
         let mut by_source: std::collections::BTreeMap<String, usize> = Default::default();
@@ -712,4 +793,42 @@ mod e2e_diag {
         env::resolve_via_mcmod(&dl, &mut index, &cache_dir, &targets, &mut out).await;
         println!("mcmod 腿结果: {:?}", out.get(&targets[0].path));
         assert!(out.contains_key(&targets[0].path), "FTB Library 百科有词条且名字同形，应当答上");
+    }
+
+    /// A 层剔除复核腿验证（真联网）：GeckoLib 在 Modrinth 的项目级声明是作者填错的
+    /// `(required, optional)`——按它判剔除；CF 的最新构建两侧齐勾。复核腿应当用
+    /// CF 证据（CfFile 等级更高）覆盖项目级结论，裁决翻成保留
+    #[tokio::test]
+    #[ignore = "真联网"]
+    async fn recheck_leg_corrects_geckolib() {
+        let dl = Downloader::new(std::env::temp_dir().join("ss-diag"), 1);
+        let mut index = env::EnvIndex::default();
+        let targets = vec![env::Target {
+            path: "overrides/mods/geckolib-forge-1.20.1-4.8.4.jar".into(),
+            sha1: None,
+            cf_fingerprint: None,
+            in_pack: true,
+            project_id: None,
+            slugs: vec!["geckolib".into()],
+            title: Some("GeckoLib".into()),
+        }];
+        // 复核腿的入场券：项目级证据 + 按它判剔除
+        let mut out = env::EvidenceMap::new();
+        env::put(
+            &mut out,
+            &targets[0].path,
+            env::Evidence {
+                client: Some(crate::models::SideFlag::Required),
+                server: Some(crate::models::SideFlag::Optional),
+                source: crate::models::EnvSource::ModrinthProject,
+            },
+        );
+        let (touched, doubt) = env::recheck_strip_rows(&dl, &mut index, &std::env::temp_dir().join("ss-diag-recheck"), &targets, &mut out, true).await;
+        println!("touched={touched:?} doubt={doubt:?}");
+        println!("复核后证据: {:?}", out.get(&targets[0].path));
+        let ev = out.get(&targets[0].path).expect("复核腿应答上 GeckoLib");
+        assert_eq!(ev.source, crate::models::EnvSource::CfFile, "CF 复核应覆盖项目级结论");
+        assert_eq!(ev.server, Some(crate::models::SideFlag::Required));
+        assert!(touched.contains(&targets[0].path));
+        assert!(doubt.is_empty(), "CF 已接住，不应走存疑旁路");
     }

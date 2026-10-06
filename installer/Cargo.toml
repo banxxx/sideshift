@@ -4,6 +4,7 @@ name = "sideshift-installer"
 version = "1.0.0-beta.3"
 description = "SideShift 安装壳：界面收集数据目录偏好，真正的落盘交给官方 NSIS 静默安装"
 edition = "2021"
+license = "Apache-2.0"
 
 # 产物直接叫 SideShift-Setup.exe：发出去的那一个文件就是它的名字，不靠构建脚本改名
 [[bin]]

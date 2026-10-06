@@ -6,6 +6,7 @@
   "update.blocked-untrusted-host": "The installer or its signature isn't hosted on a trusted domain, so it won't be downloaded",
   "update.btn-downloading": "Downloading · {{pct}}%",
   "update.btn-verifying": "Verifying…",
+  "update.changelog": "Changelog",
   "update.fail-browser": "The browser preview has no installer to run — test this in a packaged build",
   "update.fail-busy": "An update is already running — wait for it to finish",
   "update.fail-canceled": "This download was canceled",

@@ -635,7 +635,7 @@ export function ConvertPage() {
             serverSide: buildSides ? version.serverSide : mod.serverSide,
             // 源给了多少就写多少：CurseForge 的构建级端标签（gameVersions 的 Client/Server）
             // 由版本列表解析带来，命中即标 CF 构建；没勾标签的老构建先如实落「无依据」，
-            // 行落地后由下面那趟按构建 sha1 补查。Modrinth 构建级 environment 命中标平台构建
+            // 行落地后由下面那趟按构建 sha1 补查。Modrinth 构建级 environment 命中标 Modrinth 构建反查
             envSource: (
                 mod.source === "curseforge"
                     ? buildSides

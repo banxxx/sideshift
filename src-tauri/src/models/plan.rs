@@ -105,9 +105,14 @@ pub struct PlanMod {
     /// 在线添加时钉住的具体构建：构建时按所选 url/sha1/文件名取，不再解析最新版
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pinned: Option<PinnedVersion>,
-    /// 依赖的其他方案行 id（mrpack depends 解析所得，供反向依赖警告）
+    /// 依赖的其他方案行 id（mrpack depends + jar 自报硬依赖解析所得，供反向依赖警告）
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub depends: Vec<String>,
+    /// 把这行按住的依赖方行 id（本来判剔除、被保留行的硬依赖按回保留时记录）。
+    /// 空向量 = 不是被依赖保护改判的；非空时前端把它写进待人工理由：
+    /// 「附属 X（服务端必装）硬依赖前置 Y」比一个孤零零的标记可读得多
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub protected_by: Vec<String>,
     /// 行 ↔ 包内条目的精确锚（detector 写入，前端原样回传）；
     /// 同 id 多文件（如一个模组两个版本）时靠它锁定正确条目，缺省回落 id 顺序匹配
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -129,6 +134,10 @@ pub struct PlanMod {
     /// 字节码结构提示（只影响提示文案与名称层是否获准剔除，不改裁决口径）
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub bytecode_hint: Option<BytecodeHint>,
+    /// A 层复核存疑：Modrinth 项目级判剔除、百科反驳（等级压不过，走旁路按住）。
+    /// 纯字节码否决的行不置位——那句「百科称服务端需要」只在百科真说过话时才成立
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub doubted: bool,
     /// CF 编号行：这一枚**两条取链路都拿不到字节**（官方不放行、内容分发站也没有）。
     /// true = 构建时必须显式跳过并写进报告，不许静默丢（闸门读的是它，不是构建期的意外）
     #[serde(default)]

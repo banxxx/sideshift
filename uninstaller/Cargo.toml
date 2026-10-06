@@ -4,6 +4,7 @@ name = "sideshift-uninstaller"
 version = "1.0.0-beta.2"
 description = "SideShift 卸载壳：界面与节奏归壳，真正的删除交给官方卸载器与 NSIS 卸载钩子"
 edition = "2021"
+license = "Apache-2.0"
 
 # 装进安装目录的那一个文件名。注册表 UninstallString 与卸载钩子删的都是它，改名字要同时改三处
 # （单源常量在 data_root::UNINSTALL_SHELL_NAME，两个壳编的是同一份源码）

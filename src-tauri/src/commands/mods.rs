@@ -85,10 +85,11 @@ pub async fn inspect_added_build(
             inner.settings.concurrency.max(1) as usize,
         )
     };
-    // 两端要么都传要么都不传：版本列表解析出来的标签天然成对，单边值按「没拿到」处理
+    // 版本列表解析出来的标签原样传入：CF 只勾一侧时另一侧是 None（未声明，
+    // 见 `cf_sides` 的歧义标签口径），这正是要播种的值，不能按「不成对」丢掉
     let cf = match (cf_client, cf_server) {
-        (Some(c), Some(s)) => Some((c, s)),
-        _ => None,
+        (None, None) => None,
+        (c, s) => Some((c, s)),
     };
     let ev = env::resolve_added_build(
         &Downloader::new(cache_dir.clone(), concurrency),

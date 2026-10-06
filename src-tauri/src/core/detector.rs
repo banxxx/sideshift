@@ -2,7 +2,7 @@
 //! 整合包 files[].env > 名称启发），名称关键字只在没有任何证据时兜底；
 //! 输出 PlanMod[] 与计数。
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use crate::core::env::{self, CodeMap, Evidence, EvidenceMap};
 use crate::core::parser::{PackFile, ParsedPack};
@@ -43,7 +43,7 @@ const NEEDS_REVIEW_KEYWORDS: &[&str] = &["viafabricplus", "viaversion", "viaapri
 
 /// 证据裁决结果
 #[derive(Debug, PartialEq, Eq)]
-enum Verdict {
+pub(crate) enum Verdict {
     /// 服务端不需要（客户端专属，或「客户端必需 + 服务端可选」）
     Strip,
     /// 服务端需要，或客户端非必需
@@ -53,7 +53,9 @@ enum Verdict {
 }
 
 /// 两侧支持度 → 处置。定案口径（用户拍板）：「客户端必需 / 服务端可选」默认剔除。
-fn verdict(client: Option<SideFlag>, server: Option<SideFlag>) -> Verdict {
+/// A 层剔除复核腿（`env::recheck_strip_rows`）用同一把尺判断「复核来源是否反驳剔除」，
+/// 所以 crate 内可见——两处口径必须同源，不能各抄一份
+pub(crate) fn verdict(client: Option<SideFlag>, server: Option<SideFlag>) -> Verdict {
     match (client, server) {
         (_, Some(SideFlag::Unsupported)) => Verdict::Strip,
         (Some(SideFlag::Required), Some(SideFlag::Optional)) => Verdict::Strip,
@@ -67,6 +69,23 @@ fn verdict(client: Option<SideFlag>, server: Option<SideFlag>) -> Verdict {
 pub fn name_heuristic_hit(file_name: &str) -> bool {
     let lower = file_name.to_lowercase();
     CLIENT_ONLY_KEYWORDS.iter().any(|k| lower.contains(k))
+}
+
+/// 行 id 的匹配变体：原样 + 连字符↔下划线互换（小写）。
+/// 附属 jar 自报的依赖 modId 用 Forge 惯用的下划线（`ftb_quests`），而行 id 由
+/// 文件名切出惯用连字符（`ftb-quests`）——不互换就在这里断链
+fn row_id_variants(id: &str) -> Vec<String> {
+    let lower = id.to_ascii_lowercase();
+    let mut out = vec![lower.clone()];
+    for (a, b) in [('-', '_'), ('_', '-')] {
+        if lower.contains(a) {
+            let v = lower.replace(a, &b.to_string());
+            if !out.contains(&v) {
+                out.push(v);
+            }
+        }
+    }
+    out
 }
 
 /// mrpack 的 `files[].env` 整层有没有「区分度」。
@@ -96,11 +115,18 @@ pub fn env_declared(f: &PackFile, informative: bool) -> bool {
 ///   mrpack 层仅在整包声明有区分度时参与；两者裁决不一致的行标 `env_conflict`
 /// - `code`：包内条目 → jar 字节码结构事实。只改两件事：有服务端注册时按住名称关键字层，
 ///   以及给前端一句提示；不产生任何新的剔除
+/// - `meta`：包内条目 → jar 自报身份（mod_id + 硬依赖 modId）。硬依赖喂给下面的依赖
+///   保护回路——mrpack `files[].depends` 只覆盖索引内条目，overrides/裸 zip 里那批
+///   「服务端必装的附属」恰恰在索引外，只有 jar 自己的清单说了实话
+/// - `doubt`：A 层剔除复核腿标记的「存疑」行（Modrinth 项目级判剔除、百科反驳但等级
+///   压不过项目级）。与字节码否决同一路处理：保留 + 待人工，不静默错删
 pub fn build_plan(
     parsed: &ParsedPack,
     strip_client_only: bool,
     ev: &EvidenceMap,
     code: &CodeMap,
+    meta: &env::MetaMap,
+    doubt: &HashSet<String>,
 ) -> Vec<PlanMod> {
     let loader_label = parsed.manifest.loader.as_label().to_string();
     let informative = mrpack_env_informative(&parsed.mod_files);
@@ -157,18 +183,25 @@ pub fn build_plan(
                 }
             };
             let mut strip = verdict(client, server) == Verdict::Strip;
-            // 字节码否决扩展：jar 里确有服务端注册（common setup / 注册表 / 网络层——
-            // 加载器自己的 API，不参与混淆，假阳性率实测很低）却被判剔除——声明与字节
-            // 矛盾，宁保留+人工，不静默错删。实测案例（FarmingTales 包）：GeckoLib 是
-            // 打包者塞进 overrides 的索引外文件（hash 反查落空），被 Modrinth 项目级
-            // server_side=optional 判成客户端模组，服务端缺它直接起不来。
-            // 覆盖 (必,可) 与 (·,不支持) 两种剔除；改判后强制待人工，让人看得见这台保险
-            let bytecode_vetoed_strip = strip && chosen.is_some() && facts.server_code;
-            if bytecode_vetoed_strip {
+            // 剔除按住的两路保险，同一处理（改判保留，必要时强制待人工）：
+            // - 字节码否决：jar 里确有服务端注册（common setup / 注册表 / 网络层——
+            //   加载器自己的 API，不参与混淆，假阳性率实测很低）却被判剔除——声明与字节
+            //   矛盾，宁保留+人工，不静默错删。实测案例（FarmingTales 包）：GeckoLib 是
+            //   打包者塞进 overrides 的索引外文件（hash 反查落空），被 Modrinth 项目级
+            //   server_side=optional 判成客户端模组，服务端缺它直接起不来。
+            //   覆盖 (必,可) 与 (·,不支持) 两种剔除
+            // - A 层复核存疑：平台声明层判剔除、百科反驳（百科等级低，覆盖不了现有
+            //   结论，只能走这条旁路）。CF 复核翻案时（聚合标签比文件标签说得多）
+            //   直接覆盖证据本身，不需要旁路
+            let doubted = doubt.contains(&f.path);
+            let strip_vetoed = strip && chosen.is_some() && (facts.server_code || doubted);
+            if strip_vetoed {
                 strip = false;
             }
             let client_only = strip && strip_client_only;
-            let bytecode_hint = if vetoed || bytecode_vetoed_strip {
+            // 提示只跟字节码走：存疑行的「为什么待人工」由百科反驳而来，不是结构事实，
+            // 挂 ServerCode 提示等于编造证据
+            let bytecode_hint = if vetoed || (strip_vetoed && facts.server_code) {
                 Some(BytecodeHint::ServerCode)
             } else if chosen.is_none() && !name_hit && facts.client_only_shape {
                 Some(BytecodeHint::ClientOnlyShape)
@@ -197,8 +230,8 @@ pub fn build_plan(
                     ModDisposition::Keep
                 },
                 client_only,
-                // 字节码按住的剔除矛盾（自动剔除开着才标：手动模式本就没有自动剔除）
-                needs_review: needs_review || review || (bytecode_vetoed_strip && strip_client_only),
+                // 字节码按住的剔除矛盾、A 层复核存疑（自动剔除开着才标：手动模式本就没有自动剔除）
+                needs_review: needs_review || review || (strip_vetoed && strip_client_only),
                 auto_supplement: false,
                 size_bytes: f.size_bytes,
                 // 只有「有 URL 可下且物理不在包内」才是真联网下载；
@@ -209,12 +242,14 @@ pub fn build_plan(
                 local_path: None,
                 pinned: None,
                 depends: Vec::new(),
+                protected_by: Vec::new(),
                 src_path: Some(f.path.clone()),
                 env_source: source,
                 env_conflict,
                 client_side: client,
                 server_side: server,
                 bytecode_hint,
+                doubted: doubted && strip_vetoed && !facts.server_code,
                 // CF 编号行的「两条取链路都拿不到字节」（自动分类那一轮探出来的）。
                 // 挂在行上而不是另开一份清单：用户在界面上改判处置之后，闸门要按**当前这份方案**
                 // 重算缺件数（被判为剔除的行本来就进不了服务端包，缺不缺件与它无关）
@@ -242,21 +277,70 @@ pub fn build_plan(
         plan[i].depends = deps;
     }
 
-    // 依赖图保护：被保留行硬依赖的模组即便被判为客户端专属也不剔——
-    // 多半是误判的通用库（如某些库被 Fabric 模组声明依赖却自身标 client）。
-    // 强制保留后标「待人工确认」，让人看得见这台保险。
-    loop {
-        let needed: HashSet<String> = plan
+    // jar 自报硬依赖并入 depends（B 层）：mrpack depends 只覆盖索引内条目，
+    // 附属模组在 overrides/裸 zip 里时只有它自己的清单声明了「我离不开谁」。
+    // 映射两档：与某行探测出的 mod_id 精确相等（字节级事实）优先；回落行 id 的
+    // 连字符↔下划线变体（Forge modId 惯用下划线、文件名惯用连字符，如 ftbquests ↔ ftb-quests）
+    let mut mod_id_row: HashMap<String, usize> = HashMap::new();
+    for (path, m) in meta {
+        let Some(id) = m.mod_id.as_deref().map(str::trim).filter(|s| !s.is_empty()) else {
+            continue;
+        };
+        let Some(j) = plan
             .iter()
-            .filter(|m| m.disposition == ModDisposition::Keep)
-            .flat_map(|m| m.depends.iter().map(|d| d.to_string()))
-            .collect();
+            .position(|m| m.src_path.as_deref() == Some(path.as_str()))
+        else {
+            continue;
+        };
+        mod_id_row.entry(id.to_ascii_lowercase()).or_insert(j);
+    }
+    for (i, f) in parsed.mod_files.iter().enumerate() {
+        let Some(m) = meta.get(&f.path) else { continue };
+        for dep in &m.hard_deps {
+            let dep = dep.trim().to_ascii_lowercase();
+            if dep.is_empty() {
+                continue;
+            }
+            let hit = mod_id_row
+                .get(&dep)
+                .copied()
+                .or_else(|| plan.iter().position(|row| row_id_variants(&row.id).contains(&dep)));
+            if let Some(j) = hit {
+                if j != i {
+                    let dep_id = plan[j].id.clone();
+                    if !plan[i].depends.contains(&dep_id) {
+                        plan[i].depends.push(dep_id);
+                    }
+                }
+            }
+        }
+    }
+
+    // 依赖图保护：被保留行硬依赖的模组即便被判为客户端专属也不剔——
+    // 多半是误判的通用库（如某些库被 Fabric 模组声明依赖却自身标 client），或者
+    // 服务端必装的附属拖着客户端前置（B 层的典型场景：前置不装，附属在服务端起不来）。
+    // 强制保留后标「待人工确认」并记下是谁按住的，让人看得见这台保险。
+    // 定点循环 = 传递闭包：附属按住前置，前置若又被第三方依赖也照住
+    loop {
+        // 依赖方行 id → (被依赖行 id 集合)：保护改判要记「谁按的住」
+        let mut needed: HashMap<String, Vec<String>> = HashMap::new();
+        for m in plan
+            .iter()
+            .filter(|m| matches!(m.disposition, ModDisposition::Keep | ModDisposition::Add))
+        {
+            for d in &m.depends {
+                needed.entry(d.clone()).or_default().push(m.id.clone());
+            }
+        }
         let mut changed = false;
         for m in plan.iter_mut() {
-            if m.disposition == ModDisposition::Remove && needed.contains(m.id.as_str()) {
-                m.disposition = ModDisposition::Keep;
-                m.needs_review = true;
-                changed = true;
+            if m.disposition == ModDisposition::Remove {
+                if let Some(by) = needed.get(m.id.as_str()) {
+                    m.disposition = ModDisposition::Keep;
+                    m.needs_review = true;
+                    m.protected_by = by.clone();
+                    changed = true;
+                }
             }
         }
         if !changed {
@@ -282,6 +366,8 @@ pub fn build_plan(
             local_path: None,
             pinned: None,
             depends: Vec::new(),
+            protected_by: Vec::new(),
+            doubted: false,
             src_path: None,
             env_source: EnvSource::Unknown,
             env_conflict: false,
@@ -432,14 +518,21 @@ mod tests {
             loader_version: None,
             root_prefix: String::new(),
         };
-        let plan = build_plan(&parsed, true, &EvidenceMap::new(), &CodeMap::new());
+        let plan = build_plan(
+            &parsed,
+            true,
+            &EvidenceMap::new(),
+            &CodeMap::new(),
+            &Default::default(),
+            &Default::default(),
+        );
         // project_id 精确命中行 id；包内不存在的 "sodium" 被丢弃
         assert_eq!(plan[1].depends, vec!["geckolib".to_string()]);
     }
 
     /* ---------------- 端证据裁决 ---------------- */
 
-    use crate::core::env::Evidence;
+    use crate::core::env::{Evidence, JarMeta, MetaMap};
     use crate::core::parser::ParsedPack;
     use crate::models::PackManifest;
 
@@ -515,7 +608,14 @@ mod tests {
             Unsupported,
             EnvSource::JarMetadata,
         );
-        let plan = build_plan(&parsed, true, &map, &CodeMap::new());
+        let plan = build_plan(
+            &parsed,
+            true,
+            &map,
+            &CodeMap::new(),
+            &Default::default(),
+            &Default::default(),
+        );
         assert_eq!(plan[0].disposition, ModDisposition::Remove);
         assert_eq!(plan[0].env_source, EnvSource::JarMetadata);
         assert!(!plan[0].env_conflict);
@@ -545,7 +645,14 @@ mod tests {
             Unsupported,
             EnvSource::JarMetadata,
         );
-        let plan = build_plan(&parsed, true, &map, &CodeMap::new());
+        let plan = build_plan(
+            &parsed,
+            true,
+            &map,
+            &CodeMap::new(),
+            &Default::default(),
+            &Default::default(),
+        );
         assert_eq!(plan[0].env_source, EnvSource::JarMetadata);
         assert_eq!(plan[0].disposition, ModDisposition::Remove);
         assert!(plan[0].env_conflict, "打包者说服务端必需，jar 说不支持");
@@ -561,7 +668,14 @@ mod tests {
             "sodium-0.5.13.jar",
             (Some(SideFlag::Unsupported), Some(SideFlag::Required)),
         )]);
-        let plan = build_plan(&parsed, true, &EvidenceMap::new(), &CodeMap::new());
+        let plan = build_plan(
+            &parsed,
+            true,
+            &EvidenceMap::new(),
+            &CodeMap::new(),
+            &Default::default(),
+            &Default::default(),
+        );
         assert_eq!(plan[0].disposition, ModDisposition::Remove);
         assert!(plan[0].client_only);
         assert_eq!(plan[0].env_source, EnvSource::Mrpack);
@@ -579,7 +693,14 @@ mod tests {
             SideFlag::Optional,
             EnvSource::ModrinthHash,
         );
-        let plan = build_plan(&parsed, true, &map, &CodeMap::new());
+        let plan = build_plan(
+            &parsed,
+            true,
+            &map,
+            &CodeMap::new(),
+            &Default::default(),
+            &Default::default(),
+        );
         assert_eq!(plan[0].disposition, ModDisposition::Remove);
         assert_eq!(plan[0].env_source, EnvSource::ModrinthHash);
     }
@@ -610,7 +731,14 @@ mod tests {
             file("half-declared-1.0.jar", (None, None)),
             file("half-declared-lib-1.0.jar", (None, None)),
         ]);
-        let plan = build_plan(&parsed, true, &map, &CodeMap::new());
+        let plan = build_plan(
+            &parsed,
+            true,
+            &map,
+            &CodeMap::new(),
+            &Default::default(),
+            &Default::default(),
+        );
         assert_eq!(plan[0].disposition, ModDisposition::Remove);
         assert!(plan[0].needs_review, "服务端轴没答上 → 交给人");
         assert!(plan[0].client_only, "客户端那一轴确实答上了：必需");
@@ -618,7 +746,14 @@ mod tests {
         assert_eq!(plan[1].disposition, ModDisposition::Keep);
         assert!(plan[1].needs_review);
         // 手动模式（自动剔除关掉）不该满屏标待确认
-        let manual = build_plan(&parsed, false, &map, &CodeMap::new());
+        let manual = build_plan(
+            &parsed,
+            false,
+            &map,
+            &CodeMap::new(),
+            &Default::default(),
+            &Default::default(),
+        );
         assert_eq!(manual[0].disposition, ModDisposition::Keep);
         assert!(!manual[0].needs_review);
         assert!(!manual[1].needs_review);
@@ -642,7 +777,14 @@ mod tests {
             SideFlag::Required,
             EnvSource::ModrinthProject,
         );
-        let plan = build_plan(&parsed, true, &map, &CodeMap::new());
+        let plan = build_plan(
+            &parsed,
+            true,
+            &map,
+            &CodeMap::new(),
+            &Default::default(),
+            &Default::default(),
+        );
         assert_eq!(plan[0].disposition, ModDisposition::Keep);
         assert_eq!(plan[1].disposition, ModDisposition::Keep);
     }
@@ -651,7 +793,14 @@ mod tests {
     fn undecidable_row_is_flagged_for_review() {
         // 「没证据」不再等于「静默保留」：标出来让人看一眼，分组落在剔除侧
         let parsed = pack(vec![file("some-obscure-lib-1.0.jar", (None, None))]);
-        let plan = build_plan(&parsed, true, &EvidenceMap::new(), &CodeMap::new());
+        let plan = build_plan(
+            &parsed,
+            true,
+            &EvidenceMap::new(),
+            &CodeMap::new(),
+            &Default::default(),
+            &Default::default(),
+        );
         assert_eq!(plan[0].disposition, ModDisposition::Remove);
         assert!(plan[0].needs_review);
         assert_eq!(plan[0].env_source, EnvSource::Unknown);
@@ -662,7 +811,14 @@ mod tests {
     #[test]
     fn name_heuristic_is_last_resort_and_labels_its_source() {
         let parsed = pack(vec![file("continuity-3.0.jar", (None, None))]);
-        let plan = build_plan(&parsed, true, &EvidenceMap::new(), &CodeMap::new());
+        let plan = build_plan(
+            &parsed,
+            true,
+            &EvidenceMap::new(),
+            &CodeMap::new(),
+            &Default::default(),
+            &Default::default(),
+        );
         assert_eq!(plan[0].disposition, ModDisposition::Remove);
         assert_eq!(plan[0].env_source, EnvSource::NameHeuristic);
     }
@@ -670,6 +826,71 @@ mod tests {
     /* ---------------- 字节码结构事实（只准少删、不准多删） ---------------- */
 
     use crate::core::env::CodeFacts;
+
+    /// B 层：服务端必装的附属（jar 自报硬依赖）把被判客户端的前置按住。
+    /// 附属在 overrides 索引外 ⇒ mrpack depends 帮不上忙，依赖边只能来自
+    /// jar 自己的清单；Forge modId 惯用下划线、文件名惯用连字符，变体匹配兜住
+    #[test]
+    fn server_required_addon_holds_its_client_parent() {
+        // file() 的元组是 (server, client)：前置要的是「客户端必需、服务端可选」
+        let parsed = pack(vec![
+            file("ftb-quests-2001.4.6.jar", (Some(SideFlag::Optional), Some(SideFlag::Required))),
+            file("someaddon-1.0.0.jar", (Some(SideFlag::Required), None)),
+        ]);
+        let mut meta = MetaMap::new();
+        meta.insert(
+            "mods/someaddon-1.0.0.jar".to_string(),
+            JarMeta {
+                mod_id: Some("someaddon".into()),
+                hard_deps: vec!["ftb_quests".into()],
+            },
+        );
+        let plan = build_plan(
+            &parsed,
+            true,
+            &EvidenceMap::new(),
+            &CodeMap::new(),
+            &meta,
+            &Default::default(),
+        );
+        // 前置本来判剔除（(必,可)），被附属的硬依赖按回保留
+        assert_eq!(plan[0].disposition, ModDisposition::Keep);
+        assert!(plan[0].needs_review);
+        assert_eq!(plan[0].protected_by, vec!["someaddon".to_string()]);
+        // 附属自身照常保留
+        assert_eq!(plan[1].disposition, ModDisposition::Keep);
+        assert!(plan[1].depends.contains(&"ftb-quests".to_string()));
+    }
+
+    /// A 层：百科反驳了项目级的剔除结论（等级压不过，走存疑旁路）——
+    /// 与字节码否决同路：保留 + 待人工，且行上带 doubted 标记
+    #[test]
+    fn mcmod_counter_evidence_holds_the_strip_verdict() {
+        let parsed = pack(vec![file("geckolib-forge-1.20.1-4.8.4.jar", (None, None))]);
+        let mut project = EvidenceMap::new();
+        add(
+            &mut project,
+            "mods/geckolib-forge-1.20.1-4.8.4.jar",
+            SideFlag::Required,
+            SideFlag::Optional,
+            EnvSource::ModrinthProject,
+        );
+        let doubt: HashSet<String> =
+            ["mods/geckolib-forge-1.20.1-4.8.4.jar".to_string()].into_iter().collect();
+        let plan = build_plan(
+            &parsed,
+            true,
+            &project,
+            &CodeMap::new(),
+            &Default::default(),
+            &doubt,
+        );
+        assert_eq!(plan[0].disposition, ModDisposition::Keep);
+        assert!(plan[0].needs_review);
+        assert!(plan[0].doubted, "存疑行要亮出「百科反驳了剔除」");
+        // 字节码没说话 ⇒ hint 留空，理由由 doubted 那句承担
+        assert_eq!(plan[0].bytecode_hint, None);
+    }
 
     fn facts(path: &str, server_code: bool, client_only_shape: bool) -> CodeMap {
         let mut m = CodeMap::new();
@@ -692,6 +913,8 @@ mod tests {
             true,
             &EvidenceMap::new(),
             &facts("mods/continuity-3.0.jar", true, false),
+        &Default::default(),
+        &Default::default(),
         );
         assert_eq!(plan[0].disposition, ModDisposition::Keep);
         // 有服务端结构事实 = 有依据的保留，不该跟「判不出来」混进待确认分组
@@ -711,6 +934,8 @@ mod tests {
             true,
             &EvidenceMap::new(),
             &facts("mods/some-obscure-lib-1.0.jar", false, true),
+        &Default::default(),
+        &Default::default(),
         );
         assert_eq!(plan[0].disposition, ModDisposition::Remove);
         assert!(plan[0].needs_review);
@@ -725,7 +950,14 @@ mod tests {
             file("some-obscure-lib-1.0.jar", (None, None)),
             file("sodium-0.5.13.jar", (None, None)),
         ]);
-        let plan = build_plan(&parsed, true, &EvidenceMap::new(), &CodeMap::new());
+        let plan = build_plan(
+            &parsed,
+            true,
+            &EvidenceMap::new(),
+            &CodeMap::new(),
+            &Default::default(),
+            &Default::default(),
+        );
         assert_eq!(plan[0].disposition, ModDisposition::Remove);
         assert!(plan[0].needs_review);
         assert_eq!(plan[0].env_source, EnvSource::Unknown);
@@ -739,7 +971,14 @@ mod tests {
     fn review_keyword_rows_stay_kept_even_without_evidence() {
         // Via* 那类关键字表的口径是「有服务端价值、默认保留」，不被新规则一并卷进剔除分组
         let parsed = pack(vec![file("viafabricplus-3.4.11.jar", (None, None))]);
-        let plan = build_plan(&parsed, true, &EvidenceMap::new(), &CodeMap::new());
+        let plan = build_plan(
+            &parsed,
+            true,
+            &EvidenceMap::new(),
+            &CodeMap::new(),
+            &Default::default(),
+            &Default::default(),
+        );
         assert_eq!(plan[0].disposition, ModDisposition::Keep);
         assert!(plan[0].needs_review);
     }
@@ -748,7 +987,14 @@ mod tests {
     fn auto_off_leaves_undecidable_rows_in_keep_without_review_noise() {
         // 关掉自动剔除 = 手动模式：不逐行标待确认，分组也不动
         let parsed = pack(vec![file("some-obscure-lib-1.0.jar", (None, None))]);
-        let plan = build_plan(&parsed, false, &EvidenceMap::new(), &CodeMap::new());
+        let plan = build_plan(
+            &parsed,
+            false,
+            &EvidenceMap::new(),
+            &CodeMap::new(),
+            &Default::default(),
+            &Default::default(),
+        );
         assert_eq!(plan[0].disposition, ModDisposition::Keep);
         assert!(!plan[0].needs_review);
     }
@@ -776,6 +1022,8 @@ mod tests {
             true,
             &project,
             &facts("mods/geckolib-forge-1.20.1-4.8.4.jar", true, false),
+        &Default::default(),
+        &Default::default(),
         );
         assert_eq!(plan[0].disposition, ModDisposition::Keep);
         assert!(plan[0].needs_review, "矛盾必须亮给人看");
@@ -795,6 +1043,8 @@ mod tests {
             true,
             &meta,
             &facts("mods/geckolib-forge-1.20.1-4.8.4.jar", true, false),
+        &Default::default(),
+        &Default::default(),
         );
         assert_eq!(plan[0].disposition, ModDisposition::Keep);
         assert!(plan[0].needs_review);
@@ -806,7 +1056,14 @@ mod tests {
             "sodium-0.5.13.jar",
             (Some(SideFlag::Unsupported), Some(SideFlag::Required)),
         )]);
-        let plan = build_plan(&parsed, false, &EvidenceMap::new(), &CodeMap::new());
+        let plan = build_plan(
+            &parsed,
+            false,
+            &EvidenceMap::new(),
+            &CodeMap::new(),
+            &Default::default(),
+            &Default::default(),
+        );
         assert_eq!(plan[0].disposition, ModDisposition::Keep);
         assert!(!plan[0].client_only);
         assert_eq!(plan[0].server_side, Some(SideFlag::Unsupported));
@@ -827,7 +1084,14 @@ mod tests {
             create,
         ]);
         // geckolib 被作者标成 client-only（env: server=unsupported）→ 本应剔除
-        let plan = build_plan(&parsed, true, &EvidenceMap::new(), &CodeMap::new());
+        let plan = build_plan(
+            &parsed,
+            true,
+            &EvidenceMap::new(),
+            &CodeMap::new(),
+            &Default::default(),
+            &Default::default(),
+        );
         assert_eq!(plan[0].disposition, ModDisposition::Keep);
         assert!(plan[0].needs_review, "被保留行硬依赖，应强制保留并标待确认");
     }

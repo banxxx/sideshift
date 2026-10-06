@@ -6,6 +6,7 @@
   "update.blocked-untrusted-host": "安裝包或其簽章的下載位址不在可信網域，不會自動下載",
   "update.btn-downloading": "下載中 · {{pct}}%",
   "update.btn-verifying": "校驗中…",
+  "update.changelog": "更新記錄",
   "update.fail-browser": "瀏覽器預覽裡沒有可運行的安裝器，請用打包後的程序測",
   "update.fail-busy": "已經有一次更新在跑了，先等它結束",
   "update.fail-canceled": "這次下載已經取消",

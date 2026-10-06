@@ -41,8 +41,33 @@ pub struct JarProbe {
     pub mod_id: Option<String>,
     /// 模组显示名（作者写的英文名），按名搜索兜底用
     pub title: Option<String>,
+    /// jar 自报的**硬依赖** modId 清单（fabric/quilt 的 `depends` 键集 + mods.toml
+    /// `[[dependencies.x]]` 里 `mandatory` 的 `modId`；缺省 mandatory 按 true 算）。
+    /// 只含声明，不过滤平台自身条目（minecraft/fabricloader 这类在映射时自然落空）。
+    /// 附属模组服务端必装而前置被判客户端时，靠这张表把前置按住（detector 的依赖保护）
+    pub hard_deps: Vec<String>,
     /// 字节码结构提示（只在加载器元数据没自证端时才扫，见 `CodeFacts`）
     pub code: CodeFacts,
+}
+
+/// jar 自报身份的轻量快照（mod_id + 硬依赖）：从探测结果里挑出来喂给 detector 的
+/// 依赖映射与保护回路。键为包内条目路径，与 EvidenceMap/CodeMap 同键位
+#[derive(Clone, Debug, Default)]
+pub struct JarMeta {
+    pub mod_id: Option<String>,
+    pub hard_deps: Vec<String>,
+}
+
+/// 包内条目路径 → jar 自报身份
+pub type MetaMap = HashMap<String, JarMeta>;
+
+impl From<&JarProbe> for JarMeta {
+    fn from(p: &JarProbe) -> Self {
+        Self {
+            mod_id: p.mod_id.clone(),
+            hard_deps: p.hard_deps.clone(),
+        }
+    }
 }
 
 /// 一条离线探测请求。`want_sha1` 关掉时不整包算哈希——mrpack 已在 index 里给了 sha1，
@@ -298,6 +323,7 @@ fn read_meta(jar: &[u8], probe: &mut JarProbe) {
             };
             set_if_empty(&mut probe.mod_id, &json_str(&v, "id"));
             set_if_empty(&mut probe.title, &json_str(&v, "name"));
+            json_hard_deps(&v, &mut probe.hard_deps);
             // fabric: 顶层 environment = "*" | "client" | "server"；quilt 同名字段一并读
             let env = json_str(&v, "environment");
             let sides = match env.trim().to_lowercase().as_str() {
@@ -320,6 +346,11 @@ fn read_meta(jar: &[u8], probe: &mut JarProbe) {
             // Forge / NeoForge 的 mods.toml：无端字段，只有身份可取
             set_if_empty(&mut probe.mod_id, &toml_field(&text, "modId"));
             set_if_empty(&mut probe.title, &toml_field(&text, "displayName"));
+            for dep in toml_hard_deps(&text) {
+                if !probe.hard_deps.contains(&dep) {
+                    probe.hard_deps.push(dep);
+                }
+            }
         }
     }
 }
@@ -352,6 +383,75 @@ fn set_if_empty(slot: &mut Option<String>, value: &str) {
 
 fn json_str(v: &serde_json::Value, key: &str) -> String {
     v.get(key).and_then(|s| s.as_str()).unwrap_or_default().to_string()
+}
+
+/// fabric/quilt 元数据的硬依赖键集：fabric 是顶层 `depends` 对象的键，
+/// quilt 是 `quilt_loader.depends` 数组（元素是字符串或带 `id` 的对象）。
+/// 平台自身条目（minecraft / fabricloader / java …）不在这里滤——映射时自然落空
+fn json_hard_deps(v: &serde_json::Value, out: &mut Vec<String>) {
+    let mut push = |id: &str| {
+        let id = id.trim();
+        if !id.is_empty() && !out.iter().any(|d| d == id) {
+            out.push(id.to_string());
+        }
+    };
+    if let Some(obj) = v.get("depends").and_then(|d| d.as_object()) {
+        for k in obj.keys() {
+            push(k);
+        }
+    }
+    if let Some(arr) = v
+        .get("quilt_loader")
+        .and_then(|q| q.get("depends"))
+        .and_then(|d| d.as_array())
+    {
+        for e in arr {
+            match e {
+                serde_json::Value::String(s) => push(s),
+                other => push(&json_str(other, "id")),
+            }
+        }
+    }
+}
+
+/// mods.toml 的 `[[dependencies.<owner>]]` 段里 `mandatory` 的依赖 modId。
+/// 无 TOML 依赖，按行扫段头 + 段内键值。`mandatory` 缺省按 true 算（各版本口径不一，
+/// 依赖保护宁可多留），显式 `false` 才排除；`side="CLIENT"` 的依赖第一版不做细分，照收
+fn toml_hard_deps(text: &str) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    // 当前段：(modId, mandatory)；段外（含顶层）的键值一概不理
+    let mut cur: Option<(String, bool)> = None;
+    for line in text.lines() {
+        let line = line.trim();
+        if line.starts_with("[[") {
+            if let Some((id, mandatory)) = cur.take() {
+                if mandatory && !id.is_empty() && !out.contains(&id) {
+                    out.push(id);
+                }
+            }
+            let head = line.trim_start_matches("[[").trim_end_matches("]]").trim();
+            let in_dep = head.starts_with("dependencies.") && head.len() > "dependencies.".len();
+            cur = in_dep.then(|| (String::new(), true));
+            continue;
+        }
+        let Some((id, mandatory)) = cur.as_mut() else {
+            continue;
+        };
+        if let Some(rest) = line.strip_prefix("modId").filter(|r| r.starts_with('=')) {
+            if id.is_empty() {
+                let v = rest[1..].trim().trim_matches(['"', '\'']);
+                *id = v.to_string();
+            }
+        } else if let Some(rest) = line.strip_prefix("mandatory").filter(|r| r.starts_with('=')) {
+            *mandatory = rest[1..].trim() != "false";
+        }
+    }
+    if let Some((id, mandatory)) = cur {
+        if mandatory && !id.is_empty() && !out.contains(&id) {
+            out.push(id);
+        }
+    }
+    out
 }
 
 /// mods.toml 里取第一个 `key = "value"`（无 TOML 依赖：只取一个字符串字段，够用）
@@ -389,6 +489,81 @@ displayName = 'GeckoLib'
         assert_eq!(toml_field(toml, "modId"), "create");
         assert_eq!(toml_field(toml, "displayName"), "GeckoLib");
         assert_eq!(toml_field(toml, "logoFile"), "");
+    }
+
+    /// B 层：mods.toml 的 `[[dependencies.x]]` 段里 `mandatory` 的 modId 进硬依赖表。
+    /// `mandatory` 缺省按 true（宁可多留）、显式 false 才排除；段外的顶层键值不混入
+    #[test]
+    fn toml_hard_deps_reads_mandatory_sections_only() {
+        let toml = r#"
+modId = "someaddon"
+displayName = "Some Addon"
+[[dependencies.someaddon]]
+modId="minecraft"
+mandatory=true
+type="required"
+
+[[dependencies.someaddon]]
+modId="ftb_quests"
+mandatory=true
+
+[[dependencies.someaddon]]
+modId="jei"
+mandatory=false
+
+[[dependencies.someaddon]]
+modId="unknown_lib"
+"#;
+        assert_eq!(
+            toml_hard_deps(toml),
+            vec!["minecraft".to_string(), "ftb_quests".to_string(), "unknown_lib".to_string()]
+        );
+        // 没有 dependencies 段的清单：空表，绝不把顶层 modId 当依赖
+        assert!(toml_hard_deps("modId = \"solo\"\n").is_empty());
+    }
+
+    /// B 层：探测结果的 hard_deps 两路来源——fabric 的 `depends` 键集与
+    /// mods.toml 的 mandatory 段；quilt 的 `quilt_loader.depends` 数组（字符串/对象混合）同吃
+    #[test]
+    fn probe_collects_hard_deps_from_both_manifest_families() {
+        // fabric
+        let mut p = JarProbe::default();
+        read_meta(
+            &zip_bytes(&[(
+                "fabric.mod.json",
+                br#"{"id":"someaddon","depends":{"minecraft":"*","fabricloader":">=0.15","geckolib":"4.x"}}"#,
+            )]),
+            &mut p,
+        );
+        // serde_json 对象键序不保证（默认 BTreeMap 排序），按集合比对
+        let mut got = p.hard_deps.clone();
+        got.sort();
+        assert_eq!(got, vec!["fabricloader".to_string(), "geckolib".to_string(), "minecraft".to_string()]);
+        // quilt
+        let mut q = JarProbe::default();
+        read_meta(
+            &zip_bytes(&[(
+                "quilt.mod.json",
+                br#"{"quilt_loader":{"id":"qadd","depends":[{"id":"qcore"},{"id":"qq"}]}}"#,
+            )]),
+            &mut q,
+        );
+        assert_eq!(q.hard_deps, vec!["qcore".to_string(), "qq".to_string()]);
+        // Forge：mandatory 段
+        let mut f = JarProbe::default();
+        read_meta(
+            &zip_bytes(&[(
+                "META-INF/mods.toml",
+                br#"modId="fadd"
+[[dependencies.fadd]]
+modId="ftb_quests"
+mandatory=true
+"#,
+            )]),
+            &mut f,
+        );
+        assert_eq!(f.hard_deps, vec!["ftb_quests".to_string()]);
+        assert_eq!(f.mod_id.as_deref(), Some("fadd"));
     }
 
     /// 小向量锁 seed、尾块与空白剔除三处边角；真文件校准（官方 fileFingerprint 逐位一致）

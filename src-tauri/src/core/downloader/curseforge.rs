@@ -86,10 +86,10 @@ pub struct CfFileMeta {
     /// 构建级端标签（`cf_sides` 的产出）。**双层 Option 是给老索引留的升级通道**：
     /// 外层 `None` = 这条是本功能上线前写进索引的（没问过端标签）⇒ `cfpack` 会为它
     /// 重发一次元数据请求；`Some(None)` = 问过了、作者两个标签都没勾（这也是个结论，
-    /// 不许再问）；`Some(Some((c, s)))` = 问到了真声明。老条目经一轮补取后都有了外层值，
+    /// 不许再问）；`Some(Some((c, s)))` = 问到了真声明（单侧可能是 None，见 `cf_sides`）。老条目经一轮补取后都有了外层值，
     /// 「同一个包第二次打开零请求」从那之后恢复
     #[serde(default)]
-    pub env: Option<Option<(SideFlag, SideFlag)>>,
+    pub env: Option<Option<(Option<SideFlag>, Option<SideFlag>)>>,
     /// 索引顺带记的**取链许可态**（不属于 API 那三件事，是本地探出来的）。
     /// `None` = 还没探过（老索引条目、网络抖动没答上的那些轮）；探过的行下次进同一个包零请求。
     /// 存的是「能不能拿到链」这个结论，**不是链本身**——直链带时效，存下来就是埋雷
@@ -108,8 +108,9 @@ impl CfFileMeta {
         self.env.is_some()
     }
 
-    /// 贴回 `CfRef` 的那份端声明：问过才有值，没勾标签就是 None
-    pub fn sides(&self) -> Option<(SideFlag, SideFlag)> {
+    /// 贴回 `CfRef` 的那份端声明：问过才有值，没勾标签就是 None。
+    /// 元组内层也是 Option：CF 只勾一侧时另一侧是「未声明」，不是「不支持」
+    pub fn sides(&self) -> Option<(Option<SideFlag>, Option<SideFlag>)> {
         self.env.flatten()
     }
 }
@@ -118,7 +119,7 @@ impl CfFileMeta {
 /// 证据可以同时挂 `fp:` 与 `sha1:` 两个键，下次离线即答）
 #[derive(Debug, Clone)]
 pub struct CfFpMatch {
-    pub sides: Option<(SideFlag, SideFlag)>,
+    pub sides: Option<(Option<SideFlag>, Option<SideFlag>)>,
     pub sha1: Option<String>,
 }
 
@@ -174,18 +175,24 @@ fn cf_loader(file: &Value) -> LoaderKind {
 /// - 只勾 `Server` ⇒ (不支持, 必需)，两侧齐勾 ⇒ (必需, 必需)；
 /// - **两个都没勾 ⇒ `None`**：老构建普遍没勾，把「没勾」读成「不支持」会把
 ///   那些模组从服务端包里冤枉删掉——这一层没答上，交回证据阶梯的下一层
-fn cf_sides(file: &Value) -> Option<(SideFlag, SideFlag)> {
+fn cf_sides(file: &Value) -> Option<(Option<SideFlag>, Option<SideFlag>)> {
     let hit = |tag: &str| {
         file["gameVersions"]
             .as_array()
             .map(|a| a.iter().filter_map(|g| g.as_str()).any(|g| g.eq_ignore_ascii_case(tag)))
             .unwrap_or(false)
     };
-    use SideFlag::{Required, Unsupported};
+    use SideFlag::Required;
+    // **只勾一侧是歧义标签，不当「另一侧不支持」用**（2026-10 实测 Thulium 误判）：
+    // 作者给 `['Client', '1.20.1', 'Forge']` 的意图是「这构建面向客户端」，但 GC/事件总线
+    // 这类优化服务端同样要装；而真纯客户端的 Oculus 也只勾 Client——两种情况在标签上
+    // 不可区分。所以：两侧齐勾 = 两端都要（强）；只勾一侧 = 该侧必需、另一侧**未声明**
+    //（None 传到底，detector 对「(必,无)」的行强制待人工，字节码与复核腿仍可翻案）；
+    // 全没勾 = 这一层没答上
     match (hit("Client"), hit("Server")) {
-        (true, true) => Some((Required, Required)),
-        (true, false) => Some((Required, Unsupported)),
-        (false, true) => Some((Unsupported, Required)),
+        (true, true) => Some((Some(Required), Some(Required))),
+        (true, false) => Some((Some(Required), None)),
+        (false, true) => Some((None, Some(Required))),
         (false, false) => None,
     }
 }
@@ -252,8 +259,8 @@ fn file_entry(f: &Value, want_mc: &str) -> Option<ModVersionEntry> {
         sha1: cf_sha1(f),
         file_name,
         // 构建级端标签：作者勾的 Client/Server，没勾就留 None（`cf_sides` 有实测判据）
-        client_side: cf_sides(f).map(|(c, _)| c),
-        server_side: cf_sides(f).map(|(_, s)| s),
+        client_side: cf_sides(f).and_then(|(c, _)| c),
+        server_side: cf_sides(f).and_then(|(_, s)| s),
         depends: cf_depends(f),
         id,
     })
@@ -480,7 +487,7 @@ impl Downloader {
     pub async fn curseforge_project_sides(
         &self,
         ids: &[String],
-    ) -> HashMap<String, Option<(SideFlag, SideFlag)>> {
+    ) -> HashMap<String, Option<(Option<SideFlag>, Option<SideFlag>)>> {
         let mut out = HashMap::new();
         let nums: Vec<u64> = ids.iter().filter_map(|s| s.trim().parse().ok()).collect();
         if nums.is_empty() {
@@ -525,7 +532,7 @@ impl Downloader {
     pub async fn curseforge_slug_sides(
         &self,
         slug: &str,
-    ) -> Result<Option<(SideFlag, SideFlag)>, DownloadError> {
+    ) -> Result<Option<(Option<SideFlag>, Option<SideFlag>)>, DownloadError> {
         let slug = slug.trim();
         if slug.is_empty() {
             return Ok(None);
@@ -760,23 +767,25 @@ mod tests {
     use crate::models::SideFlag;
     use LoaderKind::*;
 
-    /// 端标签四象限（实测判据见 `cf_sides` 注释）：勾了哪侧才是哪侧，
-    /// **两个都没勾 ≠ 服务端不支持**——那批老构建交回证据阶梯的下一层
+    /// 端标签四象限（实测判据见 `cf_sides` 注释）：两侧齐勾才算两端都要；
+    /// **只勾一侧是歧义标签，另一侧是 None（未声明）**——Thulium 只勾 Client 却
+    /// 服务端必装，真纯客户端的 Oculus 也只勾 Client，标签上不可区分；
+    /// **两个都没勾 = 这层没答上**，交回证据阶梯的下一层
     #[test]
     fn cf_sides_reads_only_what_the_author_tagged() {
         let gv = |tags: &[&str]| serde_json::json!({ "gameVersions": tags });
-        use SideFlag::{Required, Unsupported};
+        use SideFlag::Required;
         assert_eq!(
             cf_sides(&gv(&["1.20.1", "Forge", "Client", "Server"])),
-            Some((Required, Required))
+            Some((Some(Required), Some(Required)))
         );
         assert_eq!(
             cf_sides(&gv(&["1.20.1", "Client"])),
-            Some((Required, Unsupported))
+            Some((Some(Required), None))
         );
         assert_eq!(
             cf_sides(&gv(&["1.20.1", "Server"])),
-            Some((Unsupported, Required))
+            Some((None, Some(Required)))
         );
         assert_eq!(cf_sides(&gv(&["1.20.1", "Forge"])), None);
         assert_eq!(cf_sides(&gv(&[])), None);
@@ -1067,8 +1076,8 @@ mod tests {
             sides.insert(id, got);
         }
         use crate::models::SideFlag;
-        // id=238222：最后一个带标签的是 id=3（只勾 Client）
-        assert_eq!(sides["238222"], Some((SideFlag::Required, SideFlag::Unsupported)));
+        // id=238222：最后一个带标签的是 id=3（只勾 Client ⇒ 服务端未声明）
+        assert_eq!(sides["238222"], Some((Some(SideFlag::Required), None)));
         // id=999：没有一个文件勾端标签 → None
         assert_eq!(sides["999"], None);
     }

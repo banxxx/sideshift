@@ -54,7 +54,7 @@ function licenseRows(t: TranslateFn): Array<[string, string, string]> {
         ["Modrinth API · CurseForge API", t("about.tp-meta", "模组与版本元数据来源"), t("about.tp-public-api", "公开 API")],
         ["MC百科", t("about.tp-modnames", "模组中文名的离线词典"), "CC BY-NC-SA 4.0"],
         ["BMCLAPI（麦块）", t("about.tp-mirror", "可选的下载与元数据镜像加速服务"), "MIT"],
-        ["MIT License", t("about.tp-self", "本项目自身的发布协议"), "MIT"],
+        ["Apache License 2.0", t("about.tp-self", "本项目自身的发布协议"), "Apache-2.0"],
     ];
 }
 
@@ -126,7 +126,7 @@ export function AboutPage() {
                                 SideShift
                             </span>
                             <span className="text-[11px] leading-[16px] text-text-3">
-                                {t("about.positioning", "独立第三方工具 · MIT 协议 · 无遥测")}
+                                {t("about.positioning", "独立第三方工具 · Apache-2.0 协议 · 无遥测")}
                             </span>
                         </div>
                         <Btn
@@ -214,7 +214,7 @@ export function AboutPage() {
                     <p className="text-[12px] leading-[20px] text-text-2">
                         {t(
                             "about.disclaimer",
-                            "SideShift 是独立的第三方工具，与 Mojang Studios 或 Microsoft 无任何隶属或授权关系。Minecraft 及其相关名称、素材为相应权利人的商标或版权作品。本项目以 MIT 协议发布，不含任何官方内容；用于转换你所持有的整合包，责任自负。"
+                            "SideShift 是独立的第三方工具，与 Mojang Studios 或 Microsoft 无任何隶属或授权关系。Minecraft 及其相关名称、素材为相应权利人的商标或版权作品。本项目以 Apache-2.0 协议发布，不含任何官方内容；用于转换你所持有的整合包，责任自负。"
                         )}
                     </p>
                     <p className="font-mono text-[11px] leading-[16px] text-text-3">

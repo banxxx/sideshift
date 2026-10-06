@@ -74,3 +74,20 @@ export async function openExternal(url: string): Promise<void> {
  * 跨语言没法单源，迁仓库时两处一起改。
  */
 export const REPO_URL = "https://github.com/banxxx/sideshift";
+
+/**
+ * 文档站（GitHub Pages）。`base` 在 `docs/.vitepress/config.mts` 里是 `/sideshift/`，
+ * 仓库改名时这两处加上 pages.yml 一起看。
+ */
+export const DOCS_URL = "https://banxxx.github.io/sideshift";
+
+/**
+ * 某一版的「更新记录」锚点：弹窗里那句短日志之外，完整改动在这一页。
+ * 页上的版本标题**只能写 `v1.0.0-beta.3` 这种纯版本号**（日期写正文），因为锚点 id 是
+ * VitePress 按标题文字 slug 出来的——实测 `v1.0.0-beta.3` → `#v1-0-0-beta-3`（点号换连字符）。
+ * 这一版还没进记录页时 fragment 认不出来，浏览器落在页面顶部，不是 404。
+ */
+export function changelogUrl(version: string): string {
+    const tag = version.startsWith("v") ? version : `v${version}`;
+    return `${DOCS_URL}/guide/changelog#${tag.toLowerCase().replace(/\./g, "-")}`;
+}

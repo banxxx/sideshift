@@ -47,8 +47,13 @@ export interface PlanMod {
     cfRequired?: boolean;
     /** 仅前端展示态：新增行被停用（行保留在清单、不参与构建与计数），下发前整行过滤 */
     disabled?: boolean;
-    /** 依赖的其他方案行 id（mrpack depends 元数据；反向依赖警告用） */
+    /** 依赖的其他方案行 id（mrpack depends + jar 自报硬依赖；反向依赖警告用） */
     depends?: string[];
+    /** 把本行按住的依赖方行 id：本行被判客户端但被保留行（服务端必装的附属）硬依赖，
+     *  依赖保护改判保留——非空时待人工理由要说清是谁按住的 */
+    protectedBy?: string[];
+    /** 剔除复核存疑：平台项目级判剔除、百科反驳但等级压不过（保留 + 待人工的依据） */
+    doubted?: boolean;
 }
 
 /** 自动分类结果（Rust emit("plan://classified", payload)）：在线层跑完后的增量刷新 */

@@ -43,14 +43,34 @@ pnpm tauri signer generate -w .keys/sideshift.key
    `src-tauri/Cargo.toml` 與 `installer/Cargo.toml` 跟著手動同步——只為讓 `CARGO_PKG_VERSION` 不說假話。
 2. **版本號帶不帶預發布位就是頻道**：`1.0.0-beta.2` 歸 Beta 線，`1.2.0` 歸正式線
    （判據在 tag 的 semver 預發布位，與 GitHub 的 prerelease 勾選無關）。
-3. **打 tag 並推送**（tag 必須以 `v` 開頭，且 `v` 後面與 package.json 逐字一致——不一致 workflow 會直接失敗）：
+3. **寫這一版的更新日誌，兩處各一份**：短的那份進彈窗，全的那份進文件站。
+
+   **短日誌 = `release-notes/<版本>.md`**（檔名不帶 `v`：`release-notes/1.0.0-beta.3.md`）。它會被當成 GitHub Release 正文，也就是應用內「檢查更新」彈窗裡那幾行。**一版一份、不覆蓋舊的**——缺這個檔案 workflow 直接失敗，所以「忘記換日誌」沒有發生的條件。正文的規矩由 `node scripts/check-release-notes.mjs` 逐條判（打 tag 前自己跑一遍最省事）：
+
+   | 規矩 | 為什麼 |
+   |---|---|
+   | 最多 4 行，建議寫 3 行 | 彈窗的說明是 `line-clamp-4`，第 5 行永遠看不到；留一行是給字級/DPI 變化兜底 |
+   | 一行一條，說不完就拆兩條 | 一個硬換行就是一個視覺行；單行約 34 個字（418px 內容寬 ÷ 12px 字級），寫滿會繞成兩行、把下一行的預算吃掉 |
+   | 條首統一 `- ` | 發佈頁會渲染成清單，彈窗裡讀作項目符；除此之後別用 markdown |
+   | 不寫空行 | 彈窗按 `whitespace-pre-wrap` 渲染，空行會顯示成一行 18px 的空白 |
+   | 不寫標題 / `<!-- 註解 -->` / `---` 頭 | 彈窗不渲染 markdown，這些符號會原樣出現在使用者眼前 |
+   | 不寫版本號、日期、套件大小 | 標題已經是「更新到 vxxx」，標題下那行小字已經有 大小 · 日期 · 當前版本，重複就是白佔 |
+   | 順序：新增 → 改動 → 修正 | 使用者先要判斷這版有沒有自己等的東西 |
+
+   **全日誌 = `docs/guide/changelog.md`**（彈窗左下角那顆「更新記錄」跳的就是它）：在**最上面追加**一節，舊的往下堆，不刪不改。那一節的標題**只能寫純版本號**（`## v1.0.0-beta.3`），日期寫進正文第一行——那顆鈕是按版本號算錨點跳的（`v1.0.0-beta.3` → `#v1-0-0-beta-3`），標題裡多一個符號錨點就對不上了。
+
+   **順序有硬要求**：這兩處改動先合進 master、等 Pages 把文件站建置發佈完，**再**打 tag。因為 Pages 吃 push→master、Release 吃 tag push，反過來的話使用者點進去看到的是一頁還沒有這一節的記錄。
+
+
+4. **打 tag 並推送**（tag 必須以 `v` 開頭，且 `v` 後面與 package.json 逐字一致——不一致 workflow 會直接失敗）：
 
    ```bash
    git tag v1.0.0-beta.3
    git push origin v1.0.0-beta.3
    ```
 
-4. workflow 自動：建置 NSIS + 簽章 → 出安裝殼與可攜包 → 建 Release（預發布標記自動判斷）→ 上傳四個產物。
+5. workflow 自動：核對這一版的 `release-notes/<版本>.md` 存在且形狀合格 → 建置 NSIS + 簽章 → 出安裝殼與可攜包 → 建 Release（正文取那份檔案，預發布標記自動判斷）→ 上傳四個產物。
+
 
 ## 版本線：正式版與測試版
 
@@ -87,6 +107,8 @@ Beta 線用戶**收不到正式版推送**：裝著 `beta.4` 的用戶在 `1.1.0
 | 症狀 | 病因 |
 | --- | --- |
 | workflow 在「核對 tag」一步掛了 | tag 與 package.json 版本不一致（版本號唯一真源是 package.json） |
+| workflow 在「核對更新日誌已填寫」一步掛了 | 缺 `release-notes/<版本>.md`（一版一份，檔名不帶 `v`），或它的形狀不合格：有空行、有 markdown、或合計超過 4 個視覺行——本地 `node scripts/check-release-notes.mjs` 跑一遍就能看到是哪一行 |
+| 彈窗裡的日誌被截在一半 | 那份日誌的視覺行數頂到了 4 行上限且最後一條繞了行；把長的那條拆短，完整改動寫進 `docs/guide/changelog.md` |
 | 建置報「A public key has been found, but no private key」 | Secrets 沒配或沒配對：`TAURI_SIGNING_PRIVATE_KEY` 必須是鑰匙檔案的內容 |
 | 用戶端停在「缺同名簽章檔案」 | release 裡 `.sig` 沒傳上（檢查 workflow 的產物收集步驟是否跑全） |
 | 用戶端停在「簽章與安裝包對不上」 | 公鑰換過但用戶端沒換：走換鑰流程 |

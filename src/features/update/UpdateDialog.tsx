@@ -5,11 +5,11 @@
  */
 import { ExternalLink, Rocket } from "lucide-react";
 import type { ReactNode } from "react";
-import { Btn, ModalShell } from "@/components/ui";
+import { Btn, LinkBtn, ModalShell } from "@/components/ui";
 import { formatDate, formatSize, ratioPercent } from "@/lib/format";
 import { errOf } from "@/lib/errors";
 import { t, useT } from "@/lib/i18n";
-import { openExternal } from "@/lib/api";
+import { changelogUrl, openExternal } from "@/lib/api";
 import type { UpdateBlocked, UpdateInfo, UpdateStatus } from "@/lib/types";
 
 /** 这一轮办的是不是弹窗里这一版：后端两处落点（占位那一次写 tag 原文，定稿那一次写版本号），所以两边都去 `v` 再比 */
@@ -134,6 +134,7 @@ export function UpdateDialog({
     })();
 
     const openRelease = () => void openExternal(info.releaseUrl!);
+    const openChangelog = () => void openExternal(changelogUrl(info.latest ?? info.current));
     const canStart = info.downloadable && info.tag !== null && onStart !== undefined;
 
     // 两颗钮永远各在其位：换的是文字与配色，不是位置
@@ -205,6 +206,10 @@ export function UpdateDialog({
             subTone={failed ? "danger" : undefined}
             footerActions={
                 <>
+                    {/* 常挂，且永远是最左那件：闲置态它正好落在「跳过这个版本」的左边 */}
+                    <LinkBtn size="sm" onClick={openChangelog}>
+                        {t("update.changelog", "更新记录")}
+                    </LinkBtn>
                     {left}
                     {right}
                 </>

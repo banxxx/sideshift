@@ -9,6 +9,7 @@ use futures::stream::{self, StreamExt};
 use serde::{Deserialize, Serialize};
 
 use crate::core::downloader::{mcmod_confident, Downloader, McmodPage, ModrinthEnv};
+use crate::core::detector::{verdict, Verdict};
 use crate::models::{EnvLookupSource, EnvSource, SideFlag};
 use super::evidence::{evidence_from_modrinth, put, rank, Evidence, EvidenceMap};
 use super::ident::{is_slug, slugs_from_file_name};
@@ -37,6 +38,11 @@ fn project_key(p: &str) -> String {
 }
 fn fp_key(fp: u32) -> String {
     format!("fp:{fp}")
+}
+/// 复核腿的独立命名空间：值是百科给出的证据本身，`apply_index` 只认 sha1:/proj:/fp:
+/// 三种前缀，绝不会把复核结论当证据读出来
+fn recheck_key(base: String) -> String {
+    format!("recheck:{}", base.to_lowercase())
 }
 
 /// 索引条目的落盘形状：证据 + 记录时间。`ts` 缺失 = 端 TTL 上线前写的老条目（按过期处理，
@@ -103,6 +109,20 @@ impl EnvIndex {
         if let Some(s) = self.map.get_mut(key) {
             s.ts = Some(now_secs());
         }
+    }
+
+    /// 记一轮复核结论（百科给出的证据）。键取这一行的全部身份（sha1 / 项目 id / slug），
+    /// 任意一个命中即算复核过——重跑分类不再为它发问
+    fn record_recheck(&mut self, keys: &[String], ev: Evidence) {
+        for k in keys {
+            self.map
+                .insert(recheck_key(k.clone()), StoredEvidence { ev, ts: Some(now_secs()) });
+        }
+    }
+
+    /// 这一行的复核结论（若有）。同一行的多个身份键任意命中即算
+    fn recheck_answer(&self, keys: &[String]) -> Option<Evidence> {
+        keys.iter().find_map(|k| self.map.get(&recheck_key(k.clone()))).map(|s| s.ev)
     }
 }
 
@@ -274,6 +294,14 @@ const CF_SEARCH_ROW_BUDGET: usize = 96;
 pub const CF_SEARCH_BUDGET: Duration = Duration::from_secs(60);
 
 const MCMOD_ROW_BUDGET: usize = 96;
+
+/// A 层剔除复核腿的行预算：复核对象是「将被判剔除的行」的子集（通常 < 20 行），
+/// 这个上限只是设计护栏
+pub const RECHECK_ROW_BUDGET: usize = 96;
+
+/// A 层剔除复核腿的独立墙钟：CF 一发/行 + 百科两发/行（串行、慢），
+/// 与百科腿同量级的口径。到点掐掉时已答的行照常生效
+pub const RECHECK_BUDGET: Duration = Duration::from_secs(120);
 
 /// 在线反查整轮的墙钟预算。命令层用它掐 `resolve_online`：单次请求已经有
 /// `downloader::client::METADATA_TIMEOUT` 各兜 10s，这一档管的是「一百多个请求各慢一点」
@@ -829,8 +857,8 @@ async fn resolve_via_fingerprints(
             let Some(hit) = matches.get(&fp) else { continue };
             let Some((c, s)) = hit.sides else { continue };
             let ev = Evidence {
-                client: Some(c),
-                server: Some(s),
+                client: c,
+                server: s,
                 source: EnvSource::CfFile,
             };
             put(out, &t.path, ev);
@@ -891,8 +919,8 @@ pub(crate) async fn resolve_via_cf_search(
         match dl.curseforge_slug_sides(&slug).await {
             Ok(Some((c, srv))) => {
                 let ev = Evidence {
-                    client: Some(c),
-                    server: Some(srv),
+    client: c,
+                    server: srv,
                     source: EnvSource::CfFile,
                 };
                 put(out, &t.path, ev);
@@ -975,19 +1003,11 @@ async fn mcmod_ask(
         Err(_) => return (None, false),
     };
     let Some(hit) = hits.iter().find(|h| mcmod_confident(&cands, &h.name)) else {
-        eprintln!(
-            "[mcmod] 名字闸拒绝：候选 {cands:?} ↔ 词条 {names:?}（共 {count} 条）",
-            names = hits.iter().map(|h| h.name.as_str()).collect::<Vec<_>>(),
-            count = hits.len(),
-        );
         return (None, false);
     };
     let entry = match dl.mcmod_entry(&hit.id).await {
         Ok(McmodPage::Answered(e)) => e,
-        other => {
-            eprintln!("[mcmod] 词条页未答上：{} → {:?}", hit.id, other.as_ref().map(|_| ()));
-            return (None, false);
-        }
+        _ => return (None, false),
     };
     // 第二道同形闸
     if !entry.name.is_empty() && !mcmod_confident(&cands, &entry.name) {
@@ -1028,6 +1048,159 @@ fn store_mcmod(
     }
 }
 
+/// 目标行的复核缓存身份键：sha1 优先（字节唯一），项目 id 与全部 slug 候选兜底。
+/// 与 `store_mcmod` 的键同构——CF 复核命中时直接写证据表的同名键，复核账本与证据
+/// 表各自独立命名空间（`recheck:` 前缀），互不串位
+fn recheck_keys(t: &Target) -> Vec<String> {
+    let mut keys = Vec::new();
+    if let Some(h) = &t.sha1 {
+        keys.push(sha1_key(h));
+    }
+    if let Some(p) = &t.project_id {
+        keys.push(project_key(p));
+    }
+    for s in &t.slugs {
+        keys.push(project_key(s));
+    }
+    keys
+}
+
+/// A 层复核的选行判据（不发请求）：证据在案、来源是**平台声明层或更弱**
+/// （CF 构建 / Modrinth 项目 / 镜像 / 百科），且按这条证据就是剔除裁决。
+/// CF 构建标签在列的原因：作者只勾一侧时是歧义声明（见 `cf_sides`，Thulium 实测），
+/// 不是字节级事实；哈希反查（ModrinthHash）精确到这一枚 jar 的字节，才配豁免复核。
+/// 无证据行与 mrpack 声明行没有 ev 条目，本来就被无证据两条腿
+/// （CF slug 搜索 / 百科补全）覆盖，不在这里重复
+fn needs_recheck(e: &Evidence) -> bool {
+    matches!(
+        e.source,
+        EnvSource::CfFile | EnvSource::ModrinthProject | EnvSource::MirrorProject | EnvSource::Mcmod
+    ) && verdict(e.client, e.server) == Verdict::Strip
+}
+
+/// 离线判「有没有待复核的行」：命令层据此决定要不要起在线轮——全部命中索引、
+/// 无 pending 行时，只要还有待复核的行，在线轮照样要跑（否则复核永远轮空）
+pub(crate) fn strip_recheck_pending(
+    index: &EnvIndex,
+    targets: &[Target],
+    out: &EvidenceMap,
+) -> bool {
+    targets.iter().any(|t| {
+        out.get(&t.path).is_some_and(needs_recheck)
+            && index.recheck_answer(&recheck_keys(t)).is_none()
+    })
+}
+
+/// 索引里已记过的复核结论 → detector 的存疑名单（不联网，纯查表）。
+/// 分类开场先用它喂 `build_plan`，上一轮复核出的存疑结论这一轮照常生效
+pub(crate) fn doubted_paths(index: &EnvIndex, targets: &[Target], out: &EvidenceMap) -> Vec<String> {
+    targets
+        .iter()
+        .filter(|t| {
+            out.get(&t.path).is_some_and(needs_recheck)
+                && index
+                    .recheck_answer(&recheck_keys(t))
+                    .is_some_and(|ev| verdict(ev.client, ev.server) != Verdict::Strip)
+        })
+        .map(|t| t.path.clone())
+        .collect()
+}
+
+/// A 层剔除复核腿：对「证据是项目级/以下、且按当前证据将被判剔除」的行追加问一轮
+/// CurseForge 与百科。动机（2026-10 实测 GeckoLib）：Modrinth 项目级声明是**作者自己
+/// 填的**，作者填错（server_side=optional）时整条链路拿到的就是错数据——而 CF 与百科
+/// 的两条补全腿只服务「还没有任何证据」的行，正确数据永远没有出场机会。
+///
+/// - **CF slug 搜索**给出的证据等级（CfFile）高于三个项目级来源，命中即覆盖证据本身
+///   （`put` 收等档或更好），detector 重算时裁决自然翻转，不走返回值；
+/// - **百科**等级压不过项目级（`put` 会拒），反驳走**存疑旁路**：返回值里的行由
+///   detector 与字节码否决同路处理——改判保留 + 待人工。
+///
+/// 复核结论（含「百科同意剔除」）记进 `recheck:` 命名空间，重跑分类不再重复发问；
+/// 返回 `(证据被改动的行, 存疑行)`——前者要并回共享证据表，后者进 `env_doubt`
+/// 供 detector 按住剔除（两者键都是 EvidenceMap 的键）
+pub(crate) async fn recheck_strip_rows(
+    dl: &Downloader,
+    index: &mut EnvIndex,
+    cache_dir: &Path,
+    targets: &[Target],
+    out: &mut EvidenceMap,
+    mcmod_enabled: bool,
+) -> (Vec<String>, Vec<String>) {
+    // 行序：包内的行排前（与百科腿同口径——它们才真正决定服务端缺不缺件）
+    let mut rows: Vec<(usize, bool)> = targets
+        .iter()
+        .enumerate()
+        .filter_map(|(i, t)| {
+            out.get(&t.path)
+                .and_then(|e| needs_recheck(e).then_some((i, t.in_pack)))
+        })
+        .filter(|(i, _)| index.recheck_answer(&recheck_keys(&targets[*i])).is_none())
+        .collect();
+    rows.sort_by_key(|&(_, in_pack)| !in_pack);
+
+    let mut touched: Vec<String> = Vec::new();
+    let mut doubt: Vec<String> = Vec::new();
+    for (i, _) in rows.into_iter().take(RECHECK_ROW_BUDGET) {
+        let t = &targets[i];
+        // CF 先行：命中即覆盖（证据表 + 索引落盘）。**裁决真的翻转了才算接住**——
+        // 对本来就走 CF 数据的行，slug 搜索很可能带回同一份歧义标签（同判定），
+        // 那就不算答案，下面百科的二次意见照样要问
+        let old_verdict = out.get(&t.path).map(|e| verdict(e.client, e.server));
+        let mut answered = false;
+        if let Some(slug) = t.slugs.first().map(|s| s.trim()).filter(|s| !s.is_empty()) {
+            if let Ok(Some((c, s))) = dl.curseforge_slug_sides(slug).await {
+                let ev = Evidence {
+                    client: c,
+                    server: s,
+                    source: EnvSource::CfFile,
+                };
+                let flipped = old_verdict.is_some_and(|v| verdict(ev.client, ev.server) != v);
+                put(out, &t.path, ev);
+                index.record(project_key(slug), ev);
+                if let Some(h) = &t.sha1 {
+                    index.record(sha1_key(h), ev);
+                }
+                index.save(cache_dir);
+                touched.push(t.path.clone());
+                answered = flipped;
+            }
+        }
+        if answered || !mcmod_enabled {
+            continue;
+        }
+        // CF 没接住：百科给二次意见。复核账本里已有结论的行不重问，直接按账本表态
+        let keys = recheck_keys(t);
+        let existing = index.recheck_answer(&keys);
+        let answer = match existing {
+            Some(ev) => Some(ev),
+            None => {
+                let Some(q) = t
+                    .title
+                    .as_deref()
+                    .or(t.slugs.first().map(|s| s.as_str()))
+                    .map(str::trim)
+                    .filter(|q| !q.is_empty())
+                else {
+                    continue;
+                };
+                match mcmod_ask(dl, t, q).await {
+                    (Some((_, ev)), _) => {
+                        index.record_recheck(&keys, ev);
+                        index.save(cache_dir);
+                        Some(ev)
+                    }
+                    _ => None,
+                }
+            }
+        };
+        if answer.is_some_and(|ev| verdict(ev.client, ev.server) != Verdict::Strip) {
+            doubt.push(t.path.clone());
+        }
+    }
+    (touched, doubt)
+}
+
 /// 单个本地 jar 的端取证阶梯（用户手动添加的行走这条路），口径与整包分类完全一致：
 /// jar 自证 → 本地索引（离线即答）→ 联网按 `source` 那一档选定的**唯一一个源**反查并落盘
 /// （见 `resolve_online`；`source=Off` 时这一层整个跳过）。
@@ -1039,7 +1212,7 @@ pub async fn resolve_local_jar(
     cache_dir: &Path,
     file_name: &str,
     probe: &JarProbe,
-    cf: Option<(SideFlag, SideFlag)>,
+    cf: Option<(Option<SideFlag>, Option<SideFlag>)>,
     source: EnvLookupSource,
     mcmod: bool,
 ) -> Option<Evidence> {
@@ -1067,8 +1240,8 @@ pub async fn resolve_local_jar(
             &mut out,
             &key,
             Evidence {
-                client: Some(c),
-                server: Some(s),
+                client: c,
+                server: s,
                 source: EnvSource::CfFile,
             },
         );
@@ -1117,7 +1290,7 @@ pub async fn resolve_added_build(
     file_name: &str,
     sha1: Option<&str>,
     title: Option<&str>,
-    cf: Option<(SideFlag, SideFlag)>,
+    cf: Option<(Option<SideFlag>, Option<SideFlag>)>,
     source: EnvLookupSource,
     mcmod: bool,
 ) -> Option<Evidence> {
@@ -1701,5 +1874,70 @@ displayName = "Obscure Lib"
         assert_eq!(targets[0].title.as_deref(), Some("3D Skin Layers"));
         // 模组自报 id 排在文件名猜测之前，且小写归一
         assert_eq!(targets[0].slugs, vec!["skinlayers3d", "x"]);
+    }
+
+    /// A 层复核账本的离线半边：选行判据 + 复核结论缓存 + 存疑推导。
+    /// 联网半边（CF 覆盖 / 百科问询）由 e2e 探针覆盖
+    #[test]
+    fn recheck_selection_and_doubt_ledger() {
+        // 选行：只认项目级/以下且判剔除的证据；构建级（哈希）是字节级事实，不复核
+        let project_strip = Evidence {
+            client: Some(SideFlag::Required),
+            server: Some(SideFlag::Optional),
+            source: EnvSource::ModrinthProject,
+        };
+        let hash_strip = Evidence {
+            client: Some(SideFlag::Required),
+            server: Some(SideFlag::Unsupported),
+            source: EnvSource::ModrinthHash,
+        };
+        let keep = Evidence {
+            client: Some(SideFlag::Unsupported),
+            server: Some(SideFlag::Required),
+            source: EnvSource::ModrinthProject,
+        };
+        assert!(needs_recheck(&project_strip));
+        assert!(!needs_recheck(&hash_strip));
+        assert!(!needs_recheck(&keep));
+
+        let t = Target {
+            path: "overrides/mods/geckolib.jar".into(),
+            sha1: Some("abc".into()),
+            cf_fingerprint: None,
+            project_id: None,
+            slugs: vec!["geckolib".into()],
+            title: None,
+            in_pack: true,
+        };
+        let mut out = EvidenceMap::new();
+        out.insert(t.path.clone(), project_strip);
+        let mut index = EnvIndex::default();
+        // 未复核过 ⇒ 有待复核的行（在线轮要为此起跑）
+        assert!(strip_recheck_pending(&index, &[t.clone()], &out));
+
+        // 记一条「百科反驳剔除」的复核结论 ⇒ 不再待复核、且推导出存疑行
+        let keys = recheck_keys(&t);
+        index.record_recheck(
+            &keys,
+            Evidence {
+                client: Some(SideFlag::Required),
+                server: Some(SideFlag::Required),
+                source: EnvSource::Mcmod,
+            },
+        );
+        assert!(!strip_recheck_pending(&index, &[t.clone()], &out));
+        assert_eq!(doubted_paths(&index, &[t.clone()], &out), vec![t.path.clone()]);
+
+        // 百科同意剔除的复核结论：不算存疑
+        let mut agree = EnvIndex::default();
+        agree.record_recheck(
+            &keys,
+            Evidence {
+                client: Some(SideFlag::Required),
+                server: Some(SideFlag::Unsupported),
+                source: EnvSource::Mcmod,
+            },
+        );
+        assert!(doubted_paths(&agree, &[t], &out).is_empty());
     }
 }

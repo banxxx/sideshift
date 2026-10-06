@@ -88,6 +88,18 @@ export function channelLabel(c: UpdateChannel): string {
     return c === "beta" ? t("settings.beta", "测试版（Beta）") : t("settings.stable", "正式版");
 }
 
+/**
+ * 待人工行的「谁按住了剔除」说明：依赖保护（附属服务端必装、硬依赖它）与
+ * 复核存疑（百科反驳了项目级剔除）。都没有 ⇒ 空串，调用方回退自己的默认文案。
+ * Convert 卡行徽章、「查看全部」弹窗与报告页共用同一口径，别三处各写一份
+ */
+export function reviewHoldReason(mod: PlanMod): string {
+    const by = mod.protectedBy?.join(", ");
+    if (by) return t("convert-modals.protected-by", " · 附属 {{deps}} 服务端必装、硬依赖它", { deps: by });
+    if (mod.doubted) return t("convert-modals.mcmod-veto", " · 百科称服务端需要，已按住剔除");
+    return "";
+}
+
 /** 端判定依据的直白说法：Convert 卡行与「查看全部」弹窗共用同一口径，别两处各写一份 */
 export function evidenceLabel(source: EnvSource = "unknown"): string {
     // 表建在函数里、每格一条 `t(字面量)`：
@@ -97,10 +109,10 @@ export function evidenceLabel(source: EnvSource = "unknown"): string {
     const label: Record<EnvSource, string> = {
         mrpack: t("lib.modpack-declared", "整合包声明"),
         jarMetadata: t("lib.jar-metadata", "jar 自证"),
-        modrinthHash: t("lib.platform-build", "平台构建"),
+        modrinthHash: t("lib.platform-build", "Modrinth 构建反查"),
         cfFile: t("lib.cf-build", "CF 构建标签"),
-        modrinthProject: t("lib.platform-project", "平台项目"),
-        mirrorProject: t("lib.mirror-project", "镜像项目"),
+        modrinthProject: t("lib.platform-project", "Modrinth 项目声明"),
+        mirrorProject: t("lib.mirror-project", "Modrinth 镜像声明"),
         mcmod: t("lib.mcmod-entry", "百科声明"),
         nameHeuristic: t("lib.name-guess", "名称推断"),
         unknown: t("lib.basis", "无依据"),
