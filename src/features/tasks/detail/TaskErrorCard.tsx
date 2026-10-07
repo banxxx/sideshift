@@ -54,7 +54,7 @@ export function TaskErrorCard({
     return (
         <section
             className={cn(
-                "flex w-full flex-col rounded-[12px] border border-stroke bg-surface p-4",
+                "card-frost flex w-full flex-col rounded-[12px] p-4",
                 builder ? "gap-2.5" : "gap-2"
             )}
         >

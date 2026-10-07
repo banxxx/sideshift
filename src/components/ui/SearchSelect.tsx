@@ -142,7 +142,7 @@ export function SearchSelect({
                     isChip
                         ? "h-7 shrink-0 self-start rounded-md bg-surface px-2 text-[11px] leading-[16px] font-medium text-text-1 hover:bg-surface-2"
                         : "h-8 w-full rounded-lg px-2.5",
-                    !isChip && (plain ? "bg-bg-app" : "bg-surface"),
+                    !isChip && (plain ? "bg-bg-app" : "bg-[var(--surface-card)]"),
                     open
                         ? plain || isChip
                             ? "border-accent"
@@ -189,7 +189,7 @@ export function SearchSelect({
                             "absolute top-full z-30 mt-1 flex max-h-[248px] origin-top flex-col gap-0.5",
                             // 宽度两档：默认按最长选项撑开（封顶 320px），`panelFit` 则与触发框等宽
                             panelFit ? "w-full" : "w-max max-w-[320px]",
-                            "overflow-hidden rounded-lg border border-stroke bg-surface p-1.5 shadow-lg",
+                            "overflow-hidden rounded-[12px] pop-panel p-1.5",
                             // 浮层默认不跟触发框等宽（行选中态还要留 20px 给 check，等宽会把长标签掐成省略号），
                             // 所以长列表那一档靠 w-max 撑开；只有用户自己打名的候选（模板）走 panelFit。
                             // 锚边按触发件位置定：行右端的 chip/plain 向左长，卡内整列的 field 向右长，

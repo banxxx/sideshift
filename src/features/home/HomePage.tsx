@@ -4,7 +4,7 @@
  */
 import { useNavigation } from "@/lib/navigation";
 import { AnimatePresence, motion, type Variants } from "motion/react";
-import { LineDotRightHorizontal } from "lucide-react";
+import { ArrowRight } from "lucide-react";
 import { useActiveTask, useTauriFileDrop } from "@/features/home/home-state";
 import { usePackStore } from "@/lib/pack-store";
 import { taskToRail } from "@/lib/rail-view";
@@ -14,6 +14,7 @@ import { HelpRow } from "@/features/home/HelpRow";
 import { PackCard } from "@/features/home/PackCard";
 import type { PackCardStatus } from "@/features/home/PackCard";
 import { ShiftRail } from "@/components/shared/ShiftRail";
+import { RailConsole } from "@/components/shared/RailConsole";
 import { PageHeader } from "@/components/ui";
 import { useT } from "@/lib/i18n";
 import { MORPH, RAIL_RISE } from "@/lib/springs";
@@ -78,18 +79,17 @@ export function HomePage() {
     const unknown = !ready && !manifest && !parsing && !error;
 
     return (
-        // overflow-hidden：进出场时 PackCard 右移 64px / ShiftRail 下移 72px 属于
-        // 容器外变换，不裁剪会撑大 main 的滚动区域、闪出横竖滚动条
-        <div className="flex flex-col gap-5 min-h-full relative overflow-hidden py-6">
+        // overflow-clip + 12px 放行带：进出场时 PackCard 右移 64px / ShiftRail 下移 72px 属于
+        // 容器外变换，不裁剪会撑大 main 的滚动区域、闪出横竖滚动条。
+        // 不用 overflow-hidden：那圈裁剪盒正好卡在卡片左右边缘上，会把卡的投影按 0px 切掉
+        // （外层 main 的 px-8 本来就是给影留的，这一层不该再收一次）。`clip` 同样不生成滚动容器，
+        // 只是多出 12px 放行距离——够 24px 模糊半径的一半。
+        <div className="flex flex-col gap-5 min-h-full relative overflow-clip [overflow-clip-margin:12px] py-6">
             <PageHeader
                 title={
                     <span className="inline-flex items-center gap-2">
                         {t("home.client", "客户端")}
-                        <LineDotRightHorizontal
-                            aria-hidden
-                            className="size-[19px] text-accent"
-                            strokeWidth={2.5}
-                        />
+                        <ArrowRight aria-hidden className="size-[19px] text-accent" />
                         {t("home.server", "服务端")}
                     </span>
                 }
@@ -159,19 +159,26 @@ export function HomePage() {
                                 </motion.div>
                             </div>
 
-                            {/* Shift Rail 实况小窗 */}
+                            {/* Shift Rail 实况小窗 + 运行日志卡（v5：日志与轨道平级，两卡随同一支弹簧升起） */}
                             <motion.div
                                 initial={{ y: 72, opacity: 0 }}
                                 animate={{ y: 0, opacity: 1 }}
                                 exit={{ y: 72, opacity: 0, transition: { duration: 0.18 } }}
                                 transition={{ ...RAIL_RISE, delay: 0.06 }}
+                                className="flex flex-col gap-5"
                             >
                                 <ShiftRail
                                     statuses={
                                         rail
                                             ? rail.statuses
-                                            : /* 未开始：第 1 站是"当前站"（灰底 + 很淡的光环） */
-                                              { parser: "active" }
+                                            : /* 未开始：解析中 = 第 1 站进行中；已检测 = 解析+检测两站完成
+                                              （Home · Ready · Light v5：检测站打勾、进度线停在检测站）；
+                                              解析失败 = 第 1 站标错 */
+                                              parsing
+                                                ? { parser: "active" }
+                                                : error
+                                                  ? { parser: "error" }
+                                                  : { parser: "done", detector: "done" }
                                     }
                                     status={
                                         rail
@@ -180,9 +187,14 @@ export function HomePage() {
                                               ? { label: t("lib.parsing", "解析中"), tone: "gold" }
                                               : { label: t("home.detected-ready", "已检测 · 待转换"), tone: "emerald" }
                                     }
-                                    logs={rail?.logs ?? []}
                                     runFrac={rail?.runFrac}
                                     subs={rail?.subs}
+                                    onOpenTask={
+                                        shown ? () => navigate("task", { taskId: shown.id }) : undefined
+                                    }
+                                />
+                                <RailConsole
+                                    logs={rail?.logs ?? []}
                                     clipHeader={
                                         shown
                                             ? `SideShift 日志 · ${shown.pack.fileName} · ${shown.id} · ${shown.status}`
@@ -195,9 +207,6 @@ export function HomePage() {
                                                 name: truncateMiddle(manifest?.fileName ?? "", 40),
                                             }),
                                         }
-                                    }
-                                    onOpenTask={
-                                        shown ? () => navigate("task", { taskId: shown.id }) : undefined
                                     }
                                 />
                             </motion.div>

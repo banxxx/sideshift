@@ -428,7 +428,7 @@ export function PlanListModal({
                 list-scroll：内容宽度必须恒定，否则从行少的档切走时底部会闪一条横向滚动条
                 （退场层带的是切换前量好的 px 宽度，口径见 App.css 的 .list-scroll）。 */}
             <div ref={listRef} className="list-scroll -mx-1 flex min-h-0 flex-1 flex-col overflow-auto px-1">
-                <Swap swapKey={tagFilter} className="gap-0.5">
+                <Swap swapKey={tagFilter} className="gap-2">
                     {filtered.map((m) => {
                         const checked = checkedOf(m);
                         const pending = pendingOf(m);
@@ -437,7 +437,7 @@ export function PlanListModal({
                                 key={m.id}
                                 className={cn(
                                     // 具名悬停组：无名 group 会和行内其它悬停件串味（见 Tip 的注释）
-                                    "group/row",
+                                    "group/row row-card",
                                     !readOnly && "cursor-pointer",
                                     pending && "bg-gold-dim"
                                 )}

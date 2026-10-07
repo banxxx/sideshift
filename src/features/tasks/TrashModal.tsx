@@ -45,7 +45,7 @@ export function TrashList() {
      * `relative` 必需：退场层被注入绝对定位，坐标按最近定位祖先算，滚动容器不定位就会量到窗外。
      */
     return (
-        <div className="list-scroll relative -mx-1 flex min-h-0 flex-1 flex-col gap-1.5 overflow-auto">
+        <div className="list-scroll relative -mx-1 flex min-h-0 flex-1 flex-col gap-3 overflow-auto">
             <AnimatePresence mode="popLayout" initial={false}>
                 {entries.length === 0 ? (
                     <motion.div
@@ -93,7 +93,7 @@ function TrashRow({ entry }: { entry: TrashEntry }) {
         }
     };
     return (
-        <ListRow className="border border-stroke-soft bg-bg-app px-3">
+        <ListRow className="row-card px-3">
             <div className="flex min-w-0 flex-1 flex-col gap-[3px]">
                 <span className="truncate font-mono text-[12px] leading-[18px] font-semibold text-text-1">
                     {truncateMiddle(entry.packFileName, 30)}

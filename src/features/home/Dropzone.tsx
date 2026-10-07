@@ -160,8 +160,7 @@ export function Dropzone({
                 animate={{ y: active ? -2 : 0 }}
                 transition={{ ...LIFT, layout: MORPH }}
                 className={cn(
-                    "group relative rounded-[12px] bg-surface border px-7 py-8 flex flex-col items-center justify-center gap-4 cursor-pointer select-none transition-[background-color,color,border-color,opacity] duration-200",
-                    active ? "border-transparent" : "border-stroke",
+                    "group card-frost relative rounded-[12px] border border-transparent px-7 py-8 flex flex-col items-center justify-center gap-4 cursor-pointer select-none transition-[color,opacity] duration-200",
                     // 紧凑态：卡片铺满壳（宽度由壳给出）
                     // idle 态：设计稿 760 定宽 + 高度按视口收（45vh 在 800 高窗口正好 360）
                     compact

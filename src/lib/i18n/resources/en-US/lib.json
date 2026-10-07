@@ -53,6 +53,7 @@
   "lib.platform-project": "Modrinth project",
   "lib.queued": "Queued",
   "lib.run-label": "{{verb}} {{done}}/{{total}}",
+  "lib.run-log": "Run log",
   "lib.server-optional": "Server optional",
   "lib.server-required": "Server required",
   "lib.stage-failed": "{{stage}} failed",

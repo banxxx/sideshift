@@ -81,11 +81,12 @@ function Shell() {
         >
             {/* 卡片必须 overflow-hidden：外壳永远不该有文档级滚动条，滚动只归 `main.page-scroll`
                 （否则侧栏底部气泡那类「绝对定位但常驻 DOM」的隐藏件会把文档撑出常驻滚动条）。 */}
-            <div className="h-full flex flex-col overflow-hidden bg-background text-foreground shadow-[var(--win-shadow)]">
-                {/* 标题栏横跨整窗顶部（设计稿：logo/应用名在最左，窗口控件在最右） */}
-                <TitleBar />
-                <div className="flex-1 flex min-h-0">
-                    <Sidebar />
+            <div className="app-field app-shell h-full flex overflow-hidden text-foreground shadow-[var(--win-shadow)]">
+                {/* v5 外壳：侧栏全高（品牌行与标题栏同一行高，各管各的拖拽区），
+                    标题栏只覆盖右侧主区——logo/应用名住在侧栏顶部（见 Sidebar 的 BrandRow） */}
+                <Sidebar />
+                <div className="flex-1 flex flex-col min-w-0">
+                    <TitleBar />
                     {/* 页面内容区：设计稿 MainArea padding [24,32]（纵向 24 / 横向 32）。
                         纵向留白**由各页自己的根元素带**（见下），这里只留横向：
                         滚动容器自带的 padding-top 是吸顶页头盖不住的一条带子——sticky 的贴合边落在

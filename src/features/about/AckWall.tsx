@@ -325,7 +325,7 @@ function AckCard({
                 onPointerLeave={leave}
                 onClick={fire}
                 className={cn(
-                    "group/ack relative flex min-w-0 items-center rounded-md border border-stroke bg-surface",
+                    "group/ack relative flex min-w-0 items-center rounded-md border border-stroke bg-veil-pill",
                     "transition-[border-color,box-shadow] duration-200 hover:border-(--ack-border)",
                     "hover:[box-shadow:var(--ack-shadow)]",
                     // 只在悬停那一张上开合成层
@@ -452,7 +452,7 @@ export function AckWall({
             />
             {status !== "ready" ? (
                 // 居中排：说明在上、重新获取在下。`py-6` 是给个头的档——不撑开就没有「垂直居中」可言
-                <div className="flex flex-col items-center justify-center gap-2 rounded-md border border-stroke bg-surface px-3 py-6 text-center">
+                <div className="flex flex-col items-center justify-center gap-2 rounded-md border border-stroke bg-veil-pill px-3 py-6 text-center">
                     <span className="text-[12px] leading-[18px] text-text-3">
                         {status === "pending"
                             ? t("about.ack-pending", "正在获取鸣谢名单…")

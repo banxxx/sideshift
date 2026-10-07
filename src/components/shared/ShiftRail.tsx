@@ -1,13 +1,15 @@
 /**
- * Shift Rail 转换轨道：四站（解析→检测→下载→构建）+ 轨道线 + 两端芯片 + 日志控制台，纯展示组件——
- * 调用方把 TaskStatus/PipelineStage 映射成 stations/logs 传入，Home 实况小窗 / Task 详情 / 任务列表复用同一份。
- * 站点三态：done 绿底绿描边（图标固定 check）、error 红底（x）；active 与 pending 同灰底，active 只加一圈很淡的品牌色光环 + 呼吸（轨道上不用黄色）。
- * 轨道已完成段 $emerald 逐段推进；**进行中腿** $accent 按当前阶段真实完成度填充，上跑高光带（rail-flow）、前沿放带光晕的亮点。
- * 纵向几何很紧（默认 1200×800 下首页不能再高）：rail-body 106、日志盒 80；所有 11/10px 小字显式写 leading——html 的 line-height:24px 会白撑高每一行。
+ * Shift Rail 转换轨道（v5 几何）：站点/轨道各占一份弹性宽度的横向 flex——站点列（圆节点 + 名称/副标）
+ * 与轨道段（3px 线）交替排列，四站等分、站距由布局天然保证（不再用绝对百分比摆站）。
+ * 站点三态（v5 配色）：done = accent 实心圆 + 白图标 + accent 光环影；active = $surface 圆 + 2px accent 描边；
+ * error 红石淡底；pending = $surface-2 圆 + 灰图标。「刚完成、进度线正停在其上」的站保留自身图标（见 doneShowsOwnIcon）。
+ * 已完成段（站与站之间的整段轨道）填 accent；进行中腿在同一根轨道上按当前阶段完成度推进，上跑 rail-flow 高光带。
+ * 日志控制台已拆出为独立卡 RailConsole（v5：ConsoleCard 与轨道卡平级）。
  */
-import { useRef } from "react";
+import { Fragment } from "react";
 import {
     Archive,
+    ArrowRight,
     Check,
     Download,
     FileSearch,
@@ -17,29 +19,20 @@ import {
     X,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { t, tSource, useT } from "@/lib/i18n";
+import { t, useT } from "@/lib/i18n";
 import type { PipelineStage } from "@/lib/types";
-import { formatClock } from "@/lib/format";
-import { useLogFollow } from "@/lib/log-view";
-import type { RailLog, RailStageStatus, RailTone } from "@/lib/rail-view";
-import { LogCopyButton } from "@/components/shared/LogCopyButton";
+import type { RailStageStatus, RailTone } from "@/lib/rail-view";
 
 interface ShiftRailProps {
     /** 各站点状态；缺省按 pending */
     statuses: Partial<Record<PipelineStage, RailStageStatus>>;
     /** 头部右侧状态芯片；不传则不显示 */
     status?: { label: string; tone: RailTone };
-    /** 日志行；为空时显示 waiting 占位行 */
-    logs?: RailLog[];
-    /** 控制台占位文案（如"等待开始转换"） */
-    waiting?: { title: string; detail?: string };
     /** 站点副标题覆写：零联网任务把「拉取服务端依赖」换成如实文案（站名按设计稿不动） */
     subs?: Partial<Record<PipelineStage, string>>;
-    /** 复制日志时的首行上下文（包名/任务号） */
-    clipHeader?: string;
-    /** 当前阶段在「上一站中心 → 当前站中心」这条腿上的完成度 0..1；非运行态不传 */
+    /** 当前阶段在「上一站 → 当前站」这条轨道上的完成度 0..1；非运行态不传 */
     runFrac?: number;
-    /** 是否显示底部"查看任务详情"链接 */
+    /** 是否显示头部"查看任务详情"链接 */
     onOpenTask?: () => void;
     className?: string;
 }
@@ -60,23 +53,20 @@ export function railStages(): Array<{
     ];
 }
 
-/** 站点状态 → 配色/图标（done 默认换成 check，前沿站例外见下） */
+/** 站点状态 → 配色/图标（v5：done/active 都是 accent 家族，pending 全灰） */
 const STATION_STYLE: Record<
     RailStageStatus,
     { box: string; iconColor: string }
 > = {
-    done: { box: "bg-emerald-dim border-emerald", iconColor: "text-emerald" },
-    // 未完成就是灰：进行中靠轨道上跑动的那段表达，站点不再涂金（用户定稿：轨道上不要黄色）
-    active: { box: "bg-surface-2 border-stroke ring-2 ring-accent/25", iconColor: "text-text-3" },
-    error: { box: "bg-redstone-dim border-redstone", iconColor: "text-redstone" },
-    pending: { box: "bg-surface-2 border-stroke", iconColor: "text-text-3" },
+    done: { box: "bg-accent shadow-[var(--shadow-node)]", iconColor: "text-accent-ink" },
+    active: { box: "bg-surface border-2 border-accent", iconColor: "text-accent" },
+    error: { box: "bg-redstone-dim border border-redstone", iconColor: "text-redstone" },
+    pending: { box: "bg-surface-2", iconColor: "text-text-3" },
 };
 
 /**
- * 完成站图标规则（SS.pen Home·转换中 `Em5yO` 定稿）：
- * 已被后续站超越的完成站显示 check，而"刚完成、进度线正停在其上"的那一站
- * 保留自身图标（如检测完成但下载进行中时检测仍显示 radar）；
- * 全部完成（成功态）则四站统一 check。
+ * 完成站图标规则（v5 沿用）：已被后续站超越的完成站显示 check，而"刚完成、进度线正停在其上"的
+ * 那一站保留自身图标（如检测完成但下载进行中时检测仍显示 radar）；全部完成（成功态）则四站统一 check。
  */
 function doneShowsOwnIcon(list: RailStageStatus[], i: number): boolean {
     if (list[i] !== "done") return false;
@@ -91,66 +81,21 @@ const CHIP_TONE: Record<RailTone, string> = {
     emerald: "bg-emerald-dim text-emerald",
     gold: "bg-gold-dim text-gold",
     redstone: "bg-redstone-dim text-redstone",
+    accent: "bg-accent-dim text-accent",
     muted: "bg-surface-2 text-text-3",
 } as const;
 
-const LOG_LEVEL_COLOR = {
-    muted: "text-text-3",
-    info: "text-text-2",
-    active: "text-gold",
-    error: "text-redstone",
-} as const;
-
-/**
- * 轨道几何（流体·对称）：两端芯片按自身内容宽排在行两端，芯片与轨道区之间固定
- * 39px 行距 = 站点盒半径 19 + 视觉留白 20。于是「芯片外缘 → 站点盒外缘」左右
- * 都正好 20px，且芯片文案变长也只吞行距、两端依旧等值——设计稿那组 130/114 的
- * 绝对内缩左 20px 右 4px，本来就不对称。
- * 四站等分轨道区（中心落在区内 0/33.3/66.7/100%）、底轨跨满整区，站距严格相等。
- * 1200 窗口下首站中心 = 6 + 芯片 85 + 39 = 130，仍与设计稿的 130 对齐。
- */
-const STATION_CENTERS = [0, 100 / 3, 200 / 3, 100];
-const LINE_LEFT = 0;
-const LINE_WIDTH = 100;
-/** 标签格 = 一格站距，居中挂在站点下方，相邻格刚好首尾相接 */
-const LABEL_WIDTH = 100 / 3;
-
-/**
- * 已完成段宽度（占底轨比例）：推进到"最后一个 done 站"的中心，与设计稿一致
- * （Home 帧 parser+detector 完成 → 213/640；Ready 帧无完成站 → 0）。
- * 已完成段只用 $emerald（无金色），站内的实时进度交给「进行中腿」表达。
- */
-function doneLineFraction(statuses: RailStageStatus[]): number {
+/** 前缀连续 done 的数量：它们右侧的站间轨道全部填 accent */
+function doneCount(list: RailStageStatus[]): number {
     let k = 0;
-    while (k < statuses.length && statuses[k] === "done") k++;
-    if (k === 0) return 0;
-    if (k === statuses.length) return 1;
-    // 百分比域直接相除即得占底轨比例
-    return (STATION_CENTERS[k - 1] - STATION_CENTERS[0]) / LINE_WIDTH;
-}
-
-/**
- * 进行中腿：从已完成段前沿走到「第一个未完成站」中心。
- * 底轨本身覆盖了整段，所以这里只需给出起终点的百分比即可。
- */
-function runningLeg(
-    statuses: RailStageStatus[],
-    doneFrac: number
-): { left: number; width: number } | null {
-    const nextIdx = statuses.findIndex((s) => s !== "done");
-    if (nextIdx === -1) return null;
-    const left = LINE_LEFT + LINE_WIDTH * doneFrac;
-    const width = STATION_CENTERS[nextIdx] - left;
-    return width > 0.5 ? { left, width } : null;
+    while (k < list.length && list[k] === "done") k++;
+    return k;
 }
 
 export function ShiftRail({
                               statuses,
                               status,
-                              logs = [],
-                              waiting,
                               subs,
-                              clipHeader,
                               runFrac,
                               onOpenTask,
                               className,
@@ -158,114 +103,86 @@ export function ShiftRail({
     const t = useT();
     const stages = railStages();
     const list = stages.map((s) => statuses[s.stage] ?? "pending");
-    const doneFrac = doneLineFraction(list);
-    const leg = runningLeg(list, doneFrac);
-    const runPct = leg ? leg.width * Math.max(0, Math.min(1, runFrac ?? 0)) : 0;
-    const logBoxRef = useRef<HTMLDivElement>(null);
-    useLogFollow(logBoxRef);
+    const done = doneCount(list);
+    // 进行中腿画在「最后一个 done 站 → 它后面那站」这段轨道上（即第 done-1 段，0 起）
+    const legTrack = done > 0 && done < list.length ? done - 1 : -1;
+    const frac = Math.max(0, Math.min(1, runFrac ?? 0));
 
     return (
         <section
             className={cn(
-                "bg-surface border border-stroke rounded-[12px] p-5 flex flex-col gap-3 w-full",
+                "card-frost rounded-[12px] p-5 flex flex-col gap-3 w-full",
                 className
             )}
         >
-            {/* 头部：轨道标题 + 状态芯片（显式 leading，否则继承 html 的 24px 行高白撑高） */}
-            <header className="flex items-center justify-between">
-                <span className="font-mono text-[11px] leading-[16px] font-semibold tracking-[1.2px] text-text-3">
-                    SHIFT RAIL · {t("common.conversion-rail", "转换轨道")}
-                </span>
-                {status && (
-                    <span
-                        className={cn(
-                            "flex items-center rounded-full px-2.5 py-1 font-mono text-[11px] leading-[14px] font-semibold",
-                            CHIP_TONE[status.tone]
-                        )}
-                    >
-                        {status.label}
+            {/* 头部：左 = 轨道标题 + 两端包胶囊（客户端包 → 服务端包）；
+                右 = 状态芯片 + 查看任务详情（v5 把两者收进同一行，显式 leading 防继承 24px 行高） */}
+            <header className="flex items-center justify-between gap-3">
+                <div className="flex min-w-0 items-center gap-2.5">
+                    <span className="font-mono text-[11px] leading-[16px] font-semibold tracking-[1.2px] text-text-3 shrink-0">
+                        SHIFT RAIL · {t("common.conversion-rail", "转换轨道")}
                     </span>
-                )}
+                    <EndChip icon={Archive} label={t("common.client-pack", "客户端包")} />
+                    <ArrowRight className="size-3 shrink-0 text-text-3" strokeWidth={2.5} />
+                    <EndChip
+                        icon={Server}
+                        label={t("common.server-pack", "服务端包")}
+                        accent
+                    />
+                </div>
+                <div className="flex shrink-0 items-center gap-3">
+                    {status && (
+                        <span
+                            className={cn(
+                                "flex items-center rounded-full px-2.5 py-1 font-mono text-[11px] leading-[14px] font-semibold",
+                                CHIP_TONE[status.tone]
+                            )}
+                        >
+                            {status.label}
+                        </span>
+                    )}
+                    {onOpenTask && (
+                        <button
+                            onClick={onOpenTask}
+                            className="text-[11px] leading-[16px] font-semibold text-text-2 hover:text-text-1"
+                        >
+                            {t("common.view-task", "查看任务详情")} →
+                        </button>
+                    )}
+                </div>
             </header>
 
-            {/* 轨道主体：芯片(内容宽) + 39px 行距 + 轨道区(flex-1) + 39px + 芯片。
-                轨道区内所有百分比都相对自身宽度；站点盒半径 19 会吃掉一半行距，
-                所以芯片与站点盒的视觉净间距左右都是 20px。
-                纵向 106 = 站点顶留位 26 + 盒 38 + 10 + 名称 16 + 2 + 副标题 14 */}
-            <div className="flex h-[106px] gap-[39px] px-1.5">
-                <EndChip icon={Archive} label={t("common.client-pack", "客户端包")} className="mt-[29px] shrink-0" />
-                <div className="relative min-w-0 flex-1">
-                    {/* 底轨 + 已完成段 */}
-                    <span
-                        className="absolute h-[3px] rounded-full bg-rail-track"
-                        style={{ left: `${LINE_LEFT}%`, top: 44, width: `${LINE_WIDTH}%` }}
-                    />
-                    {doneFrac > 0 && (
-                        <span
-                            className="absolute h-[3px] rounded-full bg-emerald transition-[width] duration-500"
-                            style={{
-                                left: `${LINE_LEFT}%`,
-                                top: 44,
-                                width: `${LINE_WIDTH * doneFrac}%`,
-                            }}
-                        />
-                    )}
-
-                    {/* 进行中腿：淡色待走路 + accent 流动段（宽度 = 当前阶段完成度）+ 头部亮点。
-                        这是「线在走动」的唯一载体——站点盒保持灰色，不靠涂色表意 */}
-                    {leg && runFrac != null && (
-                        <>
-                            <span
-                                className="absolute h-[3px] rounded-full bg-accent/12"
-                                style={{
-                                    left: `${leg.left}%`,
-                                    top: 44,
-                                    width: `${leg.width}%`,
-                                }}
-                            />
-                            <span
-                                className="rail-flow absolute h-[3px] rounded-full transition-[width] duration-700 ease-linear"
-                                style={{
-                                    left: `${leg.left}%`,
-                                    top: 44,
-                                    width: `${runPct}%`,
-                                }}
-                            />
-                            <span
-                                className="rail-head absolute size-[7px] -translate-x-1/2 -translate-y-1/2 rounded-full bg-accent transition-[left] duration-700 ease-linear"
-                                style={{
-                                    left: `${leg.left + runPct}%`,
-                                    top: 45.5,
-                                }}
-                            />
-                        </>
-                    )}
-
-                    {/* 四站：站点盒 + 名称/副标题，整列以轨道中心对齐 */}
-                    {stages.map((s, i) => {
-                        const st = list[i];
-                        const style = STATION_STYLE[st];
-                        const Icon = s.icon;
-                        return (
-                            <div
-                                key={s.stage}
-                                className="absolute -translate-x-1/2 flex flex-col items-center gap-2.5"
-                                style={{ left: `${STATION_CENTERS[i]}%`, width: `${LABEL_WIDTH}%`, top: 26 }}
-                            >
+            {/* 轨道主体：站点列与轨道段交替，各占 flex-1（v5 几何：四站等分由布局保证）。
+                轨道线顶在 16px：站点盒 34 的圆心 17，线芯 17.5，差半像素肉眼不可分。
+                74 = 盒 34 + 间距 8 + 名称 16 + 2 + 副标 14 */}
+            <div className="flex h-[74px]">
+                {stages.map((s, i) => {
+                    const st = list[i];
+                    const style = STATION_STYLE[st];
+                    const Icon = s.icon;
+                    return (
+                        <Fragment key={s.stage}>
+                            {i > 0 && (
+                                <TrackSegment
+                                    done={i < done}
+                                    runningFrac={i - 1 === legTrack && runFrac != null ? frac : undefined}
+                                />
+                            )}
+                            <div className="min-w-0 flex-1 flex flex-col items-center gap-2">
                                 <span
                                     className={cn(
-                                        "size-[38px] shrink-0 rounded-[10px] border flex items-center justify-center",
+                                        "size-[34px] shrink-0 rounded-full border-transparent flex items-center justify-center",
                                         style.box
                                     )}
                                 >
                                     {st === "done" && !doneShowsOwnIcon(list, i) ? (
-                                        <Check className={cn("size-4", style.iconColor)} />
+                                        <Check className={cn("size-[14px]", style.iconColor)} strokeWidth={2.5} />
                                     ) : st === "error" ? (
-                                        <X className={cn("size-4", style.iconColor)} />
+                                        <X className={cn("size-[14px]", style.iconColor)} />
                                     ) : (
                                         <Icon
                                             className={cn(
-                                                "size-4",
+                                                "size-[14px]",
                                                 style.iconColor,
                                                 st === "active" && "animate-pulse"
                                             )}
@@ -286,100 +203,58 @@ export function ShiftRail({
                                     </span>
                                 </div>
                             </div>
-                        );
-                    })}
-                </div>
-                <EndChip
-                    icon={Server}
-                    label={t("common.server-pack", "服务端包")}
-                    iconClass="text-emerald"
-                    className="mt-[29px] shrink-0"
-                />
-            </div>
-
-            {/* 底部链接行（正常流成员，仅当有可查看的任务） */}
-            {onOpenTask && (
-                <footer className="flex justify-end">
-                    <button
-                        onClick={onOpenTask}
-                        className="text-[11px] leading-[16px] font-semibold text-accent hover:underline"
-                    >
-                        {t("common.view-task", "查看任务详情")} →
-                    </button>
-                </footer>
-            )}
-
-            {/* 日志控制台：与任务详情页读同一份日志尾，框内滚动、高度不顶卡。
-                12.5vh 上限 100：1200×800 下正好 100（≈4 行），窗口变矮时跟着收，
-                不至于把整张轨道卡挤出默认视口。滚动条样式见 App.css，新行自动贴底 */}
-            <div className="relative">
-                <div
-                    ref={logBoxRef}
-                    className="log-scroll h-[clamp(56px,12.5vh,100px)] overflow-y-auto rounded-sm border border-stroke-soft bg-bg-app px-4 py-2.5 flex flex-col gap-1.5"
-                >
-                    {logs.length === 0 && waiting ? (
-                        <p className="flex items-center gap-2 font-mono text-[11px] leading-[16px]">
-                            <span className="font-semibold text-text-3">{waiting.title}</span>
-                            {waiting.detail && (
-                                <span className="text-text-3">{waiting.detail}</span>
-                            )}
-                        </p>
-                    ) : (
-                        logs.map((l, i) => (
-                            <p key={i} className="flex items-center gap-2 font-mono min-w-0 leading-[16px]">
-                                <span className="text-[10px] text-text-3 shrink-0">
-                                    {l.time ?? formatClock()}
-                                </span>
-                                {l.stage && (
-                                    <span className="text-[10px] font-semibold text-amethyst shrink-0">
-                                        [{l.stage}]
-                                    </span>
-                                )}
-                                <span
-                                    className={cn(
-                                        "text-[11px] truncate",
-                                        LOG_LEVEL_COLOR[l.level ?? "info"]
-                                    )}
-                                >
-                                    {tSource(l.message)}
-                                </span>
-                            </p>
-                        ))
-                    )}
-                </div>
-                {logs.length > 0 && (
-                    <LogCopyButton
-                        variant="floating"
-                        logs={logs}
-                        header={clipHeader}
-                        className="absolute right-3 top-2.5 h-6 w-6 rounded-md border border-stroke-soft bg-surface text-text-3 hover:bg-surface-2 hover:text-text-1"
-                    />
-                )}
+                        </Fragment>
+                    );
+                })}
             </div>
         </section>
     );
 }
 
-/** 轨道两端芯片：surface-2 底 + stroke 描边（客户端包 / 服务端包），排在轨道主体两端 */
+/**
+ * 站间轨道段：底轨 rail-track；已完成段整段 accent；
+ * 进行中腿（runningFrac 给出时）按完成度推进 accent 填充 + rail-flow 高光带。
+ */
+function TrackSegment({
+                          done,
+                          runningFrac,
+                      }: {
+    done: boolean;
+    runningFrac?: number;
+}) {
+    return (
+        <div className="min-w-0 flex-1 pt-4">
+            <div className="relative h-[3px] rounded-full bg-rail-track overflow-hidden">
+                {done && <span className="absolute inset-0 rounded-full bg-accent" />}
+                {runningFrac != null && runningFrac > 0 && (
+                    <span
+                        className="rail-flow absolute left-0 top-0 h-[3px] rounded-full transition-[width] duration-700 ease-linear"
+                        style={{ width: `${runningFrac * 100}%` }}
+                    />
+                )}
+            </div>
+        </div>
+    );
+}
+
+/** 轨道两端胶囊：客户端包（$surface-2 纱底）/ 服务端包（accent 淡底），排在头部轨道标题右侧 */
 function EndChip({
                      icon: Icon,
                      label,
-                     className,
-                     iconClass = "text-amethyst",
+                     accent,
                  }: {
     icon: typeof Archive;
     label: string;
-    className?: string;
-    iconClass?: string;
+    accent?: boolean;
 }) {
     return (
         <span
             className={cn(
-                "h-8 flex items-center gap-[7px] rounded-lg border border-stroke bg-surface-2 px-2.5 text-[11px] leading-[14px] font-semibold text-text-2",
-                className
+                "flex shrink-0 items-center gap-1.5 rounded-full px-[9px] py-1 text-[11px] leading-[16px] font-semibold",
+                accent ? "bg-accent-dim text-accent" : "bg-surface-2 text-text-2"
             )}
         >
-            <Icon className={cn("size-[13px]", iconClass)} />
+            <Icon className={cn("size-[13px]", accent ? "text-accent" : "text-text-2")} />
             {label}
         </span>
     );

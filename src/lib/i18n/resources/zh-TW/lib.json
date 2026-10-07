@@ -43,6 +43,7 @@
   "lib.platform-project": "Modrinth 專案聲明",
   "lib.queued": "排隊中",
   "lib.run-label": "{{verb}} {{done}}/{{total}}",
+  "lib.run-log": "執行日誌",
   "lib.server-optional": "伺服器端可選",
   "lib.server-required": "伺服器端必裝",
   "lib.stage-failed": "{{stage}}失敗",

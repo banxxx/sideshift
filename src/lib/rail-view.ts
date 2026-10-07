@@ -21,8 +21,8 @@ export interface RailLog {
     level?: "muted" | "info" | "active" | "error";
 }
 
-/** 芯片/状态配色语义（与设计稿状态色一一对应） */
-export type RailTone = "emerald" | "gold" | "redstone" | "muted";
+/** 芯片/状态配色语义（与设计稿状态色一一对应；v5：轨道头部进行态芯片走 accent） */
+export type RailTone = "emerald" | "gold" | "redstone" | "accent" | "muted";
 
 const RAIL_ORDER: PipelineStage[] = ["parser", "detector", "downloader", "builder"];
 
@@ -107,12 +107,12 @@ export const STATUS_META: Record<
     cancelled: { label: "已取消", tone: "muted" },
 };
 
-/** 进度条填充色：运行金 / 成功绿 / 失败红 / 其余灰（v4：金色只出现在进度条与芯片上） */
+/** 进度条填充类：运行 = 沙金芯 + 同色发光（v5）/ 成功绿 / 失败玫瑰芯 + 发光 / 其余灰 */
 export const BAR_COLOR: Record<TaskStatus, string> = {
     queued: "bg-stroke",
-    running: "bg-gold",
+    running: "bg-bar-sand shadow-[var(--shadow-bar-sand)]",
     success: "bg-emerald",
-    failed: "bg-redstone",
+    failed: "bg-bar-rose shadow-[var(--shadow-bar-rose)]",
     cancelled: "bg-stroke",
 };
 
@@ -175,7 +175,9 @@ export function taskToRail(task: ConversionTask): TaskRailView {
               ? "emerald"
               : task.status === "cancelled"
                 ? "muted"
-                : "gold";
+                : task.status === "running"
+                  ? "accent"
+                  : "gold";
     const label =
         task.status === "running"
             ? task.stage === "downloader" && task.total != null

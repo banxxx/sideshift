@@ -39,9 +39,11 @@ export function TemplateRow({
     return (
         <section
             className={cn(
-                // 卡身没有 hover 档：整卡不可点，hover 压深会把它读成一个假出口
-                "group flex items-center gap-3 rounded-[12px] border bg-surface p-5",
-                overlay ? "border-accent shadow-lg" : "border-stroke",
+                // 卡身没有 hover 档：整卡不可点，hover 压深会把它读成一个假出口。
+                // 材质与任务卡同一家（v5 磨砂）；抬起层是浮在别张卡上面的，用实心面 + accent 描边。
+                overlay
+                    ? "group flex items-center gap-3 rounded-[12px] border border-accent bg-surface p-5 shadow-lg"
+                    : "card-frost group flex items-center gap-3 rounded-[12px] p-5",
                 lifted && "invisible"
             )}
         >

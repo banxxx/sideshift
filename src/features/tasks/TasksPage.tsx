@@ -233,10 +233,10 @@ export function TasksPage() {
                 夹回来——静止时页头底色压住列表 24px，滚动时顶部又永远留一条盖不住的带子。
                 盒子贴在滚动容器上沿贴合，卡片是从它**底下**穿过去的。
                 pb-5 + -mb-5 抵掉 flex 的 gap-5：静止观感与不吸顶时逐像素相同，但那 20px 归底色管。
-                纯色底平时看不出来（页面底同色），只有卡片从底下滚过来才显形——不额外加描边，
-                本项目的页头没有分隔线。z-20 是必需的：卡片带 transform 就是层叠上下文，
-                按文档顺序会盖在页头上面。 */}
-            <div className="sticky top-0 z-20 -mb-5 bg-background pt-6 pb-5">
+                z-20 是必需的：卡片带 transform 就是层叠上下文，按文档顺序会盖在页头上面。
+                遮挡的材质＝窗口那张场的逐像素复制，与状态栏那块完全一致（不加色、不加糊），
+                见 App.css 的 `.page-head-veil`。 */}
+            <div className="page-head-veil sticky top-0 z-20 -mb-5 pt-6 pb-5">
                 <PageHeader
                     compact
                     title={t("tasks.conversion-tasks", "转换任务")}
@@ -372,7 +372,7 @@ function EmptyTasks() {
     return (
         <div className="flex h-[clamp(400px,70vh,640px)] flex-col items-center justify-center gap-4 rounded-[12px] bg-bg-app px-5 py-10">
             <div className="flex flex-col items-center gap-4">
-                <span className="flex size-14 items-center justify-center rounded-2xl bg-surface-2">
+                <span className="flex size-14 items-center justify-center rounded-[20px] bg-surface-2">
                     <Inbox className="size-6 text-text-3" />
                 </span>
                 <div className="flex flex-col items-center gap-1">
@@ -567,7 +567,7 @@ function TaskCard({ task, onDelete }: { task: ConversionTask; onDelete: () => vo
 
             {/* 失败态：错误盒（$bg-app + $redstone-dim 描边） */}
             {task.status === "failed" && task.error && (
-                <div className="w-full rounded-lg border border-redstone-dim bg-bg-app px-4 py-3">
+                <div className="w-full rounded-[12px] border border-redstone-dim bg-bg-app px-4 py-3">
                     <span className="break-words font-mono text-[11px] leading-[16px] font-normal text-redstone">
                         {tSource(task.error.title)} · {errOf(task.error.code ?? task.error.detail)}
                     </span>

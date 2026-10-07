@@ -506,7 +506,7 @@ export function OnlineAddModal({
                         ))}
                     </div>
                 )}
-                <div className="-mx-1 flex min-h-0 flex-1 flex-col gap-0.5 overflow-auto px-1">
+                <div className="-mx-1 flex min-h-0 flex-1 flex-col gap-2 overflow-auto px-1">
                     {versionsLoading ? (
                         <ListSkeleton rows={5} />
                     ) : versionsError ? (
@@ -519,7 +519,7 @@ export function OnlineAddModal({
                                 <ListRow
                                     key={v.id}
                                     className={cn(
-                                        "cursor-pointer hover:bg-surface-2",
+                                        "row-card cursor-pointer hover:bg-surface-2",
                                         i === shownVersions.length - 1 && "bg-surface"
                                     )}
                                     onClick={() => {
@@ -658,7 +658,7 @@ export function OnlineAddModal({
             </div>
 
             {/* 结果行：真实图标 + 整行点入模组详情；请求中显示骨架屏 */}
-            <div className="-mx-1 flex min-h-0 flex-1 flex-col gap-0.5 overflow-auto px-1">
+            <div className="-mx-1 flex min-h-0 flex-1 flex-col gap-2 overflow-auto px-1">
                 {loading ? (
                     <ListSkeleton rows={6} icon />
                 ) : error ? (
@@ -671,7 +671,7 @@ export function OnlineAddModal({
                             <ListRow
                                 key={m.id}
                                 className={cn(
-                                    "cursor-pointer hover:bg-surface-2",
+                                    "row-card cursor-pointer hover:bg-surface-2",
                                     i === result.results.length - 1 && "bg-surface"
                                 )}
                                 onClick={() => openDetail(m)}

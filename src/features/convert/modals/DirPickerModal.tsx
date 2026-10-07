@@ -297,14 +297,14 @@ export function DirPickerModal({
                 </span>
             </div>
 
-            <div className="-mx-1 flex min-h-0 flex-1 flex-col gap-0.5 overflow-auto px-1">
+            <div className="-mx-1 flex min-h-0 flex-1 flex-col gap-2 overflow-auto px-1">
                 {filtered.map((n) => {
                     const key = keyOf(n);
                     const on = draft.includes(key);
                     return (
                         <ListRow
                             key={key}
-                            className="cursor-pointer hover:bg-surface-2"
+                            className="row-card cursor-pointer hover:bg-surface-2"
                             title={
                                 !canEnter(n)
                                     ? undefined
@@ -375,7 +375,7 @@ function FileRow({
     const t = useT();
     const on = checked;
     return (
-        <ListRow className="cursor-pointer hover:bg-surface-2" onClick={onToggle}>
+        <ListRow className="row-card cursor-pointer hover:bg-surface-2" onClick={onToggle}>
             <span onClick={(e) => e.stopPropagation()}>
                 <CheckBox checked={on} onChange={onToggle} />
             </span>

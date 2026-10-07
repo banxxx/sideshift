@@ -786,7 +786,7 @@ export function ConvertPage() {
 
     return (
         <motion.div
-            className="flex flex-col gap-5 overflow-hidden py-6"
+            className="flex flex-col gap-5 overflow-clip [overflow-clip-margin:12px] py-6"
             variants={PAGE_RISE}
             initial="hidden"
             animate="show"

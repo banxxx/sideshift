@@ -77,7 +77,7 @@ export function Panel({
         <section
             style={{ gap, ...(padY != null ? { paddingBlock: padY } : null) }}
             className={cn(
-                "flex flex-col rounded-[12px] border border-stroke bg-surface p-5",
+                "card-frost flex flex-col rounded-[12px] p-5",
                 className
             )}
         >

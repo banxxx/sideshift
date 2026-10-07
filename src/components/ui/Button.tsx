@@ -11,11 +11,11 @@ type BtnVariant = "primary" | "outline" | "ghost" | "danger";
 type BtnSize = "md" | "sm" | "xs";
 
 const BTN_VARIANT: Record<BtnVariant, string> = {
-    primary: "bg-accent font-bold text-accent-ink hover:opacity-90",
+    primary: "bg-accent font-bold text-accent-ink shadow-[var(--shadow-btn)] hover:opacity-90",
     outline:
-        "border border-stroke bg-transparent font-medium text-text-2 hover:bg-surface-2 hover:text-text-1",
+        "border border-stroke bg-veil-pill font-medium text-text-2 hover:bg-surface-2 hover:text-text-1",
     ghost: "bg-transparent font-medium text-text-2 hover:bg-surface-2 hover:text-text-1",
-    danger: "border border-stroke bg-transparent font-semibold text-redstone hover:bg-redstone-dim",
+    danger: "border border-stroke bg-veil-pill font-semibold text-redstone hover:bg-redstone-dim",
 };
 
 const BTN_SIZE: Record<BtnSize, string> = {
@@ -51,7 +51,7 @@ export function Btn({
         <button
             aria-label={ariaLabel ?? title}
             className={cn(
-                "inline-flex shrink-0 select-none items-center justify-center rounded-lg",
+                "inline-flex shrink-0 select-none items-center justify-center rounded-md",
                 HOVER_PRESS,
                 "disabled:pointer-events-none disabled:opacity-60",
                 BTN_VARIANT[variant],
@@ -81,7 +81,7 @@ export function IconBtn({
         <button
             aria-label={ariaLabel ?? title}
             className={cn(
-                "inline-flex h-8 w-9 shrink-0 items-center justify-center rounded-lg",
+                "inline-flex h-8 w-9 shrink-0 items-center justify-center rounded-md",
                 "text-text-2 hover:bg-surface-2 hover:text-text-1",
                 HOVER_PRESS,
                 "disabled:pointer-events-none disabled:opacity-40",

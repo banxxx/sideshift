@@ -49,7 +49,7 @@ export function HelpRow() {
                 <motion.div
                     key={title}
                     variants={card}
-                    className="flex-1 h-[88px] bg-surface border border-stroke rounded-[12px] px-4 py-3.5 flex flex-col gap-1.5"
+                    className="card-frost flex-1 h-[88px] rounded-[12px] px-4 py-3.5 flex flex-col gap-1.5"
                 >
                     <div className="flex items-center gap-1.5">
                         <Icon className="size-3.5 text-accent" />

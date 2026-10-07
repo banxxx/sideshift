@@ -1,5 +1,6 @@
 /**
- * 分段 Tab：轨 h36 gap2 padding3 $surface-2 r8；内项 h30 padding[0,12] r6
+ * 分段 Tab：轨 h36 gap2 padding3 $veil r8；内项 h30 padding[0,12] r8（v5 设计稿：页头那批 r8，
+ * 设置页那批 r6 + 选中面 $surface —— 两档只差 2px，暂时统一按页头档）
  * 选中：$surface + $stroke 1px + 12/600 $text-1；未选中：12/500 $text-3
  * 设计稿把「标签 + 计数」写成一个文本节点（如 "剔除 41"），这里同样拼接为单节点。
  */
@@ -33,7 +34,7 @@ export function SegTabs<T extends string>({
     return (
         <div
             className={cn(
-                "flex shrink-0 items-center gap-0.5 rounded-lg bg-surface-2",
+                "flex shrink-0 items-center gap-0.5 rounded-md bg-veil",
                 size === "sm" ? "h-7 p-[2px]" : "h-9 p-[3px]",
                 className
             )}
@@ -59,7 +60,7 @@ export function SegTabs<T extends string>({
                                 layoutId={`${pillId}-seg-pill`}
                                 transition={PILL_SLIDE}
                                 className={cn(
-                                    "absolute inset-0 rounded-md border border-stroke bg-surface",
+                                    "absolute inset-0 rounded-md border border-stroke bg-veil-pill",
                                     HOVER_FILL
                                 )}
                             />

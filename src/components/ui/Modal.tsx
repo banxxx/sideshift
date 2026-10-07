@@ -76,14 +76,16 @@ export function ModalShell({
                 <DialogPrimitive.Backdrop
                     className={cn(
                         // inset 用 `--win-inset`（= 透明留白那一圈）而不是 0：遮罩只压到卡片边沿，
-                        // 四周的自绘投影不被染黑。最大化时那个变量本身是 0，这里不用另判状态
-                        "fixed inset-[var(--win-inset)] z-50 bg-black/50 transition-opacity duration-200",
+                        // 四周的自绘投影不被染黑。最大化时那个变量本身是 0，这里不用另判状态。
+                        // v5：遮罩是「灰紫半透明 + 24px 背后模糊」，整页在弹窗后面被糊掉
+                        "scrim-veil fixed inset-[var(--win-inset)] z-50 transition-opacity duration-200",
                         "data-[starting-style]:opacity-0 data-[ending-style]:opacity-0"
                     )}
                 />
                 <DialogPrimitive.Popup
                     className={cn(
-                        "fixed top-1/2 left-1/2 z-50 flex -translate-x-1/2 -translate-y-1/2 flex-col gap-3 rounded-[12px] border border-stroke bg-surface p-5 outline-none",
+                        // v5：弹窗面是近白半透明 + 磨砂 + modal 投影，不再吃描边
+                        "modal-frost fixed top-1/2 left-1/2 z-50 flex -translate-x-1/2 -translate-y-1/2 flex-col gap-3 rounded-[12px] p-5 outline-none",
                         "transition-[opacity,scale] duration-200",
                         "data-[starting-style]:opacity-0 data-[starting-style]:scale-[0.96]",
                         "data-[ending-style]:opacity-0 data-[ending-style]:scale-[0.96]"
@@ -93,7 +95,7 @@ export function ModalShell({
                     <div className="flex w-full items-center justify-between gap-2.5">
                         {iconNode ??
                             (Icon && (
-                                <span className="flex size-10 shrink-0 items-center justify-center rounded-lg bg-surface-2">
+                                <span className="flex size-10 shrink-0 items-center justify-center rounded-[10px] bg-accent-dim">
                                     <Icon className="size-5 text-accent" />
                                 </span>
                             ))}
@@ -123,7 +125,7 @@ export function ModalShell({
                                     aria-label={t("common.back", "返回")}
                                     className={cn(
                                         TIP_TRIGGER,
-                                        "size-7 rounded-lg border border-stroke bg-surface text-text-2",
+                                        "size-7 rounded-md border border-stroke bg-veil-pill text-text-2",
                                         "flex items-center justify-center hover:bg-surface-2",
                                         HOVER_PRESS
                                     )}
@@ -137,7 +139,7 @@ export function ModalShell({
                                 aria-label={t("common.close", "关闭")}
                                 className={cn(
                                     TIP_TRIGGER,
-                                    "size-7 rounded-lg border border-stroke text-text-2",
+                                    "size-7 rounded-md border border-stroke bg-veil-pill text-text-2",
                                     "flex items-center justify-center hover:bg-surface-2",
                                     HOVER_PRESS
                                 )}

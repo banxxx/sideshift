@@ -332,23 +332,24 @@ export function TaskDetailPage() {
             {/* 吸顶页头：概况签在窄窗口下能滚出两屏，方案/结果更是长清单——页签够不着就等于
                 这一页只剩当前那一签。盒子与规则同任务列表页：留白这圈由吸顶盒自己出（pt-6），
                 pb-5 + -mb-5 抵掉根 div 的 gap-5（静止观感逐像素不变，但那 20px 归底色管），
-                z-20 压过带 transform 的卡片层。 */}
-            <motion.div
-                variants={CARD_RISE}
-                className="sticky top-0 z-20 -mb-5 bg-background pt-6 pb-5"
-            >
-                <PageHeader
-                    title={packName}
-                    sub={subLine(task, elapsed)}
-                    right={
-                        <SegTabs
-                            items={items.map((k) => ({ key: k, label: tabLabel[k] }))}
-                            value={active}
-                            onChange={changeTab}
-                        />
-                    }
-                />
-            </motion.div>
+                z-20 压过带 transform 的卡片层。材质见 App.css 的 `.page-head-veil`。
+                升起那一拍写在**内层**：纱盒自己要是被 CARD_RISE 挪了 14px，它那张钉在窗口上的场
+                就跟底下的场错开 14px，进场时会在带子上下沿各闪一条横向接缝。 */}
+            <div className="page-head-veil sticky top-0 z-20 -mb-5 pt-6 pb-5">
+                <motion.div variants={CARD_RISE}>
+                    <PageHeader
+                        title={packName}
+                        sub={subLine(task, elapsed)}
+                        right={
+                            <SegTabs
+                                items={items.map((k) => ({ key: k, label: tabLabel[k] }))}
+                                value={active}
+                                onChange={changeTab}
+                            />
+                        }
+                    />
+                </motion.div>
+            </div>
 
             <motion.div variants={CARD_RISE} className="flex items-start gap-5">
                 {/* 左列按页签换内容：这里不摆跨页按钮，换看别的内容只顶上那排页签。

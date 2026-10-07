@@ -3,7 +3,7 @@
  * 二级页时（canGoBack）最小化左侧出现返回按钮，用 1×14 短竖线与最小化隔开；窗口控制逻辑见 @/lib/window-controls。
  */
 import { Minus, Square, X, Copy, Undo2 } from "lucide-react";
-import { Collapse, Tip, HOVER_PRESS, Logo } from "@/components/ui";
+import { Collapse, Tip, HOVER_PRESS } from "@/components/ui";
 import { SWAP_IN } from "@/lib/page-motion";
 import { cn } from "@/lib/utils";
 import { useNavigation } from "@/lib/navigation";
@@ -18,16 +18,9 @@ export function TitleBar() {
     return (
         <header
             data-tauri-drag-region
-            className="h-10 shrink-0 flex items-center select-none bg-bg-panel border-b border-stroke-soft px-4"
+            className="h-10 shrink-0 flex items-center select-none px-4"
         >
-            {/* 左侧：仅 Logo（设计稿定稿：logo 右边不放文字） */}
-            <div
-                data-tauri-drag-region
-                className="flex items-center h-full"
-            >
-                <Logo />
-            </div>
-
+            {/* v5：logo/应用名移进侧栏 BrandRow（见 Sidebar），这里只留拖拽区 + 窗口控件 */}
             {/* 中间：拖拽区域，双击最大化 */}
             <div
                 data-tauri-drag-region

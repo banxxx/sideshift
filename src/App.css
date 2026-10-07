@@ -126,8 +126,74 @@
   --sidebar-ring: var(--accent);
 
   /* 圆角标尺：--radius = 控件基准 8px
-   * 卡片 12 = radius*1.5，小元素 6 = radius*0.75，徽章 99 用 rounded-full */
+   * 卡片 12 = radius*1.5，小元素 6 = radius*0.75，徽章 99 用 rounded-full
+   * v5 的分层是「按钮/分段轨/内嵌小格 = 8」与「卡/框/浮层/弹窗 = 12」两档，
+   * 行卡（弹窗列表行）单独 10，图标盒/瓦片 10 —— 所以 rounded-md 给按钮、rounded-lg 给框。 */
   --radius: 8px;
+
+  /* ---- 投影层级（对齐 v5 设计稿，两档各一份）----
+   * 设计稿里每个投影都是「近场一层定边界 + 远场一层给重量」，
+   * 浅色用暖黑 #2A2721 做底（冷灰底上的纯黑读起来发脏），暗色回落到纯黑。 */
+  --shadow-card: 0 10px 24px rgba(42, 39, 33, 0.05), 0 2px 5px rgba(42, 39, 33, 0.04);
+  --shadow-row: 0 3px 8px rgba(42, 39, 33, 0.08), 0 1px 3px rgba(42, 39, 33, 0.04);
+  --shadow-modal: 0 16px 40px rgba(42, 39, 33, 0.12), 0 2px 5px rgba(42, 39, 33, 0.04);
+  /* 浮层只有一档：下拉面板与垃圾桶共用同一族值（设计稿两档同值，此处照抄） */
+  --shadow-pop: 0 8px 24px rgba(0, 0, 0, 0.12);
+  --shadow-fab: 0 10px 26px rgba(0, 0, 0, 0.18);
+  /* 主按钮与轨道节点：accent 自色发光，不是中性影 */
+  --shadow-btn: 0 3px 10px rgba(79, 93, 229, 0.17);
+  --shadow-node: 0 3px 8px rgba(79, 93, 229, 0.25);
+  /* 进度条芯色 + 两截发光（发光压在芯色同一条色相上，跨色相会读成光晕 ⇒ 两色各一份） */
+  --bar-sand: #ecd4ac;
+  --bar-rose: #f29191;
+  --shadow-bar-sand: 0 0 9px rgba(227, 169, 100, 0.3), 0 0 22px rgba(227, 169, 100, 0.15);
+  --shadow-bar-rose: 0 0 9px rgba(224, 138, 138, 0.3), 0 0 22px rgba(224, 138, 138, 0.15);
+
+  /* ---- 窗口氛围场（设计稿 45/45 帧根上的六团径向光）----
+   * pen 的 `size` 是椭圆**直径**占画板的比例 ⇒ 这里的半径一律取它的一半。
+   * 场的基色不等于 --bg-app：浅色帧画的是 #EDF1F4，而 $bg-app 仍是 #F5F6F8（卡内那些取
+   * $bg-app 的格子照旧用后者）；暗色帧的基色就是 $bg-app 本身。
+   * 每团光的收尾色都是「基色 + alpha 0」而不是 transparent —— 落到 transparent 会灰一条边。 */
+  --field-base: #edf1f4;
+  --field: radial-gradient(31% 18% at 100% 0%, #f4f2e9 0%, #f1f1ec 50%, rgba(237, 241, 244, 0) 100%),
+    radial-gradient(35% 12% at 45% 0%, #f2f3ee 0%, #eef1f2 50%, rgba(237, 241, 244, 0) 100%),
+    radial-gradient(36% 21% at 45% 100%, #f3f5f3 0%, #f0f2f3 50%, rgba(237, 241, 244, 0) 100%),
+    radial-gradient(28% 21% at 45% 45%, #dfecf6 0%, #e8f1f6 50%, rgba(237, 241, 244, 0) 100%),
+    radial-gradient(32% 43% at 100% 62%, #e1e2f8 0%, #e7e8f9 50%, rgba(237, 241, 244, 0) 100%),
+    radial-gradient(8% 13% at 9% 19%, #d8daf6 0%, #e4e6f8 50%, rgba(237, 241, 244, 0) 100%);
+
+  /* ---- 卡片材质：半透明面 + 背后 14px 模糊（设计稿的卡是磨砂，不是实心白）---- */
+  --surface-card: rgba(248, 249, 248, 0.9);
+  --blur-card: 14px;
+
+  /* ---- 磨砂卡上的「格」与「面」（v5）----
+   * 压在磨砂卡上的次级底不再用实心 $surface-2，而是半透明纱，跟着卡下那团光走：
+   * --veil 给「格/轨」（元数据格、分段控件轨道），--veil-pill 给「描边按钮 / 选中页签」
+   * 这类要在纱上再浮一层的近白面。--console-bg 是运行日志卡（浅色用 $bg-app 实底）。 */
+  --veil: rgba(232, 233, 232, 0.8);
+  --veil-pill: #f9faf9;
+  --console-bg: var(--bg-app);
+
+  /* ---- 弹窗与浮层（v5）----
+   * 弹窗不再吃描边：近白 97% 半透明 + 磨砂 + modal 投影，浮在「灰紫 50% + 24px 模糊」的纱上；
+   * 弹窗里的列表行升格为 r10 小卡（$surface 面 + row 投影）；下拉浮层面板与卡同材质但用 pop 投影。 */
+  --surface-modal: #fcfcfcf8;
+  --scrim: #b9b7c280;
+  /* 下拉浮层面板（v5 `panel`）：实色面、**不做背景模糊**，与磨砂卡只差投影档位。
+   * 设计稿浅档写的是实心 #f8f9f8（比卡面 0.9 的透明度更实），暗档仍是 7.8% 白。 */
+  --surface-pop: #f8f9f8;
+
+  /* ---- 侧栏材质（v5）：半透明白浮在氛围场上 + 右描边 + 背景模糊 ---- */
+  --side-bg: rgba(255, 255, 255, 0.3);
+  --side-border: rgba(255, 255, 255, 0.75);
+  --side-blur: 18px;
+  /* 导航激活胶囊：白卡 + 极淡投影（不再是 accent-dim 淡底） */
+  --nav-pill: rgba(255, 255, 255, 0.85);
+  --nav-pill-shadow: 0 1px 4px rgba(42, 39, 33, 0.05);
+  /* 底部主题钮 */
+  --foot-btn-bg: rgba(255, 255, 255, 0.2);
+  --foot-btn-border: rgba(255, 255, 255, 0.75);
+  --foot-btn-shadow: 0 2px 6px rgba(42, 39, 33, 0.08);
 
   /* ---- 窗口外壳（透明窗口 + 自绘投影）----
    * tauri.conf 里 decorations:false + shadow:false：tao 的 shadow 只决定要不要让出
@@ -187,6 +253,53 @@
   --diamond: #5bd3e8;
 
   --rail-track: #2a2d36;
+
+  /* 暗色影：底是 18–38 的深灰，暖黑副本在这儿只会糊成一团脏雾 ⇒ 回纯黑、加大力度。
+   * 芯色两条不随档位换：同一串 #ECD4AC 压在暗卡上是发光体、压在亮卡上是柔色带，
+   * 差异由影的强度承担，色相两档共用（设计稿即如此）。 */
+  --shadow-card: 0 10px 24px rgba(0, 0, 0, 0.45), 0 2px 5px rgba(0, 0, 0, 0.25);
+  --shadow-row: 0 3px 8px rgba(0, 0, 0, 0.4), 0 1px 3px rgba(0, 0, 0, 0.2);
+  --shadow-modal: 0 16px 40px rgba(0, 0, 0, 0.6), 0 2px 5px rgba(0, 0, 0, 0.25);
+  --shadow-pop: 0 8px 24px rgba(0, 0, 0, 0.12);
+  --shadow-fab: 0 10px 26px rgba(0, 0, 0, 0.18);
+  --shadow-btn: 0 3px 10px rgba(139, 149, 255, 0.24);
+  --shadow-node: 0 3px 8px rgba(139, 149, 255, 0.3);
+  --shadow-bar-sand: 0 0 9px rgba(227, 169, 100, 0.3), 0 0 22px rgba(227, 169, 100, 0.15);
+  --shadow-bar-rose: 0 0 9px rgba(224, 138, 138, 0.3), 0 0 22px rgba(224, 138, 138, 0.15);
+
+  /* 暗档的场与影同一件事：影要压得住就得比浅色重，场要看得见就得比浅色脏。
+   * 基色直接吃 --bg-app（设计稿暗帧根上写的就是 $bg-app）。 */
+  --field-base: var(--bg-app);
+  --field: radial-gradient(31% 18% at 100% 0%, #2c2618 0%, #211e17 50%, rgba(18, 19, 23, 0) 100%),
+    radial-gradient(35% 12% at 45% 0%, #1e2024 0%, #1a1b1e 50%, rgba(18, 19, 23, 0) 100%),
+    radial-gradient(36% 21% at 45% 100%, #202227 0%, #1b1c20 50%, rgba(18, 19, 23, 0) 100%),
+    radial-gradient(28% 21% at 45% 45%, #182938 0%, #151d25 50%, rgba(18, 19, 23, 0) 100%),
+    radial-gradient(32% 43% at 100% 62%, #23254a 0%, #1a1b2e 50%, rgba(18, 19, 23, 0) 100%),
+    radial-gradient(8% 13% at 9% 19%, #1d2036 0%, #181a25 50%, rgba(18, 19, 23, 0) 100%);
+
+  /* 暗档的卡是「场上蒙一层 7.8% 白」，不是某个固定色号：卡会跟着它压着的那团光走 */
+  --surface-card: rgba(255, 255, 255, 0.078);
+
+  /* 暗档的纱与面：格回落到实心 $surface-2（磨砂底太暗，半透明纱读不出来），
+   * 近白面变成一层 10% 白。日志卡比别的卡再透一档（4% 白）。 */
+  --veil: var(--surface-2);
+  --veil-pill: rgba(255, 255, 255, 0.1);
+  --console-bg: rgba(255, 255, 255, 0.04);
+  --surface-modal: #1d1f26f2;
+  --scrim: #05060a80;
+  --surface-pop: rgba(255, 255, 255, 0.078);
+
+  /* 暗档侧栏：白只剩 3%，描边收到 8% —— 亮档那组白在深底上会糊成一片。
+   * 背景模糊在暗档关掉：设计稿暗帧的 Sidebar 上没有 background_blur（只有亮帧有 18），
+   * 深底糊上去读不出东西，只把场糊脏。 */
+  --side-bg: rgba(255, 255, 255, 0.03);
+  --side-border: rgba(255, 255, 255, 0.08);
+  --side-blur: 0px;
+  --nav-pill: #2a3160;
+  --nav-pill-shadow: 0 2px 10px rgba(139, 149, 255, 0.15);
+  --foot-btn-bg: rgba(255, 255, 255, 0.05);
+  --foot-btn-border: rgba(255, 255, 255, 0.08);
+  --foot-btn-shadow: 0 0 0 rgba(0, 0, 0, 0);
 }
 
 /* ============ Tailwind 4 主题注册 ============ */
@@ -220,6 +333,10 @@
   --color-amethyst: var(--amethyst);
   --color-diamond: var(--diamond);
   --color-rail-track: var(--rail-track);
+  --color-bar-sand: var(--bar-sand);
+  --color-bar-rose: var(--bar-rose);
+  --color-veil: var(--veil);
+  --color-veil-pill: var(--veil-pill);
 
   /* shadcn 组件消费的颜色 */
   --color-background: var(--background);
@@ -256,6 +373,109 @@
   --radius-2xl: calc(var(--radius) * 2.5);
   --radius-3xl: calc(var(--radius) * 3);
   --radius-4xl: calc(var(--radius) * 4);
+}
+
+/* ============ 场的落点与卡的材质 ============ */
+/* 两个类都是「一行就能关掉」的开关：`.app-field` 摘掉 ⇒ 回到纯色平底，
+ * `.card-frost` 摘掉 ⇒ 卡片回到 `bg-surface` 的实心面。参数本身只住在上面的令牌里。 */
+.app-field {
+  background-color: var(--field-base);
+  background-image: var(--field);
+}
+
+/* 窗口卡片圆角（v5 帧根 r12）：透明窗口 + 自绘投影的外壳本来就是个「卡片」，
+ * 四角跟着收圆。最大化时留白归零（[data-win-max] 挂在 <html> 上），圆角一并撤掉，
+ * 否则四角会露出屏外的圆边。 */
+.app-shell {
+  border-radius: var(--radius-lg);
+}
+[data-win-max] .app-shell {
+  border-radius: 0;
+}
+
+/* 吸顶页头（钉住的三个页头共用：转换任务 / 任务详情 / 转换模板）。
+ * 唯一要求：这条带子必须和**状态栏那 40px 是同一块东西**——状态栏自己不涂任何东西，
+ * 露的就是外壳上那张场，卡片滚到 `main.page-scroll` 上沿被硬裁一刀。所以吸顶带既不能加色、
+ * 也不能加糊（试过半透+18px 背景模糊：卡片的光只透进带子里、状态栏那边不透 ⇒ 他判「两个区域
+ * 完全是两种效果」）。做法是涂**窗口那张场在这一条带子里本该长什么样的逐像素复制**：
+ * 场画在不滚动的外壳上、吸顶盒钉住后也不滚动 ⇒ 两者相对窗口都静止，`attachment: fixed`
+ * 把定位参照拉回窗口，再用 calc 补掉 `--win-inset` 那圈留白就对上。
+ * 实测（带 40px 测试纹、故意错位 24px 当对照组）：对齐时逐像素最大差 0/255，错位组 195
+ * ⇒ 是「同一张场」，不是「看着差不多」；关掉整层＝下面 `content` 写 none。
+ * 材质对上了还得**盖得一样齐**：带子必须横向撑到滚动容器的 padding box（= `App.tsx` 里
+ * `main` 那圈 `px-8` = 2rem，两处数值要一起改）。`overflow:auto` 在 padding box 裁 ⇒
+ * 卡片投影溢出自己的 border box、落进 main 那 32px 内边距，状态栏那边这块被硬裁掉、
+ * 看得见的是场；只盖内容宽的带子盖不住它 ⇒ 左右各留一条竖影（量过：带子里侧
+ * x=478..499 / 1724..1746 两列亮度 236–239，同列状态栏行恒 240 ⇒ 差 4–5）。
+ * 负 margin 配等量 padding：带子变宽、里面页头文字逐像素不动（样片对照七验的）；
+ * 场钉在窗口上 ⇒ 变宽不会错位，新盖到的那两条本来就画着该画的场。
+ * 四条量过的弯路，别再走：
+ *  1) 底沿羽化 mask ⇒ 卡片那 1px 描边正好从变薄处露出来，就是「看到边框」那个病。
+ *  2) 半透 + backdrop-filter ⇒ 见上面那句「两种效果」；而且挂在 `::before`（z-index:-1 的负层）
+ *     上时糊不到任何卡片（sticky 盒自己就是 backdrop root），等于没写。
+ *  3) 祖先 transform 要心里有数：某个祖先带 `transform`/`will-change: transform`（motion 的
+ *     入场动画就是）时，`attachment: fixed` 的定位参照从窗口变成那个祖先 ⇒ 场错位。量的代价
+ *     是最大 9/255（渐变本身很软，读不出硬缝），所以留了这个写法；真要较值得把带子挪到
+ *     无 transform 的祖先里，别在 calc 上做手脚。
+ *  4) 带子只盖内容宽 ⇒ 两侧各一条投影竖影。这条是他第三轮红框指出来的，别退回窄版。 */
+.page-head-veil {
+  margin-inline: -2rem;
+  padding-inline: 2rem;
+}
+.page-head-veil::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+  background-color: var(--field-base);
+  background-image: var(--field);
+  background-attachment: fixed;
+  background-size: calc(100vw - 2 * var(--win-inset)) calc(100vh - 2 * var(--win-inset));
+  background-position: var(--win-inset) var(--win-inset);
+}
+
+/* 磨砂卡：半透明面 + 背后模糊 + 双层投影。这三件事必须一起给——
+ * 只给影不给模糊，影会压在实心白卡下面读不出来（设计稿的影是压在场上调的）。
+ * 无 layer 规则，压得住 Panel 自带的 `bg-surface` 工具类。 */
+.card-frost {
+  background-color: var(--surface-card);
+  backdrop-filter: blur(var(--blur-card));
+  box-shadow: var(--shadow-card);
+}
+
+/* 弹窗面：近白半透明 + 磨砂 + modal 档投影（v5 去掉了弹窗描边） */
+.modal-frost {
+  background-color: var(--surface-modal);
+  backdrop-filter: blur(var(--blur-card));
+  box-shadow: var(--shadow-modal);
+}
+
+/* 弹窗遮罩：灰紫半透明 + 背后 24px 模糊（v5：整个页面在弹窗后面被糊掉） */
+.scrim-veil {
+  background: var(--scrim);
+  backdrop-filter: blur(24px);
+}
+
+/* 弹窗列表行小卡：r10 + row 档投影；面浅色用 $surface、暗色用 $surface-2（设计稿即如此）。
+ * 放进 components 层：行上的 hover:bg-surface-2 / bg-gold-dim 等工具类要能压过它。 */
+@layer components {
+  .row-card {
+    --row-bg: var(--surface);
+    background-color: var(--row-bg);
+    border-radius: 10px;
+    box-shadow: var(--shadow-row);
+  }
+  .dark .row-card {
+    --row-bg: var(--surface-2);
+  }
+}
+
+/* 下拉浮层面板（v5 `panel`）：实色面 + 不模糊 + pop 投影，r12，无描边。
+ * 与卡的差别就在材质：设计稿给面板写的是实心面，浮层本来就在内容之上，糊背景没意义。 */
+.pop-panel {
+  background-color: var(--surface-pop);
+  box-shadow: var(--shadow-pop);
 }
 
 /* ============ 拖放卡（Dropzone）视觉资源 ============ */

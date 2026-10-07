@@ -7,7 +7,7 @@ import { Home, Info, LayoutTemplate, ListChecks, Settings, Moon, Sun } from "luc
 import { useRef, useState } from "react";
 import { AnimatePresence, motion } from "motion/react";
 import { NotificationStack } from "./NotificationStack";
-import { HOVER_FILL, TIP_TRIGGER, Tip } from "@/components/ui";
+import { HOVER_FILL, Logo, TIP_TRIGGER, Tip } from "@/components/ui";
 import { useT } from "@/lib/i18n";
 import { PILL_SLIDE } from "@/lib/springs";
 import { cn } from "@/lib/utils";
@@ -66,17 +66,25 @@ export function Sidebar() {
             : (entry.key as PrimaryPage);
 
     return (
-        <aside className="w-[212px] shrink-0 bg-bg-panel border-r border-stroke-soft flex flex-col px-3 pt-4 pb-0">
-            {/* 品牌行：SideShift + 预发布徽章 */}
-            <div className="h-7 flex items-center gap-1.5 px-2">
+        // v5：侧栏全高、半透明白浮在氛围场上（材质令牌见 App.css「侧栏材质」段）。
+        // 顶部的 BrandRow 与右侧标题栏同一行高（40）：各管各的拖拽区，拖左上角 = 拖品牌行。
+        <aside
+            data-tauri-drag-region
+            className="w-[212px] shrink-0 flex flex-col px-3 pb-4 border-r border-[var(--side-border)] bg-[var(--side-bg)] backdrop-blur-[var(--side-blur)]"
+        >
+            {/* 品牌行：Logo + SideShift + 预发布徽章（与标题栏同高 40，整行是拖拽区） */}
+            <div
+                data-tauri-drag-region
+                className="h-10 shrink-0 flex items-center gap-2 px-3 select-none"
+            >
+                <Logo className="size-5" />
                 <span className="font-heading text-base font-bold tracking-tight text-text-1">
                     SideShift
                 </span>
                 {/* 预发布徽章：文案由版本号推导（见 api 的 PRERELEASE_BADGE），稳定版整枚不渲染。
-                    行高必须写死：html 的 24px 行高会继承进来，不锁就把 9px 字撑成 28px 高的胶囊。
-                    圆角不走 sm(6)——盒子只有 16 高，6 已经读作胶囊了。 */}
+                    行高必须写死：html 的 24px 行高会继承进来，不锁就把 9px 字撑成 28px 高的胶囊。 */}
                 {PRERELEASE_BADGE && (
-                    <span className="inline-flex h-4 shrink-0 items-center rounded-[4px] bg-accent-dim px-1.5 text-[9px] font-semibold leading-none tracking-[0.04em] text-accent">
+                    <span className="inline-flex h-4 shrink-0 items-center rounded-full bg-accent-dim px-[7px] text-[9px] font-semibold leading-none tracking-[0.04em] text-accent">
                         {PRERELEASE_BADGE}
                     </span>
                 )}
@@ -84,8 +92,9 @@ export function Sidebar() {
 
             <div className="h-5" />
 
-            {/* 导航：行 36 高 r8，激活 accent 字；淡底交给一颗共享胶囊（layoutId），
-                切分类时它从旧行滑到新行——跨行也滑，不瞬移换色 */}
+            {/* 导航：行 36 高 r8；激活 = 白卡胶囊 + 极淡投影 + accent 字（600），
+                未激活回到 400 字重（v5 把导航字重拉开成 600/400 两档）。
+                淡底交给一颗共享胶囊（layoutId），切分类时它从旧行滑到新行——跨行也滑，不瞬移换色 */}
             <nav className="flex flex-col gap-1">
                 {navItems.map((item) => {
                     const Icon = item.icon;
@@ -95,18 +104,18 @@ export function Sidebar() {
                             key={item.key}
                             onClick={() => switchPrimary(item.key)}
                             className={cn(
-                                "relative w-full h-9 rounded-lg px-3 text-[13px] font-medium",
+                                "relative w-full h-9 rounded-md px-3 text-[13px]",
                                 HOVER_FILL,
                                 active
-                                    ? "text-accent"
-                                    : "text-text-2 hover:bg-surface-2 hover:text-text-1"
+                                    ? "font-semibold text-accent"
+                                    : "font-normal text-text-2 hover:bg-surface-2 hover:text-text-1"
                             )}
                         >
                             {active && (
                                 <motion.span
                                     layoutId="nav-pill"
                                     transition={PILL_SLIDE}
-                                    className="absolute inset-0 rounded-lg bg-accent-dim"
+                                    className="absolute inset-0 rounded-md bg-[var(--nav-pill)] shadow-[var(--nav-pill-shadow)]"
                                 />
                             )}
                             <span className="relative z-[1] flex h-full items-center gap-2.5">
@@ -120,7 +129,7 @@ export function Sidebar() {
 
             <div className="flex-1" />
 
-            {/* 底部：版本号 + 主题切换（32×32 surface-2 r8）。
+            {/* 底部：版本号 + 主题切换（32×32 纱面 + 描边，材质令牌见 App.css「侧栏材质」段）。
                 `relative` 是给提示区当定位参照的：提示区挂在这一行的上方边缘（`bottom-full`），
                 彻底不进侧栏的文档流——它长多高、什么时候塌掉都不该动到别的控件。
                 顺带把 popLayout 退场件的位置参照也收在这圈里（原先侧栏没有 positioned 祖先，
@@ -158,7 +167,7 @@ export function Sidebar() {
                                     animate={{ opacity: 1, scale: 1 }}
                                     exit={{ opacity: 0, scale: 0.5 }}
                                     transition={{ duration: 0.16, ease: [0.16, 1, 0.3, 1] }}
-                                    className="absolute -right-2 -top-1.5 size-2 rounded-full bg-emerald"
+                                    className="absolute -right-2 -top-1.5 size-1.5 rounded-full bg-emerald"
                                 />
                             )}
                         </AnimatePresence>
@@ -173,7 +182,8 @@ export function Sidebar() {
                     }}
                     aria-label={themeLabel}
                     className={cn(
-                        "relative size-8 rounded-lg bg-surface-2 flex items-center justify-center text-text-2 hover:text-text-1",
+                        "relative size-8 rounded-lg flex items-center justify-center text-text-2 hover:text-text-1",
+                        "border border-[var(--foot-btn-border)] bg-[var(--foot-btn-bg)] shadow-[var(--foot-btn-shadow)]",
                         HOVER_FILL
                     )}
                 >

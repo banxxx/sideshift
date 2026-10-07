@@ -8,7 +8,9 @@ import { TONE_TEXT, type Tone } from "./Chip";
 import { HOVER_FILL } from "./HoverFill";
 import { COUNT_ROLL } from "@/lib/springs";
 
-/* ---------------- 进度条：h6 轨道 $surface-2 r99 + 色条 ---------------- */
+/* ---------------- 进度条：h6 轨道 + 色条（v5：轨道列表档 $bg-app、详情档 $surface-2；
+ * 色条带 9/22 双圈外发光。cr 两档（列表 3 / 详情 99）在 h6 上都是「半个高」，画出来同形 ⇒ 不分叉。）
+ * 轨上**不挂 overflow**：色条与轨等高、宽度封顶 100%，越不出盒子，唯一被裁掉的正是设计要的那圈光。 ---------------- */
 
 export function Bar({
     percent,
@@ -23,9 +25,15 @@ export function Bar({
     flow?: boolean;
 }) {
     return (
-        <div className={cn("h-1.5 w-full overflow-hidden rounded-full bg-surface-2", className)}>
+        <div className={cn("h-1.5 w-full rounded-full bg-surface-2", className)}>
             <div
-                className={cn("h-1.5 rounded-full transition-[width]", fillClass, flow && "bar-flow")}
+                className={cn(
+                    "h-1.5 rounded-full transition-[width]",
+                    fillClass,
+                    flow && "bar-flow",
+                    // 0% 时色条没有面积、但那圈光还在 ⇒ 会留一团雾，直接把投影关掉
+                    percent <= 0 && "shadow-none"
+                )}
                 style={{ width: `${Math.max(0, Math.min(100, percent))}%` }}
             />
         </div>
@@ -178,7 +186,7 @@ export function MetaCell({
     return (
         <div
             className={cn(
-                "flex min-w-0 flex-1 flex-col gap-0.5 rounded-lg bg-surface-2 px-3 py-2.5",
+                "flex min-w-0 flex-1 flex-col gap-0.5 rounded-md bg-veil px-3 py-2.5",
                 className
             )}
         >
