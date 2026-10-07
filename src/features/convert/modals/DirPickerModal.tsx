@@ -304,7 +304,7 @@ export function DirPickerModal({
                     return (
                         <ListRow
                             key={key}
-                            className="row-card cursor-pointer hover:bg-surface-2"
+                            className="rounded-md cursor-pointer hover:bg-surface-2 py-2.5"
                             title={
                                 !canEnter(n)
                                     ? undefined
@@ -375,7 +375,7 @@ function FileRow({
     const t = useT();
     const on = checked;
     return (
-        <ListRow className="row-card cursor-pointer hover:bg-surface-2" onClick={onToggle}>
+        <ListRow className="rounded-md cursor-pointer hover:bg-surface-2 py-2.5" onClick={onToggle}>
             <span onClick={(e) => e.stopPropagation()}>
                 <CheckBox checked={on} onChange={onToggle} />
             </span>

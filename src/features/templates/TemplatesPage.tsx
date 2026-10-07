@@ -654,10 +654,11 @@ export function TemplatesPage() {
     return (
         <div className="flex flex-col gap-3 pb-6">
             {/* 吸顶：右上那颗「新建模板」是本页唯一的建入口，滚下去就够不着了。
-                留白这圈由吸顶盒自己出（pt-6），pb-3 + -mb-3 抵掉根 div 的 gap-3 ⇒ 静止观感与
-                不吸顶时逐像素相同。z-20 是必需的：行的位移写在 transform 上，带 transform 就是
-                层叠上下文，按文档顺序会盖在页头上面。材质见 App.css 的 `.page-head-veil`。 */}
-            <div className="page-head-veil sticky top-0 z-20 -mb-3 pt-6 pb-3">
+                留白这圈由吸顶盒自己出（pt-6），底沿与根 div 的 gap-3 怎么抵、分割线往上提多少，
+                全在 App.css 的 `.page-head-veil` 里算，这里只报 gap（本页 gap 是 .75rem，
+                比另两页窄一档）。z-20 是必需的：行的位移写在 transform 上，带 transform 就是
+                层叠上下文，按文档顺序会盖在页头上面。材质见同一条规则。 */}
+            <div className="page-head-veil sticky top-0 z-20 pt-6 [--veil-gap:0.75rem]">
                 <PageHeader
                     title={t("shell.templates", "转换模板")}
                     sub={t("templates.head-sub", "存下常用的转换配置 · 转换页一键套用")}

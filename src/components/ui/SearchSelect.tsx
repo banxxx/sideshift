@@ -98,6 +98,32 @@ export function SearchSelect({
         setOpen(false);
         setQuery("");
     };
+    /**
+     * 浮层那枚 `z-30` 只在自己那张卡的层叠上下文里作数：`.card-frost` 带着 backdrop-filter ⇒ 每张卡
+     * 自成一层，后面那张卡按文档顺序整个压在它上面，于是下拉一展开就被下一张卡的头排控件切掉半截
+     * （磨砂面 90% 不透明 + 14px 糊，所以漏出去那一截看着像一层脏影，比干脆盖住还难受）。
+     * 所以开合期间把「触发框 → 滚动容器」这一串祖先整条抬到 10：抬起来的那一层压过所有没抬的卡
+     * （那些是 z-index:auto），但仍低于吸顶页头那层纱（20）——面板只会朝下长，不该爬到钉住的页头上面。
+     * 为什么整条都抬、只抬最近那张卡不够：卡外面还包着动效壳，壳上留过 transform 就又是一层层叠上下文；
+     * 而壳若是普通 block，卡就不是 flex 项，z-index 写在卡身上压根不生效（实测两态都压不住下一张卡）。
+     * 已经自己写了 z-index 的祖先跳过：那是它跟同层兄弟约好的数（弹窗面是 50，压到 10 会被自家遮罩盖掉）。
+     * 逐字还原（原本没写过就还原成空串），关掉之后 DOM 与抬起前一模一样。
+     */
+    useEffect(() => {
+        if (!open) return;
+        const touched: Array<[HTMLElement, string]> = [];
+        for (let el: HTMLElement | null = boxRef.current;
+            el && el !== document.body && el.tagName !== "MAIN";
+            el = el.parentElement) {
+            if (getComputedStyle(el).zIndex === "auto") {
+                touched.push([el, el.style.zIndex]);
+                el.style.zIndex = "10";
+            }
+        }
+        return () => {
+            for (const [el, prev] of touched) el.style.zIndex = prev;
+        };
+    }, [open]);
     const q = query.toLowerCase();
     const filtered =
         searchable && q

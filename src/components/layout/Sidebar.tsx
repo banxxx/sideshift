@@ -70,7 +70,7 @@ export function Sidebar() {
         // 顶部的 BrandRow 与右侧标题栏同一行高（40）：各管各的拖拽区，拖左上角 = 拖品牌行。
         <aside
             data-tauri-drag-region
-            className="w-[212px] shrink-0 flex flex-col px-3 pb-4 border-r border-[var(--side-border)] bg-[var(--side-bg)] backdrop-blur-[var(--side-blur)]"
+            className="w-[var(--side-w)] shrink-0 flex flex-col px-3 pb-4 border-r border-[var(--side-border)] bg-[var(--side-bg)] backdrop-blur-[var(--side-blur)]"
         >
             {/* 品牌行：Logo + SideShift + 预发布徽章（与标题栏同高 40，整行是拖拽区） */}
             <div
@@ -94,7 +94,8 @@ export function Sidebar() {
 
             {/* 导航：行 36 高 r8；激活 = 白卡胶囊 + 极淡投影 + accent 字（600），
                 未激活回到 400 字重（v5 把导航字重拉开成 600/400 两档）。
-                淡底交给一颗共享胶囊（layoutId），切分类时它从旧行滑到新行——跨行也滑，不瞬移换色 */}
+                淡底交给一颗共享胶囊（layoutId），切分类时它从旧行滑到新行——跨行也滑，不瞬移换色。
+                悬停带不走全站那条 $surface-2：侧栏面是半透白、压着场的冷光，中性灰贴上去等于没贴（判据见 App.css「侧栏材质」段的 --nav-hover） */}
             <nav className="flex flex-col gap-1">
                 {navItems.map((item) => {
                     const Icon = item.icon;
@@ -108,7 +109,7 @@ export function Sidebar() {
                                 HOVER_FILL,
                                 active
                                     ? "font-semibold text-accent"
-                                    : "font-normal text-text-2 hover:bg-surface-2 hover:text-text-1"
+                                    : "font-normal text-text-2 hover:bg-[var(--nav-hover)] hover:text-text-1"
                             )}
                         >
                             {active && (

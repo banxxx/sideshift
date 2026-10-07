@@ -23,7 +23,7 @@ export const READONLY_BOX = "cursor-not-allowed border-stroke/60 bg-bg-app text-
 export const READONLY_MARK = "cursor-not-allowed opacity-70";
 
 /* ---------------- Stepper：−|值|+ 高 32 ----------------
- * 卡内态（Convert）：$surface + $stroke 1px，分隔 1×20，值区 padding[0,14]
+ * 卡内态（Convert / 模板编辑）：只有描边，不铺面；分隔 1×20，值区 padding[0,14]
  * 行内态（Settings）：无底色，分隔 1×30，值区固定 40 宽
  */
 export function Stepper({
@@ -66,10 +66,11 @@ export function Stepper({
         );
     return (
         <div
-            className={cn(
-                "flex h-8 shrink-0 items-center rounded-lg",
-                plain ? "border border-stroke" : "border border-stroke bg-surface"
-            )}
+            className={
+                // 值区不铺面：设计稿里 stepper 与所在卡同 fill，铺 $surface 就是贴在卡上的白贴（实测卡面 #F7F9F8 / 贴 #FFFFFF）
+                // overflow-hidden：± 的悬停底色跟着外框 r12 收口，否则它是直角、顶出圆角
+                "flex h-8 shrink-0 items-center overflow-hidden rounded-lg border border-stroke"
+            }
         >
             <button
                 className={cn(

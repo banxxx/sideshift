@@ -437,8 +437,12 @@ export function PlanListModal({
                                 key={m.id}
                                 className={cn(
                                     // 具名悬停组：无名 group 会和行内其它悬停件串味（见 Tip 的注释）
-                                    "group/row row-card",
+                                    // py 比设计稿的 pad[8,4] 高一档：稿里的行是平的，没有带子可量高度
+                                    "group/row py-2.5",
                                     !readOnly && "cursor-pointer",
+                                    // 只读行不给悬停（那是假出口）；改判中的行已有金面，压成灰会把「待恢复」糊掉
+                                    // 圆角只压悬停那一层：金面按设计稿是 r12，跟着行基类一起收到 8 会走样
+                                    !readOnly && !pending && "hover:bg-surface-2 hover:rounded-md",
                                     pending && "bg-gold-dim"
                                 )}
                                 onClick={readOnly ? undefined : () => setRow(m)}

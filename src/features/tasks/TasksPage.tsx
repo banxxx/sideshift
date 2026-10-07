@@ -232,11 +232,12 @@ export function TasksPage() {
                 负 margin 会把盒子顶到 containing block（页根 div 的内容盒上沿）之外，浏览器原地把它
                 夹回来——静止时页头底色压住列表 24px，滚动时顶部又永远留一条盖不住的带子。
                 盒子贴在滚动容器上沿贴合，卡片是从它**底下**穿过去的。
-                pb-5 + -mb-5 抵掉 flex 的 gap-5：静止观感与不吸顶时逐像素相同，但那 20px 归底色管。
+                纵向那圈留白由吸顶盒自己出（pt-6），底沿与 flex gap 的抵算、以及「分割线往上提
+                多少才落进空白」全在 App.css 的 `.page-head-veil` 里算，这里只报该页的 gap。
                 z-20 是必需的：卡片带 transform 就是层叠上下文，按文档顺序会盖在页头上面。
                 遮挡的材质＝窗口那张场的逐像素复制，与状态栏那块完全一致（不加色、不加糊），
                 见 App.css 的 `.page-head-veil`。 */}
-            <div className="page-head-veil sticky top-0 z-20 -mb-5 pt-6 pb-5">
+            <div className="page-head-veil sticky top-0 z-20 pt-6 [--veil-gap:1.25rem]">
                 <PageHeader
                     compact
                     title={t("tasks.conversion-tasks", "转换任务")}

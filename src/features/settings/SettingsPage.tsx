@@ -540,9 +540,11 @@ export function SettingsPage() {
                                     })
                         }
                     >
+                        {/* 两颗「清理」同形：描边纱面 + Trash2（设计稿 `btn-清理` 就是这副，
+                            红字只留给「清空全部」那一颗整片清掉的动作） */}
                         <Btn
                             size="sm"
-                            variant="danger"
+                            icon={Trash2}
                             disabled={!usage || usage.installsCount === 0 || !!cleaning || usage.busy}
                             onClick={() => void runClean("installs")}
                         >

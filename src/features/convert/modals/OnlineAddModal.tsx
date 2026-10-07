@@ -519,7 +519,7 @@ export function OnlineAddModal({
                                 <ListRow
                                     key={v.id}
                                     className={cn(
-                                        "row-card cursor-pointer hover:bg-surface-2",
+                                        "rounded-md cursor-pointer hover:bg-surface-2 py-2.5",
                                         i === shownVersions.length - 1 && "bg-surface"
                                     )}
                                     onClick={() => {
@@ -671,7 +671,7 @@ export function OnlineAddModal({
                             <ListRow
                                 key={m.id}
                                 className={cn(
-                                    "row-card cursor-pointer hover:bg-surface-2",
+                                    "rounded-md cursor-pointer hover:bg-surface-2 py-2.5",
                                     i === result.results.length - 1 && "bg-surface"
                                 )}
                                 onClick={() => openDetail(m)}

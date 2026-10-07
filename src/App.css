@@ -190,6 +190,12 @@
   /* 导航激活胶囊：白卡 + 极淡投影（不再是 accent-dim 淡底） */
   --nav-pill: rgba(255, 255, 255, 0.85);
   --nav-pill-shadow: 0 1px 4px rgba(42, 39, 33, 0.05);
+  /* 导航悬停带：白纱，走侧栏自己的材质阶梯——面 30% 白 → 悬停 55.8% 白 → 激活胶囊 85% 白 + 投影。
+   * 不用全站那条实心 $surface-2：侧栏面只有 30% 白、本身是全站最暗的「面」（实测 lum 240.4），
+   * 比它暗 5 级的实心灰贴上去 Δlum 只有 −0.4～−0.6，还把场色 B−R 从 10 拉回 5（读成一块发白的糊斑）。
+   * 代价：往上抬只剩 15 级余量，悬停带（实测 lum 249.1）离激活胶囊（253.8）只差 4.7 级，
+   * 两态靠胶囊那颗投影 + accent 字重分开，不靠底色。 */
+  --nav-hover: rgba(255, 255, 255, 0.558);
   /* 底部主题钮 */
   --foot-btn-bg: rgba(255, 255, 255, 0.2);
   --foot-btn-border: rgba(255, 255, 255, 0.75);
@@ -221,6 +227,14 @@
    * 唯一行为变化是标题栏最上 4px 从"拖动窗口"变成"改尺寸"——原生窗口本来也是这样。 */
   --win-edge-inside: 4px;
   --win-shadow: 0 2px 6px rgba(15, 18, 26, 0.22);
+
+  /* ---- 外壳两格几何：侧栏宽 / 标题栏高 ----
+   * 吸顶页头那层纱要把「窗口场」按这两格平移到自己头上（见 `.page-head-veil::before`），
+   * 所以它们必须是令牌，不能只活在 class 里。
+   * ⚠ 侧栏宽已收进 `w-[var(--side-w)]`；标题栏高（TitleBar 的 `h-10`）与侧栏品牌行的 `h-10`
+   *    仍是字面量，改那两格高度必须同时改这里——纱对不上是逐像素看得出来的。 */
+  --side-w: 212px;
+  --bar-h: 40px;
 }
 
 /* ================= 深色主题 ================= */
@@ -297,6 +311,9 @@
   --side-blur: 0px;
   --nav-pill: #2a3160;
   --nav-pill-shadow: 0 2px 10px rgba(139, 149, 255, 0.15);
+  /* 暗档同一条阶梯、同一个倍数：面 3% 白 → 悬停 6.75% 白 → 激活是实心靛蓝 #2a3160。
+   * 亮档那组白在深底上抬到 6.75% 刚好读得出（实测 Δlum +14.0），再往上就追平底部主题钮的 10% 纱面 */
+  --nav-hover: rgba(255, 255, 255, 0.0675);
   --foot-btn-bg: rgba(255, 255, 255, 0.05);
   --foot-btn-border: rgba(255, 255, 255, 0.08);
   --foot-btn-shadow: 0 0 0 rgba(0, 0, 0, 0);
@@ -413,14 +430,26 @@
  *  1) 底沿羽化 mask ⇒ 卡片那 1px 描边正好从变薄处露出来，就是「看到边框」那个病。
  *  2) 半透 + backdrop-filter ⇒ 见上面那句「两种效果」；而且挂在 `::before`（z-index:-1 的负层）
  *     上时糊不到任何卡片（sticky 盒自己就是 backdrop root），等于没写。
- *  3) 祖先 transform 要心里有数：某个祖先带 `transform`/`will-change: transform`（motion 的
- *     入场动画就是）时，`attachment: fixed` 的定位参照从窗口变成那个祖先 ⇒ 场错位。量的代价
- *     是最大 9/255（渐变本身很软，读不出硬缝），所以留了这个写法；真要较值得把带子挪到
- *     无 transform 的祖先里，别在 calc 上做手脚。
- *  4) 带子只盖内容宽 ⇒ 两侧各一条投影竖影。这条是他第三轮红框指出来的，别退回窄版。 */
+ *  3) `attachment: fixed` 已被实测否掉（2026-10-08 他红框报的「暗档顶部颜色割裂、切一次主题就好了」）：
+ *     滚动容器 `motion.main` 入场时挂 transform，fixed 的定位参照从窗口掉到它身上 ⇒ 场整片挪位；
+ *     动画结束 transform 撤了，那层栅格却不重画 ⇒ 错位的场一直冻在屏上，直到换主题强制 repaint。
+ *     探针 `.scratch/veil-probe.html` + `veil-diff.cjs`（参考帧＝不挂纱的同一次渲染，逐像素相减）：
+ *     旧写法带 transform 时 mean 7.07 / max 19、98.5% 带内像素错位；新写法 0.11 / 2、超 2 级 0 个，
+ *     且与 transform 有无无关。当年那句「最大 9/255、读不出硬缝」是拿亮档量的，暗档不成立。
+ *  4) 带子只盖内容宽 ⇒ 两侧各一条投影竖影。这条是他第三轮红框指出来的，别退回窄版。
+ * ② 位置：下沿＝卡片被裁的那条线，原先恒等于「下一格的上沿」（pb 与 gap 相等 ⇒ 抵掉），
+ *    于是静止时线正好压在卡片顶边上、滚一点就切到东西（他第四轮图1），模板页那条线
+ *    还从「拖动排序…」那行字的中间穿过去（图2，那行外面有 `-mt-1` 又向上吃了 4px）。
+ *    现在把线从下一格的上沿往上提 `--veil-lift`，落进两格之间那段空白里。
+ *    ⚠ 调用点只声明 `--veil-gap`（=该页根 div 的 gap），pb/mb 这里成对算出来：
+ *    两者必须一起变，布局才一格不动（样片对照八量的：lift 0→8，线从 315 抬到 299，
+ *    卡片顶边恒在 318）。要挪线只改下面这一个数。 */
 .page-head-veil {
+  --veil-lift: 8px;
   margin-inline: -2rem;
   padding-inline: 2rem;
+  padding-bottom: calc(var(--veil-gap, 1.25rem) - var(--veil-lift));
+  margin-bottom: calc(var(--veil-lift) - var(--veil-gap, 1.25rem));
 }
 .page-head-veil::before {
   content: "";
@@ -430,9 +459,12 @@
   pointer-events: none;
   background-color: var(--field-base);
   background-image: var(--field);
-  background-attachment: fixed;
+  /* 这里绝不写 `background-attachment: fixed`：见上面第 3) 条，滚动容器 `main` 自己就是 motion
+   * 的入场件、身上挂过 transform，fixed 的参照从窗口掉到它身上 ⇒ 场整片挪位（实测带内 98.5% 像素错位、
+   * 峰值 19/255，暗档右上角那团暖光直接消失）。改成按外壳两格几何平移：带子的视口位置恒等于
+   * (inset + 侧栏宽, inset + 标题栏高)，inset 两边对消 ⇒ 只剩 −212 / −40，参照谁都不怕。 */
   background-size: calc(100vw - 2 * var(--win-inset)) calc(100vh - 2 * var(--win-inset));
-  background-position: var(--win-inset) var(--win-inset);
+  background-position: calc(-1 * var(--side-w)) calc(-1 * var(--bar-h));
 }
 
 /* 磨砂卡：半透明面 + 背后模糊 + 双层投影。这三件事必须一起给——
