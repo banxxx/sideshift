@@ -107,11 +107,11 @@ export const STATUS_META: Record<
     cancelled: { label: "已取消", tone: "muted" },
 };
 
-/** 进度条填充类：运行 = 沙金芯 + 同色发光（v5）/ 成功绿 / 失败玫瑰芯 + 发光 / 其余灰 */
+/** 进度条填充类：三条同族柔化芯色 + 同色柔光（运行沙金 / 成功薄荷 / 失败玫瑰）/ 其余灰 */
 export const BAR_COLOR: Record<TaskStatus, string> = {
     queued: "bg-stroke",
     running: "bg-bar-sand shadow-[var(--shadow-bar-sand)]",
-    success: "bg-emerald",
+    success: "bg-bar-emerald shadow-[var(--shadow-bar-emerald)]",
     failed: "bg-bar-rose shadow-[var(--shadow-bar-rose)]",
     cancelled: "bg-stroke",
 };

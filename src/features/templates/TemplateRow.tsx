@@ -1,27 +1,30 @@
-import { Copy, FileSliders, GripVertical, Pencil, Trash2 } from "lucide-react";
+import { Copy, FileSliders, GripVertical, Pencil } from "lucide-react";
 import { useT } from "@/lib/i18n";
 import { templateValueCount, type ConversionTemplate } from "@/lib/types";
 import { IconBtn } from "@/components/ui";
 import { cn } from "@/lib/utils";
+import { TEAR } from "./tear-ticket";
 
 /**
- * 抬起层那三枚按钮禁的是「键盘还能 Tab 进去」（那层已 `aria-hidden`，可聚焦的 child 站在隐形层上），
+ * 抬起层那两枚按钮禁的是「键盘还能 Tab 进去」（那层已 `aria-hidden`，可聚焦的 child 站在隐形层上），
  * 不是「它们不能按」。所以把 `IconBtn` 自带的 `disabled:opacity-40` 压回原样——
  * 跟手那张必须和流内那张一模一样，他否决过任何让拖影看起来不同的做法。
  */
 const LIFT_INERT = "disabled:opacity-100";
 
 /**
- * 一张模板卡。两处复用同一份 markup：列表里那张（可拖、有三枚动作）与抬起层那张（`overlay`，
- * 只多一层投影、不吃命中、动作按钮不再挂着），所以「跟手的是这张卡本体」这条读感才立得住。
+ * 一张模板卡的**内容**。同一份 markup 用在三处：列表里那张（`torn`，面与撕口归 TearTicket 管）、
+ * 抬起层那张（`overlay`，只多一层投影、不吃命中），以及不撕票时的整卡。
+ * `torn` 档不写整卡的 `p-5`，改成让开票根那一格（`mr-20` = 撕口位置，`pr-3` 是离撕口留的余量）：
+ * 内容伸进撕口，撕开之后会剩半截字。删除只有「撕」这一个入口 ⇒ 卡身不放第二颗垃圾桶。
  */
 export function TemplateRow({
     template,
     lifted,
     overlay,
+    torn,
     onOpen,
     onCopy,
-    onDelete,
     onGripDown,
 }: {
     template: ConversionTemplate;
@@ -29,22 +32,25 @@ export function TemplateRow({
     lifted?: boolean;
     /** 抬起层：投影 + 不吃命中，动作件不再要交互 */
     overlay?: boolean;
+    /** 撕票档：磨砂面、圆角、投影都挂在撕口外壳上，这里只出内容 */
+    torn?: boolean;
     onOpen?: () => void;
     onCopy?: () => void;
-    onDelete?: () => void;
     onGripDown?: (e: React.PointerEvent<HTMLElement>) => void;
 }) {
     const t = useT();
     const count = templateValueCount(template.values);
     return (
-        <section
+        // 让开的这一格就是撕口所在的票根宽：跟着 TEAR 走，别把 80 抄成两份
+        <section style={torn ? { marginRight: TEAR.stubSize } : undefined}
             className={cn(
                 // 卡身没有 hover 档：整卡不可点，hover 压深会把它读成一个假出口。
                 // 材质与任务卡同一家（v5 磨砂）。抬起层不另造面貌：描边与实心面都不是卡这一族的
                 // 东西，离地感只由投影给（弹窗档：面比卡厚一点 + 无描边 + 重投影，深浅两档都已在令牌里）。
-                overlay
-                    ? "modal-frost group flex items-center gap-3 rounded-[12px] p-5"
-                    : "card-frost group flex items-center gap-3 rounded-[12px] p-5",
+                // `torn` 档不写面：clip-path 会把 box-shadow 一起裁掉，磨砂与投影归外壳那两层
+                "group flex items-center gap-3",
+                torn ? "py-5 pr-3 pl-5" : "rounded-[12px] p-5",
+                !torn && (overlay ? "modal-frost" : "card-frost"),
                 lifted && "invisible"
             )}
         >
@@ -95,13 +101,6 @@ export function TemplateRow({
                     className={LIFT_INERT}
                     disabled={overlay}
                     onClick={onCopy}
-                />
-                <IconBtn
-                    icon={Trash2}
-                    title={t("templates.delete", "删除")}
-                    className={cn("hover:bg-redstone-dim hover:text-redstone", LIFT_INERT)}
-                    disabled={overlay}
-                    onClick={onDelete}
                 />
             </span>
         </section>

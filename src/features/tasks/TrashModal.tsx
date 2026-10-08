@@ -45,7 +45,10 @@ export function TrashList() {
      * `relative` 必需：退场层被注入绝对定位，坐标按最近定位祖先算，滚动容器不定位就会量到窗外。
      */
     return (
-        <div className="list-scroll relative -mx-1 flex min-h-0 flex-1 flex-col gap-3 overflow-auto">
+        /* -mx-2 配等量 px-2：行卡带 --shadow-row（8px 模糊），而 overflow-auto 在 **padding box**
+         * 处裁切 ⇒ 负 margin 只把裁切边推到行外侧 8px，内容宽度不变。原来 -mx-1 无 padding，
+         * 行的左边缘正好压在裁切边上，横向投影被当场切平。 */
+        <div className="list-scroll relative -mx-2 flex min-h-0 flex-1 flex-col gap-3 overflow-auto px-2">
             <AnimatePresence mode="popLayout" initial={false}>
                 {entries.length === 0 ? (
                     <motion.div

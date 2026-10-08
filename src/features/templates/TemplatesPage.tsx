@@ -1,11 +1,12 @@
 /**
  * 转换模板列表页：页头 + 模板卡列表 + 空态。单卡解剖对齐任务卡家族，名称/备注单行 truncate ⇒ 卡高恒定（排序模型的地基）。
  * 拖拽排序用 pointer 事件手写实现（Tauri 在窗口级拦截 OS 文件拖入，HTML5 draggable 的 dragstart 不触发）；判据与积分器在 drag-sort.ts，本文件只管 DOM。
+ * 删除走「撕票」（TearTicket）：票根撕落 ⇒ 这一行收高。收高那一拍挂在同一条积分器上——行盒由外层钉死、只让里面那张塌，补位靠 transform，两条不能同时搬同一格。
  * 硬约束：跟随层必须 portal 到 `body`；拖动全程 DOM 不搬移节点（拖动项只 `visibility:hidden`）；落位索引每帧现算且只认指针原始输入；出界/被打断回原序不写盘；`paint` 减的家位必须用 `useLayoutEffect` 里 DOM 真搬完的顺序。
  * 卡身不做 hover 样式（动作三枚常显、整卡不可点）；写盘只走 `use-template-table` 的 `commit`（与编辑页同口径）。
  * 图标分工：`LayoutTemplate` 只给侧栏导航；`FileSliders` 代表一张模板（卡片与空态共用）。
  */
-import { AlertTriangle, Info, Plus } from "lucide-react";
+import { AlertTriangle, Info, Plus, Trash2 } from "lucide-react";
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { motion, useReducedMotion } from "motion/react";
@@ -15,9 +16,11 @@ import { useNavigation } from "@/lib/navigation";
 import { uniqueTemplateName, type ConversionTemplate } from "@/lib/types";
 import { Btn, NoteRow, PageHeader, Swap } from "@/components/ui";
 import { ENTRY, entryStepMs, playEntry } from "@/lib/entry-curve";
-import { DeleteTemplateModal } from "./DeleteTemplateModal";
+import { COLLAPSE } from "@/lib/page-motion";
 import { EmptyTemplates, LoadingTemplates } from "./TemplatePlaceholders";
+import { TearTicket } from "./TearTicket";
 import { TemplateRow } from "./TemplateRow";
+import { collapseEase } from "./tear-ticket";
 import { guardTemplateCap, useTemplateTable } from "./use-template-table";
 import {
     MAX_DT,
@@ -40,6 +43,23 @@ import {
 
 /** 行距：单卡时步距量不到，用它兜底（除法才不会出 Infinity）——必须与列表那头的 `gap-2` 同源 */
 const FALLBACK_GAP = 8;
+
+/** 收高那一拍的时长：跟着 `COLLAPSE` 走（`collapseEase` 是它那条 cubic-bezier 的数值孪生，两处必须同一条） */
+const COLLAPSE_MS = ((COLLAPSE as { duration?: number }).duration ?? 0.3) * 1000;
+
+/**
+ * 一行一份的收高记录。`wrap` 是变换载体那一层（进门时被钉死成原高），`shell` 是往下塌的那张卡，
+ * `e` 是这一帧的进度（补位那一段直接拿它乘步距，不再重算曲线）。
+ */
+interface Collapse {
+    id: string;
+    t0: number;
+    h0: number;
+    wrap: HTMLElement;
+    shell: HTMLElement;
+    e: number;
+    done: boolean;
+}
 
 
 /** 抬起那一刻量到的列几何：卡高与竖向步距（家位一律由「顺序 × 步距」算，不逐帧读 DOM） */
@@ -113,12 +133,15 @@ export function TemplatesPage() {
     const reduced = useReducedMotion();
     const { templates, loaded, commit } = useTemplateTable();
     const [lift, setLift] = useState<Lift | null>(null);
-    const [pendingDelete, setPendingDelete] = useState<ConversionTemplate | null>(null);
+    /** 卡的实测宽（列表容器给的）：撕口的 `path()` 吃 px，宽度一变就得重建几何 */
+    const [cardWidth, setCardWidth] = useState(0);
 
     const listRef = useRef<HTMLDivElement | null>(null);
     const cloneRef = useRef<HTMLDivElement | null>(null);
     const slotRef = useRef<HTMLDivElement | null>(null);
     const dragRef = useRef<DragSession | null>(null);
+    /** 正在收高的行（可以多张同时撕）：`id → 记录` */
+    const tearsRef = useRef(new Map<string, Collapse>());
     /** 这一趟挂在 window 上的监听拆除口（挂的时候顺手记下，收尾与卸载都走它） */
     const offRef = useRef<(() => void) | null>(null);
 
@@ -208,6 +231,20 @@ export function TemplatesPage() {
         const soft = reduced === true;
         let busy = false;
 
+        // 0) 撕完之后的收高：行盒钉着不动（`onTorn` 那一步写死的），只让里面这张卡往下塌。
+        //    进度 `e` 存回记录，下面第 2 段的补位目标直接乘它——塌陷与补位共用这一条时间轴，
+        //    才读成「一行没了」而不是「先空出一格、再跳一次」。
+        const tears = Array.from(tearsRef.current.values());
+        for (const c of tears) {
+            const u = Math.min(1, Math.max(0, (now - c.t0) / COLLAPSE_MS));
+            c.e = collapseEase(u);
+            c.done = u >= 1;
+            c.shell.style.height = `${(c.h0 * (1 - c.e)).toFixed(2)}px`;
+            // 最后那 45% 才淡：前面全程保持实心，收高读起来是「压没了」而不是「淡没了」
+            c.shell.style.opacity = u < 0.55 ? "1" : (1 - (u - 0.55) / 0.45).toFixed(3);
+            if (!c.done) busy = true;
+        }
+
         // 1) 抬起层：每帧一次读列表盒顶（页面被滚走也吃进来），索引只认原始输入
         if (d?.active) {
             busy = true;
@@ -292,12 +329,21 @@ export function TemplatesPage() {
         // 2) 每行一条独立弹簧：拖动中追「让开空槽后的那一格」，空闲追**逻辑**家位（`orderRef`）。
         //    落位提交后那几帧 DOM 还是旧序，家位差由 `paint` 减 `domOrderRef` 补回来（见文件头硬约束）
         const order = orderRef.current;
+        // 每条收高现在占第几格（逻辑序）：算补位行程用，一次算好喂给下面那圈行
+        const shifting = tears.map((c) => ({ from: order.indexOf(c.id), e: c.e }));
         for (const id of order) {
             const s = springsRef.current.get(id);
             if (!s) continue;
-            const home = homeOf(order.indexOf(id), col.pitch);
+            const at = order.indexOf(id);
+            const home = homeOf(at, col.pitch);
             if (!Number.isFinite(s.y)) {
                 s.y = home;
+                continue;
+            }
+            // 正在收高那一行：不参与飞行（它自己往下塌），也别让下面那段 `target` 把它拽走
+            if (tearsRef.current.has(id)) {
+                s.y = home;
+                s.v = 0;
                 continue;
             }
             if (d?.active && d.open) {
@@ -308,10 +354,13 @@ export function TemplatesPage() {
                     continue;
                 }
             }
+            // 收高中的行下面那几行：目标往上抬「已经塌掉的那一段」，行程与塌陷逐帧同量
+            let shift = 0;
+            for (const x of shifting) if (x.from >= 0 && at > x.from) shift += x.e * col.pitch;
             const target =
-                d?.active && d.open
+                (d?.active && d.open
                     ? slotOf(d.rank.get(id) ?? 0, d.idx, col.pitch)
-                    : home;
+                    : home) - shift;
             if (soft) {
                 s.y = target;
                 s.v = 0;
@@ -344,6 +393,7 @@ export function TemplatesPage() {
         }
 
         paint();
+        for (const c of tears) if (c.done) finishTear(c.id);
         if (busy) rafRef.current = requestAnimationFrame(frame);
         else lastRef.current = 0;
     };
@@ -603,6 +653,20 @@ export function TemplatesPage() {
      * 撤销函数留一份在 ref：起拖前要当场掐掉（`onGripDown` 量的是 rect，吃不得这层的位移），这一页卸掉时也掐掉。
      */
     const listShown = loaded && templates.length > 0;
+
+    /** 撕口的 `path()` 写的是 px ⇒ 宽度只能量了传下去（换页时那一头先归零再量，避免拿上一屏的宽画几何） */
+    useLayoutEffect(() => {
+        if (!listShown) {
+            setCardWidth(0);
+            return;
+        }
+        const box = listRef.current;
+        if (!box) return;
+        setCardWidth(box.clientWidth);
+        const ro = new ResizeObserver(() => setCardWidth(box.clientWidth));
+        ro.observe(box);
+        return () => ro.disconnect();
+    }, [listShown]);
     const entryUndos = useRef<(() => void)[]>([]);
     useLayoutEffect(() => {
         const nodes = listShown
@@ -646,6 +710,53 @@ export function TemplatesPage() {
             },
             ...templates.slice(at + 1),
         ]);
+    };
+
+    /**
+     * 票根落定（淡尽）那一刻：先钉住行盒再开始收高。
+     * 钉高度这一步是**这一拍的地基**——行盒一动布局就把下面那些行顶上去，而补位走的是积分器的
+     * transform，两条一起搬同一格就是「先跳一格再滑一格」。
+     * 拖排进行中与「减少动态效果」都直接写盘：前者那趟落位吃的是行高恒定，后者本来就不演。
+     */
+    const onTorn = (id: string) => {
+        if (dragRef.current?.active || reduced === true) {
+            removeTorn(id);
+            return;
+        }
+        const wrap = springsRef.current.get(id)?.el;
+        const shell = wrap?.querySelector<HTMLElement>("[data-tear]");
+        if (!wrap || !shell) {
+            removeTorn(id);
+            return;
+        }
+        const h0 = shell.offsetHeight;
+        wrap.style.height = `${h0}px`;
+        shell.style.overflow = "hidden";
+        tearsRef.current.set(id, { id, t0: performance.now(), h0, wrap, shell, e: 0, done: false });
+        kick();
+    };
+
+    /** 收高演完：撤记录、写盘。落盘失败会回滚数据，那一张卡得原样站回来（钉住的那格一起撤） */
+    const finishTear = (id: string) => {
+        const c = tearsRef.current.get(id);
+        tearsRef.current.delete(id);
+        const list = rowsRef.current;
+        const next = list.filter((x) => x.id !== id);
+        if (next.length === list.length) return;
+        void commit(next).then((ok) => {
+            if (ok || !c) return;
+            c.wrap.style.height = "";
+            c.shell.style.height = "";
+            c.shell.style.overflow = "";
+            c.shell.style.opacity = "";
+        });
+    };
+
+    const removeTorn = (id: string) => {
+        const list = rowsRef.current;
+        const next = list.filter((x) => x.id !== id);
+        if (next.length === list.length) return;
+        void commit(next);
     };
 
     const dragId = lift?.id ?? null;
@@ -712,13 +823,24 @@ export function TemplatesPage() {
                                     <div data-entry>
                                         {/* 行自己的一层：拖动与换位都只改这层的 transform，节点整趟不搬 */}
                                         <div ref={(el) => registerRow(tpl.id, el)}>
-                                            <TemplateRow
-                                                template={tpl}
+                                            {/* 面、撕口、票根归外壳；卡身只出内容（`torn` 档自己不放垃圾桶） */}
+                                            <TearTicket
+                                                width={cardWidth}
                                                 lifted={dragId === tpl.id}
-                                                onOpen={() => navigate("template", { templateId: tpl.id })}
-                                                onCopy={() => duplicate(tpl)}
-                                                onDelete={() => setPendingDelete(tpl)}
-                                                onGripDown={(e) => onGripDown(e, tpl.id)}
+                                                disabled={dragId !== null}
+                                                onTear={() => onTorn(tpl.id)}
+                                                stub={<Trash2 className="size-[15px]" />}
+                                                body={
+                                                    <TemplateRow
+                                                        template={tpl}
+                                                        torn
+                                                        onOpen={() =>
+                                                            navigate("template", { templateId: tpl.id })
+                                                        }
+                                                        onCopy={() => duplicate(tpl)}
+                                                        onGripDown={(e) => onGripDown(e, tpl.id)}
+                                                    />
+                                                }
                                             />
                                         </div>
                                     </div>
@@ -775,20 +897,23 @@ export function TemplatesPage() {
                             }}
                             style={{ width: lift.width }}
                         >
-                            <TemplateRow template={liftTpl} overlay />
+                            {/*
+                              面必须与列表里那张同一件：孔列、票根、垃圾桶都在，只是不演撕。
+                              磨砂换 `modal-frost`——形状一致但还浮在列表之上；投影照旧走 `--tear-shadow`，
+                              挂在裁层父级才跟着剪影走，box-shadow 会被 `clip-path` 整条裁掉。
+                            */}
+                            <TearTicket
+                                width={lift.width}
+                                disabled
+                                frost="modal-frost"
+                                stub={<Trash2 className="size-[15px]" />}
+                                body={<TemplateRow template={liftTpl} overlay torn />}
+                            />
                         </div>
                     </div>,
                     document.body
                 )}
 
-            <DeleteTemplateModal
-                template={pendingDelete}
-                onClose={() => setPendingDelete(null)}
-                onConfirm={(tpl) => {
-                    setPendingDelete(null);
-                    void commit(templates.filter((x) => x.id !== tpl.id));
-                }}
-            />
         </div>
     );
 }

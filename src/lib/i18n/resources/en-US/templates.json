@@ -73,6 +73,7 @@
   "templates.scope-hint": "MC version, loader version and content kept from the pack stay out of templates",
   "templates.seed": "Seed",
   "templates.start-scripts": "Start scripts",
+  "templates.tear-stub": "Tear off the stub to delete this template",
   "templates.summary": "Template summary",
   "templates.unsaved": "Unsaved",
   "templates.update-template": "Update template",

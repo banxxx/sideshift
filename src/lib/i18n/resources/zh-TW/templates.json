@@ -53,5 +53,6 @@
   "templates.saved-toast": "已保存模板 · {{count}} 項",
   "templates.scope-hint": "MC 版本、載入器版本、包內保留內容不進模板",
   "templates.seed": "種子",
-  "templates.start-scripts": "啟動腳本"
+  "templates.start-scripts": "啟動腳本",
+  "templates.tear-stub": "撕下票根以刪除這張模板"
 }

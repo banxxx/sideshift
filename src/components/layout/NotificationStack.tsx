@@ -5,7 +5,6 @@
  */
 import { AnimatePresence, motion } from "motion/react";
 import { AlertTriangle, CircleCheck, CircleX, Info, X } from "lucide-react";
-import { Tip, TIP_TRIGGER } from "@/components/ui";
 import { cn } from "@/lib/utils";
 import { dismissNotice, useNotices, type Notice, type NoticeKind } from "@/lib/notify";
 import { useT } from "@/lib/i18n";
@@ -46,17 +45,16 @@ function NoticeCard({ notice }: { notice: Notice }) {
             <span className="min-w-0 flex-1 break-words text-[11px] leading-[16px] text-text-2">
                 {notice.text}
             </span>
+            {/* 不给 Tip：这一格只有 16px，气泡比按钮还宽，提示卡本身就写在侧栏的小地方 */}
             <button
                 onClick={() => dismissNotice(notice.id)}
                 aria-label={t("shell.dismiss-notification", "关闭提示")}
                 className={cn(
-                    TIP_TRIGGER,
                     "-mr-0.5 -mt-0.5 flex size-4 shrink-0 items-center justify-center rounded text-text-3",
                     "opacity-0 transition-opacity duration-150 hover:text-text-1 group-hover:opacity-100"
                 )}
             >
                 <X className="size-3" />
-                <Tip label={t("shell.dismiss-notification", "关闭提示")} side="top" />
             </button>
         </motion.div>
     );

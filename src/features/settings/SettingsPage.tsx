@@ -377,14 +377,9 @@ export function SettingsPage() {
                 {/* ---- 转换选项 ---- */}
                 <Section title={t("settings.conversion-options", "转换选项")}>
                     <SettingRow label={t("settings.server-output", "服务端输出目录")} desc={t("settings.where-finished", "转换完成的整合包落位目录")}>
-                        <TextInput
-                            plain
-                            icon={Folder}
-                            readOnly
-                            value={settings.outputDir}
-                            onClick={() => void pickDir("outputDir")}
-                            className="w-[300px] cursor-pointer"
-                        />
+                        {/* 路径格只读，选目录的入口收给后面那颗「选择」。原来这里既挂 onClick 又在 className 里
+                            写 cursor-pointer，把 readOnly 档的禁止光标顶掉了：指针看着能点，点下去才弹选择器。 */}
+                        <TextInput plain icon={Folder} readOnly value={settings.outputDir} className="w-[300px]" />
                         <Btn size="sm" onClick={() => void pickDir("outputDir")}>
                             {t("settings.choose", "选择")}
                         </Btn>
@@ -440,14 +435,7 @@ export function SettingsPage() {
                 {/* ---- 存储与缓存 ---- */}
                 <Section title={t("settings.storage-cache", "存储与缓存")}>
                     <SettingRow label={t("settings.cache-folder", "工作缓存目录")} desc={t("settings.download-cache-extraction", "下载缓存、解包与构建中间产物")}>
-                        <TextInput
-                            plain
-                            icon={Folder}
-                            readOnly
-                            value={settings.cacheDir}
-                            onClick={() => void pickDir("cacheDir")}
-                            className="w-[300px] cursor-pointer"
-                        />
+                        <TextInput plain icon={Folder} readOnly value={settings.cacheDir} className="w-[300px]" />
                         <Btn size="sm" onClick={() => void pickDir("cacheDir")}>
                             {t("settings.choose", "选择")}
                         </Btn>

@@ -135,6 +135,11 @@
    * 设计稿里每个投影都是「近场一层定边界 + 远场一层给重量」，
    * 浅色用暖黑 #2A2721 做底（冷灰底上的纯黑读起来发脏），暗色回落到纯黑。 */
   --shadow-card: 0 10px 24px rgba(42, 39, 33, 0.05), 0 2px 5px rgba(42, 39, 33, 0.04);
+  /* 撕票件（模板卡的删除手势）：撕口是 `clip-path: path()`，它会连 box-shadow 一起裁掉 ⇒ 投影另给一份
+   * `drop-shadow`，挂在裁层的**父级**上（跟着剪影走）。数值与 --shadow-card 同档，drop-shadow() 不吃多值 var 只能拆开写。
+   * --tear-fibre 是断口之间那几根纸丝：卡面是 90% 白，得比卡面暗一档才看得见。 */
+  --tear-shadow: drop-shadow(0 10px 24px rgba(42, 39, 33, 0.05)) drop-shadow(0 2px 5px rgba(42, 39, 33, 0.04));
+  --tear-fibre: #d3d8e0;
   --shadow-row: 0 3px 8px rgba(42, 39, 33, 0.08), 0 1px 3px rgba(42, 39, 33, 0.04);
   --shadow-modal: 0 16px 40px rgba(42, 39, 33, 0.12), 0 2px 5px rgba(42, 39, 33, 0.04);
   /* 浮层只有一档：下拉面板与垃圾桶共用同一族值（设计稿两档同值，此处照抄） */
@@ -146,7 +151,12 @@
   /* 进度条芯色 + 两截发光（发光压在芯色同一条色相上，跨色相会读成光晕 ⇒ 两色各一份） */
   --bar-sand: #ecd4ac;
   --bar-rose: #f29191;
-  --shadow-bar-sand: 0 0 9px rgba(227, 169, 100, 0.3), 0 0 22px rgba(227, 169, 100, 0.15);
+  /* 成功条的芯色：另外两条用的是柔化的「芯色」（沙金 #ECD4AC / 玫瑰 #F29191，明度 76–80%），
+   * 借语义绿 `--emerald`（明度 34%）会明显比它们沉 ⇒ 同族补一枚柔化薄荷，明度对齐玫瑰那条。 */
+  --bar-emerald: #66c08f;
+  /* 进度条外发光：22px 那圈散开就是一团糊在卡面上的雾 ⇒ 收到 15px、透明度减半，只留贴着条的一层柔光 */
+  --shadow-bar-sand: 0 0 8px rgba(227, 169, 100, 0.16), 0 0 15px rgba(227, 169, 100, 0.07);
+  --shadow-bar-emerald: 0 0 8px rgba(30, 186, 125, 0.16), 0 0 15px rgba(30, 186, 125, 0.07);
   --shadow-bar-rose: 0 0 9px rgba(224, 138, 138, 0.3), 0 0 22px rgba(224, 138, 138, 0.15);
 
   /* ---- 窗口氛围场（设计稿 45/45 帧根上的六团径向光）----
@@ -175,12 +185,14 @@
   --console-bg: var(--bg-app);
 
   /* ---- 弹窗与浮层（v5）----
-   * 弹窗不再吃描边：近白 97% 半透明 + 磨砂 + modal 投影，浮在「灰紫 50% + 24px 模糊」的纱上；
+   * 弹窗不再吃描边：近白 97% 半透明 + 磨砂 + modal 投影，浮在「灰紫 + 24px 模糊」的纱上；
+   * 纱的不透明度：设计稿两档都是 50%（`#B9B7C280` / `#05060A80`，桥读回来的现值），代码收到 40%
+   * ＝比稿更透一档，压到 50% 就与设计稿逐字相同；
    * 弹窗里的列表行升格为 r10 小卡（$surface 面 + row 投影）；下拉浮层面板与卡同材质但用 pop 投影。 */
   --surface-modal: #fcfcfcf8;
-  --scrim: #b9b7c280;
+  --scrim: #b9b7c266;
   /* 下拉浮层面板（v5 `panel`）：实色面、**不做背景模糊**，与磨砂卡只差投影档位。
-   * 设计稿浅档写的是实心 #f8f9f8（比卡面 0.9 的透明度更实），暗档仍是 7.8% 白。 */
+   * 设计稿浅档写的是实心 #f8f9f8（比卡面 0.9 的透明度更实）；暗档见下面深色块，同样实心。 */
   --surface-pop: #f8f9f8;
 
   /* ---- 侧栏材质（v5）：半透明白浮在氛围场上 + 右描边 + 背景模糊 ---- */
@@ -227,6 +239,9 @@
    * 唯一行为变化是标题栏最上 4px 从"拖动窗口"变成"改尺寸"——原生窗口本来也是这样。 */
   --win-edge-inside: 4px;
   --win-shadow: 0 2px 6px rgba(15, 18, 26, 0.22);
+  /* 窗口四角：设计稿帧根是 r12，但它跟的是「卡片」那一档，窗口是应用最外层的框 ⇒ 单开一枚，
+   * 不借 `--radius-lg`，否则调窗口会连全站卡角一起动。8px 也是 Win11 原生窗口的取值。 */
+  --win-radius: 8px;
 
   /* ---- 外壳两格几何：侧栏宽 / 标题栏高 ----
    * 吸顶页头那层纱要把「窗口场」按这两格平移到自己头上（见 `.page-head-veil::before`），
@@ -272,13 +287,17 @@
    * 芯色两条不随档位换：同一串 #ECD4AC 压在暗卡上是发光体、压在亮卡上是柔色带，
    * 差异由影的强度承担，色相两档共用（设计稿即如此）。 */
   --shadow-card: 0 10px 24px rgba(0, 0, 0, 0.45), 0 2px 5px rgba(0, 0, 0, 0.25);
+  /* 撕票件暗档：影回纯黑（与这一族别的档同一个理由），纸丝跟着卡面一起提亮 */
+  --tear-shadow: drop-shadow(0 10px 24px rgba(0, 0, 0, 0.45)) drop-shadow(0 2px 5px rgba(0, 0, 0, 0.25));
+  --tear-fibre: #4a4e58;
   --shadow-row: 0 3px 8px rgba(0, 0, 0, 0.4), 0 1px 3px rgba(0, 0, 0, 0.2);
   --shadow-modal: 0 16px 40px rgba(0, 0, 0, 0.6), 0 2px 5px rgba(0, 0, 0, 0.25);
   --shadow-pop: 0 8px 24px rgba(0, 0, 0, 0.12);
   --shadow-fab: 0 10px 26px rgba(0, 0, 0, 0.18);
   --shadow-btn: 0 3px 10px rgba(139, 149, 255, 0.24);
   --shadow-node: 0 3px 8px rgba(139, 149, 255, 0.3);
-  --shadow-bar-sand: 0 0 9px rgba(227, 169, 100, 0.3), 0 0 22px rgba(227, 169, 100, 0.15);
+  --shadow-bar-sand: 0 0 8px rgba(227, 169, 100, 0.16), 0 0 15px rgba(227, 169, 100, 0.07);
+  --shadow-bar-emerald: 0 0 8px rgba(30, 186, 125, 0.16), 0 0 15px rgba(30, 186, 125, 0.07);
   --shadow-bar-rose: 0 0 9px rgba(224, 138, 138, 0.3), 0 0 22px rgba(224, 138, 138, 0.15);
 
   /* 暗档的场与影同一件事：影要压得住就得比浅色重，场要看得见就得比浅色脏。
@@ -300,8 +319,13 @@
   --veil-pill: rgba(255, 255, 255, 0.1);
   --console-bg: rgba(255, 255, 255, 0.04);
   --surface-modal: #1d1f26f2;
-  --scrim: #05060a80;
-  --surface-pop: rgba(255, 255, 255, 0.078);
+  /* 与浅色那档同一个收口：设计稿是 80（50%），两档一起降到 66（40%）保持对称 */
+  --scrim: #05060a66;
+  /* 下拉浮层：暗档也必须是**实心**面。原来这里抄的是卡的 7.8% 白——卡能透是因为它带 18px 背景模糊，
+   * 浮层刻意不模糊（见浅色那档的注释），于是压在文字上就是一块「玻璃」，整块内容穿帮（他截图里
+   * 「4 GB」和开关从面板里透出来）。取 #35363a = 把「7.8% 白压在暗卡上」当场算平的实测值
+   * （截图量到卡面 37,38,42 ⇒ 面板 53,54,58），观感与今天一致、只是不再透。 */
+  --surface-pop: #35363a;
 
   /* 暗档侧栏：白只剩 3%，描边收到 8% —— 亮档那组白在深底上会糊成一片。
    * 背景模糊在暗档关掉：设计稿暗帧的 Sidebar 上没有 background_blur（只有亮帧有 18），
@@ -352,6 +376,7 @@
   --color-rail-track: var(--rail-track);
   --color-bar-sand: var(--bar-sand);
   --color-bar-rose: var(--bar-rose);
+  --color-bar-emerald: var(--bar-emerald);
   --color-veil: var(--veil);
   --color-veil-pill: var(--veil-pill);
 
@@ -400,14 +425,11 @@
   background-image: var(--field);
 }
 
-/* 窗口卡片圆角（v5 帧根 r12）：透明窗口 + 自绘投影的外壳本来就是个「卡片」，
- * 四角跟着收圆。最大化时留白归零（[data-win-max] 挂在 <html> 上），圆角一并撤掉，
- * 否则四角会露出屏外的圆边。 */
+/* 窗口卡片圆角：透明窗口 + 自绘投影的外壳本来就是个「卡片」，四角跟着收圆。
+ * 档位住在上面的 `--win-radius`（壳与弹窗遮罩两处消费）。最大化时留白归零、圆角一并撤掉
+ * （`[data-win-max]` 把令牌本身写成 0，挂在 <html> 上），否则四角会露出屏外的圆边。 */
 .app-shell {
-  border-radius: var(--radius-lg);
-}
-[data-win-max] .app-shell {
-  border-radius: 0;
+  border-radius: var(--win-radius);
 }
 
 /* 吸顶页头（钉住的三个页头共用：转换任务 / 任务详情 / 转换模板）。
@@ -483,10 +505,13 @@
   box-shadow: var(--shadow-modal);
 }
 
-/* 弹窗遮罩：灰紫半透明 + 背后 24px 模糊（v5：整个页面在弹窗后面被糊掉） */
+/* 弹窗遮罩：灰紫半透明 + 背后 24px 模糊（v5：整个页面在弹窗后面被糊掉）。
+ * 圆角必须自己写：它 portal 在 body 层、不在 `.app-shell` 的 `overflow-hidden` 里，
+ * 不吃窗口那一档就会在四个圆角外各留一块直角灰。 */
 .scrim-veil {
   background: var(--scrim);
   backdrop-filter: blur(24px);
+  border-radius: var(--win-radius);
 }
 
 /* 弹窗列表行小卡：r10 + row 档投影；面浅色用 $surface、暗色用 $surface-2（设计稿即如此）。
@@ -495,12 +520,19 @@
   .row-card {
     --row-bg: var(--surface);
     background-color: var(--row-bg);
-    border-radius: 10px;
     box-shadow: var(--shadow-row);
   }
   .dark .row-card {
     --row-bg: var(--surface-2);
   }
+}
+
+/* 圆角单独一条、且不放进 components 层：ListRow 基类自带 `rounded-lg`，utilities 层压得过
+ * components ⇒ 写在那一层的圆角是死值（改 10/12/16 三档都不动，实测 computed 恒 12px）。
+ * 代价：行身上再用 rounded-* 工具类也压不过这里，要改档位只改下面这一个数。
+ * 取 8 = 回收站原稿那排的 cr8（也是 $radius-md 正档）；v5 副本区的行卡是 10。 */
+.row-card {
+  border-radius: 8px;
 }
 
 /* 下拉浮层面板（v5 `panel`）：实色面 + 不模糊 + pop 投影，r12，无描边。
@@ -661,6 +693,16 @@
   }
 }
 
+/* ============ 回收站长按的波浪边（TrashBin） ============
+ * 一条竖向重复的波浪瓦片，把填充层的右边缘裁成起伏的波峰。
+ * 这里只放**不随参数变**的两件（瓦片本身 + 竖向重复）；瓦片宽/高和位移都由 TrashBin.tsx
+ * 按 WAVE 与盒子实测宽高写成行内样式——波幅在 CSS 里再存一份数字，两处一定会漂移。
+ * 给到 WAVE=0 时瓦片宽成 0，这一层画不出任何像素 ⇒ 整条退化回直边，不用另设开关。 */
+.trash-crest {
+  mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='20' height='200' viewBox='0 0 20 200' preserveAspectRatio='none'%3E%3Cpath d='M0 0H10C18 8 18 25.3 10 33.3S2 58.7 10 66.7S18 92 10 100S2 125.3 10 133.3S18 158.7 10 166.7S2 192 10 200H0Z'/%3E%3C/svg%3E");
+  mask-repeat: repeat-y;
+}
+
 /* ============ 最大化：留白收掉 ============
  * tao 最大化走 ShowWindow(SW_MAXIMIZE)（window_state.rs:377），矩形交给系统算，
  * 而系统会把带 WS_THICKFRAME 的窗口向外撑一个边框厚度（Win10 左/右/下各一截、上为 0）。
@@ -673,6 +715,8 @@
 [data-win-max] {
   --win-inset: 0px;
   --win-edge-inside: 0px;
+  /* 圆角也归零：壳与 portal 遮罩都读这一枚令牌，所以 `[data-win-max] .app-shell{border-radius:0}` 那条已删 */
+  --win-radius: 0px;
 }
 
 /* ============ 窗口缩放把手（透明留白那圈）============

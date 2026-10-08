@@ -27,12 +27,36 @@ const HOLD_STEPS: Array<[at: number, to: number, easing: string]> = [
     [HOLD_SPLIT_T, HOLD_SPLIT_P, "cubic-bezier(.3,.33,.5,1)"],
     [1, 1, "linear"],
 ];
-/** 由步进表烘出关键帧：clip-path 的右边距从 100% 收到 0 就是「从左往右灌满」 */
-const HOLD_KEYS: Keyframe[] = HOLD_STEPS.map(([at, to, easing]) => ({
+/** 波浪边（照搬参照实现的口径）：WAVE = 波幅 = 瓦片宽（px），**给到 0 整条退化回今天的直边**——
+ *  主体层 calc 里的 px 项全部归零，波浪层的瓦片宽也成 0（画不出任何可见像素），不需要额外分支。 */
+const WAVE = 4;
+/** 瓦片高 = 盒高 × 这个数。越大 ⇒ 盒子里露出的波浪越少，看起来波长越长 */
+const WAVE_TILE_K = 2;
+/** 整程纵向滚动的「盒高」倍数：写死的常数（原来是 HOLD_MS/1100 ⇒ 1.6363636363636365，读不出意图）。
+ *  滚动量挂在进度上，才不会出现「填充在走、波浪冻住」 */
+const WAVE_CYCLES = 1.6;
+/** 主体层的 clip-path：进度 p 从左往右灌满，右边界比进度线落后 0.75·WAVE 直到领先 1px。
+ *  前者给波浪层留出「盖过主体」的余量，后者是参照实现原本的写法——收尾时不留一条白缝。
+ *  百分比 + px 混合，所以同一个式子同时服务底色盒（实测 50px：56 扣掉 1px 描边与 2px 内缩）和 22px 的图标盒：
+ *  宽度差只落在百分比那一项。 */
+const bulkClip = (p: number) =>
+    `inset(0 calc(${((1 - p) * 100).toFixed(2)}% + ${((0.75 - p) * WAVE).toFixed(2)}px) 0 0)`;
+/** 由步进表烘出关键帧 */
+const BULK_KEYS: Keyframe[] = HOLD_STEPS.map(([at, to, easing]) => ({
     offset: at,
-    clipPath: `inset(0 ${(1 - to) * 100}% 0 0)`,
+    clipPath: bulkClip(to),
     easing,
 }));
+/** 波浪层的位置：横向让瓦片从「盒子左沿外一个波幅」走到「盒子右沿外一个波幅」，
+ *  纵向按 WAVE_CYCLES 滚过整段——两条都必须用 px，因为 mask-position 的百分比口径是
+ *  「定位区减去图本身」，和 clip-path 的百分比（相对盒子）不是一套，混用会错位。
+ *  w/h 只能按下现量（盒子内缩 2px、圆角也收档，写死的数迟早和排版对不上）。 */
+const crestPos = (p: number, w: number, h: number) =>
+    `${(-WAVE + p * (w + WAVE)).toFixed(2)}px ${(-p * WAVE_CYCLES * h).toFixed(2)}px`;
+/** 两层各自的静止态：都由上面两个函数生成 ⇒ 与关键帧的 p=0 那一帧逐字一致。
+ *  动画 cancel 后回落到行内样式，两处对不上就会看见一下跳动。 */
+const HOLD_REST_CLIP = bulkClip(0);
+const HOLD_REST_CREST = crestPos(0, 0, 0);
 /** 点击判定的上限（ms）：按下超过这个时长就是「一次按住」，松手不该再开弹窗。
  *  350 是慢速点击与「按住没按满」之间的分界——350 到 HOLD_MS 之间刻意什么都不做，
  *  那正是用户想长按又改主意的时刻，弹个窗出来比不响应更烦。 */
@@ -54,10 +78,11 @@ export function TrashBin() {
     const [open, setOpen] = useState(false);
     const [holding, setHolding] = useState(false);
     const btnRef = useRef<HTMLButtonElement>(null);
-    /** 长按填充的两层：底层的暗红底 + 上层的红石色图标，靠同一个 clip-path 同步掀开 */
+    /** 长按填充的三层：底层的暗红底 + 波峰层（同色、只把右边缘裁成波浪）+ 上层的红石色图标 */
     const boxRef = useRef<HTMLSpanElement>(null);
+    const crestRef = useRef<HTMLSpanElement>(null);
     const fillRef = useRef<HTMLSpanElement>(null);
-    /** 长按这一下的全部动画（底+图标）：松手要一起 reverse，读不到进度只能靠句柄 */
+    /** 长按这一下的全部动画（底+波峰+图标）：松手要一起 reverse，读不到进度只能靠句柄 */
     const holdAnims = useRef<Animation[]>([]);
     const timerRef = useRef(0);
     /** 这次按下的起始时刻：click 不带时长信息，只能自己记（决定它算点击还是算按住） */
@@ -88,11 +113,21 @@ export function TrashBin() {
         }
     };
 
-    /** 起一次长按填充：底层暗红与红石色图标共用同一张步进表，两层不同步就会被看出来是贴上去的 */
+    /** 起一次长按填充：底色盒、波峰层、红石色图标三层共用同一张步进表，
+     *  任何一层不同步就会被看出来是贴上去的。波峰层的位置依赖盒子实际宽高，只能按下现量。 */
     const runHold = () => {
+        const crest = crestRef.current;
+        const w = crest?.offsetWidth ?? 0;
+        const h = crest?.offsetHeight ?? 0;
+        const crestKeys: Keyframe[] = HOLD_STEPS.map(([at, to, easing]) => ({
+            offset: at,
+            maskPosition: crestPos(to, w, h),
+            easing,
+        }));
         holdAnims.current = [
-            boxRef.current?.animate(HOLD_KEYS, { duration: HOLD_MS, fill: "forwards" }),
-            fillRef.current?.animate(HOLD_KEYS, { duration: HOLD_MS, fill: "forwards" }),
+            boxRef.current?.animate(BULK_KEYS, { duration: HOLD_MS, fill: "forwards" }),
+            crest?.animate(crestKeys, { duration: HOLD_MS, fill: "forwards" }),
+            fillRef.current?.animate(BULK_KEYS, { duration: HOLD_MS, fill: "forwards" }),
         ].filter((a): a is Animation => !!a);
     };
 
@@ -167,7 +202,21 @@ export function TrashBin() {
                 <span
                     ref={boxRef}
                     className="pointer-events-none absolute inset-[2px] rounded-[16px] bg-redstone-dim"
-                    style={{ clipPath: "inset(0 100% 0 0)" }}
+                    style={{ clipPath: HOLD_REST_CLIP }}
+                />
+                {/* 波峰层：与底色盒同色、同位置的一整块，只是被一条波浪形瓦片带裁出右边缘
+                    （瓦片本体在 App.css 的 .trash-crest）。它是主体的**兄弟**，不是主体自己的
+                    第二层 mask——一层挂两张 mask 时，直边和波边会互相把对方的可见区裁掉，
+                    波浪会被啃平（参照实现同样是两层）。
+                    瓦片的宽/高是这里的 WAVE 与盒高的倍数，和 App.css 里那张 URI 的宽高比是一件事的
+                    两面 ⇒ 波幅只有这一个源头，CSS 侧不许再写数字。 */}
+                <span
+                    ref={crestRef}
+                    className="trash-crest pointer-events-none absolute inset-[2px] rounded-[16px] bg-redstone-dim"
+                    style={{
+                        maskSize: `${WAVE}px ${WAVE_TILE_K * 100}%`,
+                        maskPosition: HOLD_REST_CREST,
+                    }}
                 />
                 <Trash2 className="relative size-[22px]" />
                 {/* 填充上层：同一位置的副本，被下面那层 grid 盒子裁好范围后从左往右露出来。
@@ -177,7 +226,7 @@ export function TrashBin() {
                     <span
                         ref={fillRef}
                         className="grid size-[22px] place-items-center"
-                        style={{ clipPath: "inset(0 100% 0 0)" }}
+                        style={{ clipPath: HOLD_REST_CLIP }}
                     >
                         <Trash2 className="size-[22px] text-redstone" />
                     </span>
