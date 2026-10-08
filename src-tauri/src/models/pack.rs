@@ -34,6 +34,16 @@ pub struct PackManifest {
     pub source_path: Option<String>,
 }
 
+impl PackManifest {
+    /// 这一包的内存身份：**绝对源路径**，不是文件名。
+    /// 同名不同目录的两个包（把同一个包复制一份再改内容，是最常见的情形）在文件名身份下
+    /// 是同一个包 ⇒ 后一个包直接复用前一个的端证据与解析缓存，界面上就是「分类好的数据是上一个包的」。
+    /// 没有路径的旧存档退回文件名，至少有得比
+    pub fn identity(&self) -> String {
+        self.source_path.clone().unwrap_or_else(|| self.file_name.clone())
+    }
+}
+
 /// 保留树里的一个文件条目（弹窗展示用；`keep_files` 的取值 = 它的逻辑相对路径）
 #[derive(Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]

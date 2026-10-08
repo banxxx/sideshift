@@ -1,6 +1,7 @@
-//! SideShift 卸载壳：把 NSIS 原生卸载对话框换成与安装壳同一套界面；真正的删除仍交给原生卸载器。
-//! 壳自己下手的只有整合包缓存里的条目清单（`data_root::CACHE_OWNED`）——数据根的位置由人挑，
-//! NSIS 不知道它在哪，而整目录递归删在一个指错了的缓存目录上等于删用户的文件。
+//! SideShift 卸载壳：把 NSIS 原生卸载对话框换成与安装壳同一套界面；程序文件仍交给原生卸载器删。
+//! 壳自己下手的是 NSIS 看不见的那两处：整合包缓存按条目清单（`data_root::CACHE_OWNED`）收，
+//! 转换产物只在界面那颗勾点上、且目录确实是按规则建出来的那一个时端掉——数据根的位置由人挑，
+//! 整目录递归删在一个指错了的目录上等于删用户的文件。
 //! 命令行决定身份，三条分支：`--uninstall-child <目录>` → 这份（%TEMP% 副本）跑界面；
 //! `/S` `/P` `/UPDATE` `_?=` 任一 → 是外部安装程序/脚本在调，原样转发给原生卸载器并照抄退出码
 //! （`_?=` 必须补 `/UPDATE` 同转，否则升级途中的清理会被当成真卸载连用户设置一起端掉）；
@@ -72,6 +73,11 @@ struct Snapshot {
     arch: String,
     valid: bool,
     running: bool,
+    /// 转换产物现在躺在哪（没这个目录时 None，界面那句「留在…」就不报一条指向空气的路径）
+    output_dir: Option<String>,
+    /// 那个产物目录是不是按规则建出来的那一个。人在设置里把它指到自己已有的目录时否
+    /// ⇒ 「同时删除转换产物」那颗勾根本不该出现：删错一次收不回来
+    output_mine: bool,
 }
 
 /// 卸载完之后界面要复述的两条路径：Rust 侧**卸载之后**实测还在的那两个目录，
@@ -82,6 +88,9 @@ struct Snapshot {
 #[serde(rename_all = "camelCase")]
 struct Outcome {
     output_dir: Option<String>,
+    /// 这一趟是不是**奉命**删产物（勾了且归属判据认下）。配合 `output_dir` 决定完成页那句
+    /// 是「留在…不会被删除」还是「没能删掉，还留在…」——路径一样，话不一样
+    output_targeted: bool,
     cache_leftover: Option<String>,
 }
 
@@ -100,12 +109,14 @@ struct Progress {
 struct Scene {
     /// 规则算出来的数据根：缓存与产物都收空之后，剩这一个空壳要顺手撤掉
     root: PathBuf,
-    /// 转换产物：卸载不碰，完成页要点名它留在哪
+    /// 转换产物：勾了且 `output_mine` 认下这是按规则建出来的那一个才端掉，否则只在完成页点名它留在哪
     output: PathBuf,
     /// 整合包缓存：这次卸载要按清单收掉条目（并只在收空之后撤掉目录本身）的那个目录
     cache: PathBuf,
     /// 这个缓存目录是我们**造**的吗（判据见 `owns_cache`）。否 ⇒ 一条都不删，进度里也不计
     ours: bool,
+    /// 产物目录等于按规则算出来的那一个吗。人在设置里指过别处 ⇒ 卸载不该端掉它
+    output_mine: bool,
 }
 
 /// 只取缓存与产物两个字段的 settings.json 副本。列成两个字段而不是整个 `AppSettings`：
@@ -139,6 +150,7 @@ fn scene(install: &Path, identifier: &str) -> Option<Scene> {
     let ok_to_delete = owns_cache(&cache, &by_rule_cache, &output);
     Some(Scene {
         root,
+        output_mine: output == by_rule,
         output,
         cache,
         ours: ok_to_delete,
@@ -252,11 +264,14 @@ struct Install(PathBuf);
 
 #[tauri::command]
 fn get_snapshot(app: AppHandle, install: tauri::State<'_, Install>) -> Snapshot {
+    let sc = scene(&install.0, &app.config().identifier);
     Snapshot {
         version: app.package_info().version.to_string(),
         arch: arch_label(),
         valid: nsis_entry(&install.0).is_some(),
         running: process_running(APP_EXE),
+        output_dir: sc.as_ref().and_then(|s| existing(&s.output)),
+        output_mine: sc.map(|s| s.output_mine).unwrap_or(false),
     }
 }
 
@@ -272,29 +287,14 @@ fn check_running() -> bool {
 async fn run_uninstall(
     app: AppHandle,
     install: tauri::State<'_, Install>,
+    delete_output: bool,
 ) -> Result<Outcome, String> {
     let dir = install.0.clone();
     let sink = app.clone();
-    tauri::async_runtime::spawn_blocking(move || uninstall(&sink, &dir))
+    tauri::async_runtime::spawn_blocking(move || uninstall(&sink, &dir, delete_output))
         .await
         .map_err(|e| format!("卸载线程异常退出：{e}"))?
 }
-
-/// 打开留在机器上的目录。explorer 的退出码没有意义（成功也返回非 0），所以只 spawn 不收尸
-#[tauri::command]
-fn open_path(path: String) -> Result<(), String> {
-    std::process::Command::new(EXTERNAL_OPENER)
-        .arg(&path)
-        .spawn()
-        .map(|_| ())
-        .map_err(|e| format!("打开 {path} 失败：{e}"))
-}
-
-#[cfg(windows)]
-const EXTERNAL_OPENER: &str = "explorer";
-
-#[cfg(not(windows))]
-const EXTERNAL_OPENER: &str = "xdg-open";
 
 /// 目录在才报路径，不存在给 None：界面上不放一条指向空气的路径
 fn existing(p: &Path) -> Option<String> {
@@ -322,7 +322,8 @@ fn emit(app: &AppHandle, pct: f64, done: bool) {
     );
 }
 
-/// 真正的卸载，两段：① 静默跑官方 `uninstall.exe /S` 删程序与老布局；② 壳按清单收整合包缓存。
+/// 真正的卸载，三段：① 静默跑官方 `uninstall.exe /S` 删程序与老布局；② 壳按清单收整合包缓存；
+/// ③ 只在界面那颗勾选了、且产物目录确实是按规则建出来的那一个时，端掉转换产物。
 /// 进度按"还剩多少字节"算，成败按残骸判。
 ///
 /// 为什么不看退出码：NSIS 的 `Delete` 失败既不报错也不改退出码（那句 `RMDir "$INSTDIR"` 跑到
@@ -330,7 +331,7 @@ fn emit(app: &AppHandle, pct: f64, done: bool) {
 ///
 /// 为什么缓存这一刀在壳而不在 `hooks.nsh`：数据根是人挑的（安装壳那份预选盘，或设置里自己改的），
 /// NSIS 那边只能靠解析 JSON 才知道它在哪，解析错一次就是端掉一个不是我们的目录。
-fn uninstall(app: &AppHandle, install: &Path) -> Result<Outcome, String> {
+fn uninstall(app: &AppHandle, install: &Path, delete_output: bool) -> Result<Outcome, String> {
     let entry = nsis_entry(install).ok_or_else(|| {
         format!(
             "{} 里没有 NSIS 的卸载入口，请从原安装目录运行",
@@ -345,10 +346,24 @@ fn uninstall(app: &AppHandle, install: &Path) -> Result<Outcome, String> {
         p.extend(legacy_dirs(&identifier));
         p
     };
-    // 缓存那份字节在动手前量一次并**冻住**：阶段① 每 150ms 重走一遍 GB 级的缓存树，
-    // 既抢磁盘又把循环本身拖成"一秒一圈"，而那段时间缓存确实一点没动
+    // 新布局的 cache/output 就长在安装目录脚下：那两棵子树从 `program` 的总量里**剪掉**，
+    // 另按各自的口径计（缓存只算清单里的条目，产物只在真要删时算）。不剪的话有两处要坏：
+    // 双计让进度在①之后几乎不动，而①那 150ms 一圈的轮询会把几十 GB 的缓存树重走一遍。
+    // 判据按整张目标清单比（安装目录 + 老布局那两个），数据根落在哪个之下都不会漏
+    let skip: Vec<&Path> = [&sc.cache, &sc.output]
+        .into_iter()
+        .filter(|p| program.iter().any(|d| *p != d && p.starts_with(d)))
+        .map(|p| p.as_path())
+        .collect();
+    let base = || bytes_of(&program, &skip);
+    // 缓存与产物这两棵大树在动手前各量一次并**冻住**：阶段① 是 NSIS 在删程序文件，这两棵树
+    // 一点没动，每 150ms 重走一遍 GB 级的树既抢磁盘又把循环本身拖成"一秒一圈"。
+    // ②③ 两段才是它们自己在被删，那时才换成现量
     let cache_bytes = if sc.ours { owned_bytes(&sc.cache) } else { 0 };
-    let total = bytes_of(&program) + cache_bytes;
+    // 产物只有这一趟真要删才进分母：它可能涨到几十 GB，留着不删却按它算进度就是假条
+    let take_output = delete_output && sc.output_mine;
+    let output_bytes = if take_output { entry_bytes(&sc.output) } else { 0 };
+    let total = base() + cache_bytes + output_bytes;
     let started = Instant::now();
     let mut child = std::process::Command::new(&entry)
         .arg("/S")
@@ -361,7 +376,11 @@ fn uninstall(app: &AppHandle, install: &Path) -> Result<Outcome, String> {
         if !install.join(main_exe()).is_file() && nsis_entry(install).is_none() {
             break;
         }
-        emit(app, pct_of(total, bytes_of(&program) + cache_bytes, started), false);
+        emit(
+            app,
+            pct_of(total, base() + cache_bytes + output_bytes, started),
+            false,
+        );
         // 给 20 秒收尸窗口：不带 `_?=` 时 NSIS 会把自己复制到 %TEMP% 再跑，外层那份先退，
         // 此时内层还在删
         if child.try_wait().map_err(|e| format!("等待卸载程序失败：{e}"))?.is_some()
@@ -381,7 +400,11 @@ fn uninstall(app: &AppHandle, install: &Path) -> Result<Outcome, String> {
             clear_cache(&sc.cache);
             emit(
                 app,
-                pct_of(total, bytes_of(&program) + owned_bytes(&sc.cache), started),
+                pct_of(
+                    total,
+                    base() + owned_bytes(&sc.cache) + output_bytes,
+                    started,
+                ),
                 false,
             );
             if !owned_left(&sc.cache) {
@@ -390,13 +413,34 @@ fn uninstall(app: &AppHandle, install: &Path) -> Result<Outcome, String> {
             std::thread::sleep(Duration::from_millis(300));
         }
     }
-    // 数据根那一层壳目录：缓存收空之后通常只剩它一个空壳。这里用**非递归**的 remove_dir，
-    // "它已经空了"就是唯一判据——里面还留着没删掉的缓存条目或用户的产物时它必然删不动，
+    // ②收尾量一次就冻住：这一段之后缓存不再动，而③每一轮都要算总剩余
+    let cache_left = if sc.ours { owned_bytes(&sc.cache) } else { 0 };
+
+    // ③ 转换产物：这一刀只认界面那颗勾，且 `sc.output_mine` 已经证明这个目录是按规则建出来的
+    //    那一个（人在设置里指过别处时勾压根不出现）。删不动同样是重试三轮，判据用"目录没了"
+    if take_output {
+        for _ in 0..CACHE_TRIES {
+            let _ = std::fs::remove_dir_all(&sc.output);
+            emit(
+                app,
+                pct_of(total, base() + cache_left + entry_bytes(&sc.output), started),
+                false,
+            );
+            if !sc.output.is_dir() {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(300));
+        }
+    }
+
+    // 数据根那一层壳目录：缓存与产物都收空之后通常只剩它一个空壳。这里用**非递归**的 remove_dir，
+    // "它已经空了"就是唯一判据——里面还留着没删掉的东西时它必然删不动，
     // 于是这一行不需要任何额外的检查
     let _ = std::fs::remove_dir(&sc.root);
     emit(app, 100.0, true);
     Ok(Outcome {
         output_dir: existing(&sc.output),
+        output_targeted: take_output,
         cache_leftover: existing(&sc.cache),
     })
 }
@@ -411,9 +455,35 @@ fn pct_of(total: u64, rest: u64, started: Instant) -> f64 {
     }
 }
 
-/// 几个目录的字节总和
-fn bytes_of(dirs: &[PathBuf]) -> u64 {
-    dirs.iter().map(|p| dir_bytes(p)).sum()
+/// 几个目录的字节总和。`skip` 点到的子树整支不往下走——那些另有口径（缓存只算清单里的条目），
+/// 而且新布局里它们就在这个目录脚下，混在一起量等于双计
+fn bytes_of(dirs: &[PathBuf], skip: &[&Path]) -> u64 {
+    dirs.iter().map(|p| dir_bytes_skipping(p, skip)).sum()
+}
+
+/// 目录内文件字节总和。卸载过程中它单调下降，所以同时是进度分子和成败判据
+fn dir_bytes(dir: &Path) -> u64 {
+    dir_bytes_skipping(dir, &[])
+}
+
+fn dir_bytes_skipping(dir: &Path, skip: &[&Path]) -> u64 {
+    let mut stack = vec![dir.to_path_buf()];
+    let mut total = 0u64;
+    while let Some(d) = stack.pop() {
+        if skip.iter().any(|s| d == *s) {
+            continue;
+        }
+        let Ok(entries) = std::fs::read_dir(&d) else { continue };
+        for e in entries.flatten() {
+            let p = e.path();
+            if p.is_dir() {
+                stack.push(p);
+            } else if let Ok(m) = e.metadata() {
+                total += m.len();
+            }
+        }
+    }
+    total
 }
 
 /// 失败文案：先说"为什么"，再点名还剩什么。没东西可点时也要留一句话，别给一张空卡
@@ -429,24 +499,6 @@ fn residue(targets: &[PathBuf]) -> String {
     } else {
         format!("{base}。还留着：{}", left.join("、"))
     }
-}
-
-/// 目录内文件字节总和。卸载过程中它单调下降，所以同时是进度分子和成败判据
-fn dir_bytes(dir: &Path) -> u64 {
-    let mut stack = vec![dir.to_path_buf()];
-    let mut total = 0u64;
-    while let Some(d) = stack.pop() {
-        let Ok(entries) = std::fs::read_dir(&d) else { continue };
-        for e in entries.flatten() {
-            let p = e.path();
-            if p.is_dir() {
-                stack.push(p);
-            } else if let Ok(m) = e.metadata() {
-                total += m.len();
-            }
-        }
-    }
-    total
 }
 
 // ---- 启动期那三条身份 ----
@@ -640,8 +692,7 @@ fn run_ui(install: PathBuf) {
         .invoke_handler(tauri::generate_handler![
             get_snapshot,
             check_running,
-            run_uninstall,
-            open_path
+            run_uninstall
         ])
         .setup(move |app| {
             // 窗口选项的单源仍是 tauri.conf.json（那里 `"create": false`）：绝对路径只能在建窗时
@@ -968,20 +1019,29 @@ mod tests {
         std::fs::remove_dir_all(&install).ok();
     }
 
-    /// 配置目录那两档：应用写过设置的地方才算数，安装目录那份优先（它才是安装版的主档）
+    /// 配置目录那两档：应用写过设置的地方才算数，安装目录那份优先（它才是安装版的主档）。
+    /// identifier 用带 pid 的假名：真名会在跑测试的机器上命中应用自己的那份 settings.json，
+    /// 第一条断言就变成"这台机器装过并且启动过应用"的读数，而不是判据的读数
     #[test]
     fn config_dir_prefers_the_one_holding_settings() {
         let install = scratch("config-dir");
+        let id = ghost_id();
         let appdata = install.join(data_root::APP_DATA_DIR_NAME);
         assert_eq!(
-            config_dir_of(&install, "com.poso.sideshift"),
+            config_dir_of(&install, &id),
             appdata,
             "哪份设置都没有时按安装版那一档走（installer.json 在那儿）"
         );
         std::fs::create_dir_all(&appdata).unwrap();
         std::fs::write(appdata.join(data_root::SETTINGS_FILE), "{}").unwrap();
-        assert_eq!(config_dir_of(&install, "com.poso.sideshift"), appdata);
+        assert_eq!(config_dir_of(&install, &id), appdata);
         std::fs::remove_dir_all(&install).ok();
+    }
+
+    /// 本机不可能存在的 identifier：老布局那两档（%APPDATA% / %LOCALAPPDATA% 下的 identifier 目录）
+    /// 在装了应用的开发机上真有 settings.json，测试不能读它
+    fn ghost_id() -> String {
+        format!("com.poso.sideshift-test-{}", std::process::id())
     }
 
     #[test]
@@ -992,6 +1052,31 @@ mod tests {
         // 带首尾空格的绝对路径：trim 之后仍然要采信（settings.json 里存过什么格式不由壳决定）
         let padded = format!("  {}  ", fb.display());
         assert_eq!(absolute_or(padded, &fb), fb);
+    }
+
+    /// 新布局的 cache/output 就长在安装目录脚下：进度那份总量必须把它们剪掉，否则同一批字节
+    /// 算两遍——①之后条几乎不动、②③ 一跳到底，读起来就是"进度条在说谎"
+    #[test]
+    fn bytes_of_skips_the_dirs_counted_on_their_own() {
+        let install = scratch("skip-nested");
+        std::fs::write(install.join(main_exe()), vec![b'x'; 100]).unwrap();
+        let cache = install.join(data_root::CACHE_DIR_NAME);
+        std::fs::create_dir_all(&cache).unwrap();
+        std::fs::write(cache.join("blob"), vec![b'x'; 70]).unwrap();
+        let output = install.join(data_root::OUTPUT_DIR_NAME);
+        std::fs::create_dir_all(&output).unwrap();
+
+        let dirs = vec![install.clone()];
+        assert_eq!(bytes_of(&dirs, &[]), 170, "不剪就是安装目录整棵树的字节");
+        assert_eq!(
+            bytes_of(&dirs, &[cache.as_path(), output.as_path()]),
+            100,
+            "剪掉那两支之后只剩程序文件那份"
+        );
+        // 数据根在安装目录之外（老安装、或设置里指过别处）：剪不到东西，一份都不许多算
+        assert_eq!(bytes_of(&dirs, &[Path::new("Z:\\不在这里")]), 170);
+
+        std::fs::remove_dir_all(&install).ok();
     }
 
     /// 进度是卸载中唯一的反馈：分子不能大于分母，也不能倒挂

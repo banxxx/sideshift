@@ -5,9 +5,9 @@ use super::*;
 /* ---------------- 转换方案 ---------------- */
 
 
-/// 联网反查是否还在为当前包跑：与 env_evidence 同一套「只认 last_file」的口径
+/// 联网反查是否还在为当前包跑：与 env_evidence 同一套「只认 last_pack」的口径
 fn online_running_of(inner: &task_engine::Inner) -> bool {
-    inner.env_online_file.is_some() && inner.env_online_file == inner.last_file
+    inner.env_online_pack.is_some() && inner.env_online_pack == inner.last_pack
 }
 
 /// 把「只有编号」的那些 CF 行补成带名字/大小/sha1 的行，并就地换掉解析缓存里那一份。
@@ -28,7 +28,7 @@ fn online_running_of(inner: &task_engine::Inner) -> bool {
 ///
 /// `reprobe` = 用户点「重新自动分类」：把索引里探过的取链许可作废再问一遍（`ensure` 那侧有理由）
 async fn cf_enrich(state: &S<'_>, reprobe: bool) -> usize {
-    let (parsed, file_name, cache_dir) = {
+    let (parsed, pack_id, cache_dir) = {
         let inner = lock(&state);
         let Some(p) = last_parsed_of(&inner) else {
             return 0;
@@ -38,7 +38,7 @@ async fn cf_enrich(state: &S<'_>, reprobe: bool) -> usize {
         }
         (
             p,
-            inner.last_file.clone().unwrap_or_default(),
+            inner.last_pack.clone().unwrap_or_default(),
             PathBuf::from(&inner.settings.cache_dir),
         )
     };
@@ -53,19 +53,19 @@ async fn cf_enrich(state: &S<'_>, reprobe: bool) -> usize {
     {
         let mut inner = lock(&state);
         // 补取期间用户可能换了包：不是同一个包就不落这一份（换了包就该按新包重算）
-        if inner.last_file.as_deref() == Some(file_name.as_str()) {
+        if inner.last_pack.as_deref() == Some(pack_id.as_str()) {
             // 证据表按行归属，名字一变旧结论就对不上号 ⇒ 一并作废，让下一轮按新行重取。
             // 只改写许可态的那一轮不作废：端判定与「这枚模组拿不拿得到字节」无关
             if out.renamed
-                && inner.env_evidence_file.as_deref() == Some(file_name.as_str())
+                && inner.env_evidence_pack.as_deref() == Some(pack_id.as_str())
             {
                 inner.env_evidence.clear();
-                inner.env_evidence_file = None;
+                inner.env_evidence_pack = None;
                 inner.env_code.clear();
             }
             inner
-                .parsed_by_name
-                .insert(file_name.clone(), Arc::new(out.parsed));
+                .parsed_by_pack
+                .insert(pack_id.clone(), Arc::new(out.parsed));
         }
     }
     rows
@@ -92,7 +92,7 @@ pub async fn classify_pack(
     // 拿着一份旧的名字去建方案（第一屏一排编号），而且 reuse 那条短路会把补取整个跳过
     let cf_rows = cf_enrich(&state, force).await;
     // 快照 inputs：guard 必须在这个块里结束，否则 MutexGuard 跨 await 让命令 future 不 Send
-    let (parsed, file_name, strip, env_source, mcmod, cache_dir, concurrency, cached) = {
+    let (parsed, pack_id, strip, env_source, mcmod, cache_dir, concurrency, cached) = {
         let inner = lock(&state);
         let empty = env::EvidenceMap::new();
         match last_parsed_of(&inner) {
@@ -104,8 +104,8 @@ pub async fn classify_pack(
                 // force = 用户点「重新自动分类」，那条路必须真重探（也是联网失败后的重试出口）。
                 let reuse = !force
                     && !inner.env_evidence.is_empty()
-                    && inner.env_evidence_file.is_some()
-                    && inner.env_evidence_file == inner.last_file;
+                    && inner.env_evidence_pack.is_some()
+                    && inner.env_evidence_pack == inner.last_pack;
                 let cached = reuse.then(|| {
                     (
                         detector::build_plan(
@@ -122,7 +122,7 @@ pub async fn classify_pack(
                 });
                 (
                     p,
-                    inner.last_file.clone().unwrap_or_default(),
+                    inner.last_pack.clone().unwrap_or_default(),
                     inner.settings.strip_client_only,
                     inner.settings.env_lookup_source,
                     inner.settings.env_lookup_mcmod,
@@ -258,17 +258,17 @@ pub async fn classify_pack(
         inner.env_code = code;
         inner.env_meta = meta;
         inner.env_doubt = doubt;
-        inner.env_evidence_file = Some(file_name.clone());
+        inner.env_evidence_pack = Some(pack_id.clone());
         // 本轮确实还要联网：立个标记，让之后的缓存命中路径知道「结论还没最终化」。
         // 已有轮在跑时不重立：标记归那一轮清，我们这一趟并不起新轮，清了会把它的收尾闸门拆掉
         if !offline_final && !round_running {
-            inner.env_online_file = Some(file_name.clone());
+            inner.env_online_pack = Some(pack_id.clone());
         }
     }
     // 离线那次推送：还有在线层要跑就说明本轮没结束（done=false，前端继续转圈）
     emit_classified(
         &app,
-        &file_name,
+        &pack_id,
         plan.clone(),
         offline_final,
         offline_final,
@@ -294,7 +294,7 @@ pub async fn classify_pack(
                         &g.env_doubt,
                     )
                 });
-                (p, g.env_online_file.as_deref() == Some(file_name.as_str()))
+                (p, g.env_online_pack.as_deref() == Some(pack_id.as_str()))
             };
             return Ok(PlanClassification {
                 plan: fresh.unwrap_or(plan),
@@ -373,12 +373,12 @@ pub async fn classify_pack(
                 // 本轮收尾：只摘自己的标记。必须在下面换包那道闸门**之前**清——换包时这一趟会
                 // 直接 return，写在闸门后面就永远清不掉；而标记留着，下次回到这个包会被
                 // `round_running` 当成「还有一轮在跑」，于是那一包再也不会起联网轮（静默零请求）。
-                // 换包那一趟已把标记写成新包的名字，所以这条 `== file_name` 的判断仍不会替它清。
-                if g.env_online_file.as_deref() == Some(file_name.as_str()) {
-                    g.env_online_file = None;
+                // 换包那一趟已把标记写成新包的名字，所以这条 `== pack_id` 的判断仍不会替它清。
+                if g.env_online_pack.as_deref() == Some(pack_id.as_str()) {
+                    g.env_online_pack = None;
                 }
                 // 反查期间用户可能换了包：不是同一个包就不落库、不推事件
-                if g.env_evidence_file.as_deref() != Some(file_name.as_str()) {
+                if g.env_evidence_pack.as_deref() != Some(pack_id.as_str()) {
                     return;
                 }
                 // 只并回本轮查到的那些行，不整表覆盖：反查期间用户可能又点了一次「重新自动分类」，
@@ -428,7 +428,7 @@ pub async fn classify_pack(
             let plan = {
                 let mut g = lock(&state);
                 // 补扫期间换了包：不是同一个包就不落库、不推事件
-                if g.env_evidence_file.as_deref() != Some(file_name.as_str()) {
+                if g.env_evidence_pack.as_deref() != Some(pack_id.as_str()) {
                     return;
                 }
                 g.env_evidence = ev_w;
@@ -444,7 +444,7 @@ pub async fn classify_pack(
                     )
                 })
             };
-            let file = file_name.clone();
+            let file = pack_id.clone();
             if let Some(plan) = plan {
                 emit_classified(&app, &file, plan, true, complete);
             }
@@ -524,7 +524,7 @@ async fn ensure_strip_facts(
 /// 推自动分类结果。分类明细不写日志行——日志量级就是前端性能预算（十五轮定案）分类明细不写日志行——日志量级就是前端性能预算（十五轮定案）
 fn emit_classified(
     app: &AppHandle,
-    file_name: &str,
+    pack_id: &str,
     plan: Vec<PlanMod>,
     done: bool,
     complete: bool,
@@ -532,7 +532,7 @@ fn emit_classified(
     let _ = app.emit(
         task_engine::EVENT_CLASSIFIED,
         PlanClassified {
-            file_name: file_name.to_string(),
+            pack_id: pack_id.to_string(),
             plan,
             done,
             complete,

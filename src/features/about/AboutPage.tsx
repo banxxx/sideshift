@@ -36,7 +36,7 @@ function privacyRows(t: TranslateFn): Array<[LucideIcon, string, string]> {
         [Database, t("about.data-source", "数据来源"), t("about.data-source-value", "Modrinth API、CurseForge API，以及在设置中指定的镜像服务")],
         [Users, t("about.ack-source", "鸣谢名单"), t("about.ack-source-value", "名单与自带头像取自项目自管的静态地址；登记了 Minecraft 玩家名的贡献者，其皮肤由本机向 Mojang 公开档案接口查询、贴图直连其 CDN 取回。这些请求不携带账号、凭据或本地文件信息；名单快照与皮肤副本留存于本机配置目录，供离线显示")],
         [ShieldOff, t("about.telemetry", "遥测统计"), t("about.telemetry-value", "未集成遥测或统计上报组件，亦不写入本地统计数据文件")],
-        [KeyRound, t("about.credentials", "凭据存储"), t("about.credentials-value", "CurseForge API Key 仅保存于本机配置，不进入日志、任务存档与导出产物")],
+        [KeyRound, t("about.credentials", "凭据存储"), t("about.credentials-value", "凭证数据仅保存于本机配置，不进入日志、任务存档与导出产物")],
     ];
 }
 

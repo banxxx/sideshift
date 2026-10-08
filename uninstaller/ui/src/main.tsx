@@ -4,10 +4,19 @@ import "./uninstaller.css";
 // 只取这套主题存储态：没设置过就是 system（跟随深浅偏好），壳里没有开关去覆盖它。
 // 不引这条链的话 html 上的 .dark 类再没人维护，系统深色下会渲染成浅色面板
 import "@/lib/theme";
+import { initI18n, t } from "@/lib/i18n";
 import { UninstallerApp } from "./UninstallerApp";
 
-ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
-    <React.StrictMode>
-        <UninstallerApp />
-    </React.StrictMode>
-);
+/**
+ * 语言与主题同一个口径：壳的 WebView 档案是独立一份（卸载途中更不能碰应用那套目录），
+ * localStorage 那面镜像在这儿恒空 ⇒ `initI18n()` 直接落回系统语言。挂树前 await 它，
+ * 第一帧就是最终语言，不会先闪一次中文再换过去（口径同主应用 main.tsx）。
+ */
+void initI18n().then(() => {
+    document.title = t("wizard.win-title-uninstall", "SideShift 卸载");
+    ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
+        <React.StrictMode>
+            <UninstallerApp />
+        </React.StrictMode>
+    );
+});

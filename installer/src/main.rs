@@ -1,5 +1,6 @@
 //! SideShift 安装壳：界面与偏好归这里，**真正的落盘交给官方 NSIS**（静默跑内嵌的 `Setup.exe /S /D=...`）。
-//! 壳只做两件事：① 问清楚数据要放哪；② 装完后把答案写进应用配置目录的 `installer.json`。
+//! 壳只做两件事：① 问清楚装到哪个目录（数据跟着安装目录走，不再单独问"数据放哪"）；
+//! ② 装完后把这套布局写进应用配置目录的 `installer.json`。
 //! 数据根的最终裁决权在主应用（`core::data_root::suggested_root`）：这里写的只是**偏好**，路径失效时应用自行回落预选。
 
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
@@ -11,7 +12,7 @@
 #[cfg(all(dev, not(debug_assertions)))]
 compile_error!("安装壳请用 `pnpm installer` 出包（裸 cargo build --release 会带上 cfg(dev)，产物打不开页面）");
 
-// 候选盘探测与数据根布局跟主应用共用同一份源码（同一个文件的字节，不是抄一份）：
+// 数据根布局跟主应用共用同一份源码（同一个文件的字节，不是抄一份）：
 // 「安装时显示的目录」和「应用实际用的目录」必须来自同一个规则
 //
 // 壳只走"安装器指定"这一条链：文件里那半套（便携判定、suggested_root 的回落顺序）在这里没人调。
@@ -82,44 +83,30 @@ struct Progress {
     done: bool,
 }
 
-/// 候选盘档位：界面只用得上标签、剩余空间和数据根。产物/缓存目录由 `layout_in` 从数据根
-/// 推出来，不在这份契约里复述。字节数交给前端格式化，避免两边四舍五入打架
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-struct Offer {
-    label: String,
-    free_bytes: u64,
-    data_root: String,
-}
-
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct Plan {
     version: String,
-    /// 架构标记：壳是单架构产物，摆在流程条上才知道手里这个 exe 对不对
+    /// 架构标记：壳是单架构产物，摆在标题栏才知道手里这个 exe 对不对
     arch: String,
-    /// 够用的非系统固定盘，按剩余空间降序；第一个就是预选档
-    drives: Vec<Offer>,
-    /// 没有候选盘时的回落数据根（用户目录下）
-    fallback_data_root: String,
-    /// 程序安装位置：与 NSIS 模板 currentUser 的默认值同源（`$LOCALAPPDATA\${PRODUCTNAME}`）
+    /// 程序安装位置：与 NSIS 模板 currentUser 的默认值同源（`$LOCALAPPDATA\${PRODUCTNAME}`）。
+    /// 数据目录不再单列——它跟着安装目录走（见 `install` 里那句 root）
     install_dir: String,
 }
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct Request {
-    data_root: String,
     install_dir: String,
 }
 
-/// 装完之后界面要复述的两条路径：程序 exe 与实际生效的数据根。产物与缓存目录由同一个
-/// `layout_in` 从数据根推出来，界面不逐条列——一屏里把"数据在哪"说三遍读起来像没结论
+/// 装完之后界面要复述的两件事：程序 exe 与它实际落在的目录。产物与缓存由同一个
+/// `layout_in` 从安装目录推出来，界面不逐条列——一屏里把"数据在哪"说三遍读起来像没结论
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct Outcome {
     installed_exe: String,
-    data_root: String,
+    install_dir: String,
     /// 卸载入口没能换成壳时的那句话（None = 已经指向壳）。装是装成了，所以它不能当失败处理，
     /// 但"控制面板里点出来的还是那个原生卸载对话框"这件事必须让人知道
     uninstall_note: Option<String>,
@@ -132,44 +119,11 @@ struct Cancel(Arc<AtomicBool>);
 
 #[tauri::command]
 fn get_plan(app: AppHandle) -> Plan {
-    let home = std::env::var("USERPROFILE")
-        .or_else(|_| std::env::var("HOME"))
-        .map(PathBuf::from)
-        .unwrap_or_else(|_| PathBuf::from("."));
-    let drives = data_root::offers()
-        .into_iter()
-        .map(|o| Offer {
-            label: o.label,
-            free_bytes: o.free_bytes,
-            data_root: display(&o.data_root),
-        })
-        .collect();
     Plan {
         version: app.package_info().version.to_string(),
         arch: arch_label(),
-        drives,
-        fallback_data_root: display(&home.join(data_root::DIR_NAME)),
         install_dir: display(&default_install_dir()),
     }
-}
-
-/// 用户挑的目录 → 实际生效的数据根。用户自己挑时也走这里：
-/// 「装完会不会变成另一套路径」这个风险只存在于两边各拼一次字符串的时候
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-struct Layout {
-    data_root: String,
-}
-
-#[tauri::command]
-fn resolve_layout(root: String) -> Result<Layout, String> {
-    let trimmed = trim_arg(&root);
-    if trimmed.is_empty() {
-        return Err("数据目录不能为空".into());
-    }
-    Ok(Layout {
-        data_root: display(&PathBuf::from(trimmed)),
-    })
 }
 
 /// 默认安装位置。刻意与 NSIS 模板 currentUser 分支同值：
@@ -181,7 +135,7 @@ fn default_install_dir() -> PathBuf {
         .join(data_root::DIR_NAME)
 }
 
-/// Rust 的架构名 → 安装界面那三个字母（`x86_64` 摆在流程条里读起来像没翻译过）
+/// Rust 的架构名 → 安装界面那三个字母（`x86_64` 摆在标题栏里读起来像没翻译过）
 fn arch_label() -> String {
     match std::env::consts::ARCH {
         "x86_64" => "x64",
@@ -236,7 +190,12 @@ fn pct(app: &AppHandle, stage: Stage, value: f64) {
 fn install(app: &AppHandle, cancel: &AtomicBool, req: Request) -> Result<Outcome, String> {
     let started = Instant::now();
     let install_dir = PathBuf::from(trim_arg(&req.install_dir));
-    let root = PathBuf::from(trim_arg(&req.data_root));
+    if install_dir.as_os_str().is_empty() {
+        return Err("安装目录不能为空".into());
+    }
+    // 数据根就是安装目录：`layout_in` 从它推出 `output`/`cache`，`appdata` 由下面的 config 拼，
+    // 三个平级目录都长在程序脚下（便携版同一套形状）
+    let root = install_dir.clone();
 
     // ---- 阶段 1：内嵌的安装包落到临时目录 ----
     pct(app, Stage::Prepare, 2.0);
@@ -334,7 +293,7 @@ fn install(app: &AppHandle, cancel: &AtomicBool, req: Request) -> Result<Outcome
 
     Ok(Outcome {
         installed_exe: display(&exe),
-        data_root: display(&root),
+        install_dir: display(&install_dir),
         uninstall_note: note,
     })
 }
@@ -399,7 +358,6 @@ fn main() {
         .manage(Cancel::default())
         .invoke_handler(tauri::generate_handler![
             get_plan,
-            resolve_layout,
             run_install,
             cancel_install,
             launch_app

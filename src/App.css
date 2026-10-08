@@ -147,6 +147,8 @@
   --shadow-fab: 0 10px 26px rgba(0, 0, 0, 0.18);
   /* 主按钮与轨道节点：accent 自色发光，不是中性影 */
   --shadow-btn: 0 3px 10px rgba(79, 93, 229, 0.17);
+  /* 危险档主行动（卸载壳那一颗）：同一档几何，只是换 redstone 自色 */
+  --shadow-btn-danger: 0 3px 10px rgba(217, 48, 54, 0.17);
   --shadow-node: 0 3px 8px rgba(79, 93, 229, 0.25);
   /* 进度条芯色 + 两截发光（发光压在芯色同一条色相上，跨色相会读成光晕 ⇒ 两色各一份） */
   --bar-sand: #ecd4ac;
@@ -295,6 +297,7 @@
   --shadow-pop: 0 8px 24px rgba(0, 0, 0, 0.12);
   --shadow-fab: 0 10px 26px rgba(0, 0, 0, 0.18);
   --shadow-btn: 0 3px 10px rgba(139, 149, 255, 0.24);
+  --shadow-btn-danger: 0 3px 10px rgba(255, 99, 105, 0.3);
   --shadow-node: 0 3px 8px rgba(139, 149, 255, 0.3);
   --shadow-bar-sand: 0 0 8px rgba(227, 169, 100, 0.16), 0 0 15px rgba(227, 169, 100, 0.07);
   --shadow-bar-emerald: 0 0 8px rgba(30, 186, 125, 0.16), 0 0 15px rgba(30, 186, 125, 0.07);

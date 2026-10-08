@@ -265,14 +265,18 @@ export function TearTicket({
         <div ref={rootRef} data-tear="" className={cn("relative select-none", lifted && "invisible")}>
             {/* 主体：在流里（卡高由它撑），左半的撕口归它的裁路径 */}
             <div ref={bodyRef} className="relative">
-                <div style={{ filter: "var(--tear-shadow)" }}>
+                {/*
+                  裁的只有「面」：`clip-path` 连整棵子树一起裁，卡里的气泡长出卡外那几像素会被切掉
+                  （实测 5.5px）。内容另起一层不裁 ⇒ 撕的时候主体只往左回缩（`bodyCutImpulse` 那一弹，
+                  量级 ~10px），而卡的内边距是 20px，露不出剪影。
+                */}
+                <div className="absolute inset-0" style={{ filter: "var(--tear-shadow)" }}>
                     <div
-                        className={cn(frost, "rounded-[12px]")}
+                        className={cn(frost, "h-full rounded-[12px]")}
                         style={{ clipPath: geo ? `path('${geo.body}')` : undefined }}
-                    >
-                        {body}
-                    </div>
+                    />
                 </div>
+                <div className="relative">{body}</div>
             </div>
 
             {/* 丝：画在主体与票根之间，坐标就是卡的 px 坐标（不给 viewBox，给了会跟着收高一起缩） */}

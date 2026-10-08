@@ -10,7 +10,7 @@
   "about.collapse-license-deps": "收起許可與依賴",
   "about.collapse-privacy": "收起資料與隱私",
   "about.credentials": "憑據存儲",
-  "about.credentials-value": "CurseForge API Key 僅保存於本機配置，不進入日誌、任務存檔與匯出產物",
+  "about.credentials-value": "憑據資料僅保存於本機配置，不進入日誌、任務存檔與匯出產物",
   "about.data-source": "資料來源",
   "about.data-source-value": "Modrinth API、CurseForge API，以及在設定中指定的鏡像服務",
   "about.disclaimer": "SideShift 是獨立的第三方工具，與 Mojang Studios 或 Microsoft 無任何隸屬或授權關係。Minecraft 及其相關名稱、素材為相應權利人的商標或版權作品。本專案以 Apache-2.0 協議發布，不含任何官方內容；用於轉換你所持有的整合包，責任自負。",

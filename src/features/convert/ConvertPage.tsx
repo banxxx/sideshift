@@ -28,7 +28,7 @@ import type {
     PackManifest,
     PlanMod,
 } from "@/lib/types";
-import { SERVER_PORT_RANGE, inRange } from "@/lib/types";
+import { SERVER_PORT_RANGE, inRange, packIdOf } from "@/lib/types";
 import {
     Btn,
     CheckBox,
@@ -253,15 +253,17 @@ export function ConvertPage() {
         [saveDraft]
     );
 
-    // 在线反查的补全结论：后端换包后会停推，这里再按 fileName 拦一道，防迟到事件串台
-    const packName = manifest?.fileName;
+    // 在线反查的补全结论：后端换包后会停推，这里再按包身份拦一道，防迟到事件串台。
+    // 比的是源路径而不是文件名——把同一个包复制到另一目录（或改过内容再选一次）时文件名相同，
+    // 按名字拦挡不住上一包那一轮迟到的收尾，界面上就是「分类好了，数据是上一个包的」
+    const packId = manifest ? packIdOf(manifest) : undefined;
     useEffect(() => {
         let alive = true;
         let off: (() => void) | null = null;
         void api
             .onClassified((e) => {
                 if (!alive) return;
-                if (e.fileName && packName && e.fileName !== packName) return;
+                if (e.packId && packId && e.packId !== packId) return;
                 setPlan(e.plan);
                 // 离线那次推送只是先给结论，本轮结束（done）才停「分类中」
                 if (!e.done) return;
@@ -276,7 +278,7 @@ export function ConvertPage() {
             alive = false;
             off?.();
         };
-    }, [packName]);
+    }, [packId]);
 
     // MC 版本变更 → 重新拉取该版本可用的加载器版本，并让**选中值**跟着这一档走。
     // 2026-09-28 实测两件事：Fabric 的 `versions/loader/{mc}` 对 1.13 以上各档给的是同一份全量表

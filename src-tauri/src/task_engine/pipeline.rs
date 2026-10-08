@@ -96,7 +96,7 @@ async fn run_pipeline(app: AppHandle, state: Arc<AppState>, id: String) {
         t.progress = 8;
     }, true);
     let parsed: Arc<ParsedPack> = {
-        let cached = state.inner.lock().unwrap().parsed_by_name.get(&pack.file_name).cloned();
+        let cached = state.inner.lock().unwrap().parsed_by_pack.get(&pack.identity()).cloned();
         match cached {
             Some(p) => p,
             None => {

@@ -58,8 +58,9 @@ export interface PlanMod {
 
 /** 自动分类结果（Rust emit("plan://classified", payload)）：在线层跑完后的增量刷新 */
 export interface PlanClassified {
-    /** 归属包名：前端按当前 manifest.fileName 校验，切包后的迟到事件一律丢弃 */
-    fileName: string;
+    /** 归属包身份（绝对源路径）：前端按当前包校验，换包后的迟到事件一律丢弃。
+     *  口径与 Rust `PackManifest::identity()` 一致 = `sourcePath ?? fileName` */
+    packId: string;
     /** 带全部证据层的完整方案（前端只套用用户未手动改过的行） */
     plan: PlanMod[];
     /** false = 本轮还没跑完（离线那次推送），true 才是最后一次事件 */

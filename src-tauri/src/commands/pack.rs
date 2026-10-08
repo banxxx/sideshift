@@ -2,35 +2,50 @@ use super::*;
 
 /* ---------------- 解析 / 选项 ---------------- */
 
+/// 取证结论作废。每次**从磁盘重解一个包**都要走这里，连「身份没变的同一枚文件」也不例外：
+/// 原地重导出的包路径一模一样，按身份比对认不出它换过血，复用旧取证就是「分类数据是上一个包的」。
+/// 代价只有离线 jar 扫描重跑（磁盘端索引照常命中、联网层不重发），切页往返不重解析所以照常复用。
+/// `env_online_pack` 不动：在跑的联网轮收尾时自己清（`commands::plan` 锁一），我们替它清会拆掉别人的标记
+fn invalidate_env(inner: &mut task_engine::Inner) {
+    inner.env_evidence.clear();
+    inner.env_code.clear();
+    inner.env_meta.clear();
+    inner.env_doubt.clear();
+    inner.env_evidence_pack = None;
+}
+
 #[tauri::command]
 pub fn parse_pack(state: S<'_>, path: String) -> PackManifest {
     let parsed = Arc::new(parser::parse(&PathBuf::from(&path)));
     let manifest = parsed.manifest.clone();
     {
         let mut inner = lock(&state);
-        inner
-            .parsed_by_name
-            .insert(manifest.file_name.clone(), parsed);
-        inner.last_file = Some(manifest.file_name.clone());
+        let id = manifest.identity();
+        inner.parsed_by_pack.insert(id.clone(), parsed);
+        inner.last_pack = Some(id);
+        invalidate_env(&mut inner);
     }
     manifest
 }
 
 /// 把「最近一次解析的包」指向指定包，供任务回看/改方案时用。
 ///
-/// `get_plan` / `classify_pack` / `list_pack_dirs` 全都只认内存里的 `last_file`，而解析缓存
+/// `get_plan` / `classify_pack` / `list_pack_dirs` 全都只认内存里的 `last_pack`，而解析缓存
 /// **不落盘**（tasks.json 只存任务/方案/报告）。从任务列表进转换方案页时，那条任务可能早已
 /// 不是本轮解析的包：重启后缓存是空的（页面全空），中途选过别的包则是错的包（张冠李戴）。
 /// 命中缓存只挪指针；未命中按 `sourcePath` 重解析，口径与流水线阶段 1 一致。
+/// 缓存的 key 是**包身份**（绝对源路径，见 `PackManifest::identity`）而不是文件名：
+/// 同名不同目录的两个包在文件名口径下是同一个包，前者的解析结果与端证据会直接当成后者的用。
 ///
 /// 返回 false = 缓存没有且源文件已不在（被移动/删除，或旧版本存档没记路径）。
 /// 调用方据此降级：方案本身有任务快照可读，只有「包内目录树」这类要重解析的明细拿不到。
 #[tauri::command]
 pub fn ensure_parsed(state: S<'_>, manifest: PackManifest) -> bool {
+    let id = manifest.identity();
     {
         let mut inner = lock(&state);
-        if inner.parsed_by_name.contains_key(&manifest.file_name) {
-            inner.last_file = Some(manifest.file_name.clone());
+        if inner.parsed_by_pack.contains_key(&id) {
+            inner.last_pack = Some(id);
             return true;
         }
     }
@@ -45,10 +60,9 @@ pub fn ensure_parsed(state: S<'_>, manifest: PackManifest) -> bool {
     // 解析在锁外：几百个 jar 的包读到这里要是还握着全局锁，别的命令全跟着排队
     let parsed = Arc::new(parser::parse(&path));
     let mut inner = lock(&state);
-    inner
-        .parsed_by_name
-        .insert(manifest.file_name.clone(), parsed);
-    inner.last_file = Some(manifest.file_name);
+    inner.parsed_by_pack.insert(id.clone(), parsed);
+    inner.last_pack = Some(id);
+    invalidate_env(&mut inner);
     true
 }
 
@@ -129,8 +143,8 @@ pub fn default_options(state: S<'_>, manifest: PackManifest) -> ConversionOption
         let inner = lock(&state);
         (
             inner
-                .parsed_by_name
-                .get(&manifest.file_name)
+                .parsed_by_pack
+                .get(&manifest.identity())
                 .and_then(|p| p.loader_version.clone())
                 .unwrap_or_default(),
             inner.settings.install_loader_locally,

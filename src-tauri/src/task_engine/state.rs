@@ -18,10 +18,11 @@ pub struct Inner {
     pub tasks: HashMap<String, ConversionTask>,
     pub cancel: HashMap<String, Arc<AtomicBool>>,
     pub reports: HashMap<String, ConversionReport>,
-    /// 已解析包缓存：按包文件名索引（start_conversion 由 manifest.fileName 找回）
-    pub parsed_by_name: HashMap<String, Arc<ParsedPack>>,
-    /// 最近一次成功解析的包名（get_plan / default_options 的默认对象）
-    pub last_file: Option<String>,
+    /// 已解析包缓存：按包身份（`PackManifest::identity`，即绝对源路径）索引。
+    /// 曾经按文件名索引，于是同名不同目录的两个包共用一份解析结果——重跑前一个任务会拿到后一个包的行
+    pub parsed_by_pack: HashMap<String, Arc<ParsedPack>>,
+    /// 最近一次成功解析的包身份（get_plan / default_options 的默认对象）
+    pub last_pack: Option<String>,
     /// 任务创建时前端确认过的最终方案（含用户勾改/本地与服务端新增）
     pub plans: HashMap<String, Vec<PlanMod>>,
     /// 回收站：本次会话删掉的任务。只活在内存（不进 tasks.json），所以关应用即清空
@@ -31,10 +32,10 @@ pub struct Inner {
     pub templates: Vec<ConversionTemplate>,
     /// 当前独占运行的任务 id——同一时间只允许一条转换在跑，其余排队
     pub current: Option<String>,
-    /// 最近一次自动分类取到的端证据（包内条目路径 → 证据）；只属于 env_evidence_file 那个包
+    /// 最近一次自动分类取到的端证据（包内条目路径 → 证据）；只属于 env_evidence_pack 那个包
     pub env_evidence: env::EvidenceMap,
-    /// env_evidence 归属的包名（换包即作废）
-    pub env_evidence_file: Option<String>,
+    /// env_evidence 归属的包身份（换包即作废）
+    pub env_evidence_pack: Option<String>,
     /// 最近一次离线扫描的字节码结构事实（路径 → 事实）；与 env_evidence 同期写、同包作废
     pub env_code: env::CodeMap,
     /// 最近一次离线扫描的 jar 自报身份（路径 → mod_id + 硬依赖）；与 env_evidence 同期写、
@@ -43,9 +44,9 @@ pub struct Inner {
     /// A 层剔除复核腿的存疑名单（路径集）：Modrinth 项目级判剔除、百科反驳但等级压不过
     /// 的行。detector 据此与字节码否决同路处理（保留 + 待人工）
     pub env_doubt: std::collections::HashSet<String>,
-    /// 联网反查仍在后台跑的那个包名（跑完或换包即清）。classify_pack 靠它区分
+    /// 联网反查仍在后台跑的那个包身份（跑完或换包即清）。classify_pack 靠它区分
     /// 「缓存命中、本轮已经结束」和「缓存命中、但在线层还在补」——后者还得继续挂「分类中」。
-    pub env_online_file: Option<String>,
+    pub env_online_pack: Option<String>,
 }
 
 pub struct AppState {

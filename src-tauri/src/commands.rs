@@ -42,9 +42,9 @@ fn downloader_of(state: &Arc<AppState>) -> Downloader {
 
 fn last_parsed_of(inner: &task_engine::Inner) -> Option<Arc<ParsedPack>> {
     inner
-        .last_file
+        .last_pack
         .as_ref()
-        .and_then(|f| inner.parsed_by_name.get(f))
+        .and_then(|f| inner.parsed_by_pack.get(f))
         .cloned()
 }
 
@@ -53,7 +53,7 @@ fn evidence_of<'a>(
     inner: &'a task_engine::Inner,
     empty: &'a env::EvidenceMap,
 ) -> &'a env::EvidenceMap {
-    if inner.env_evidence_file.is_some() && inner.env_evidence_file == inner.last_file {
+    if inner.env_evidence_pack.is_some() && inner.env_evidence_pack == inner.last_pack {
         &inner.env_evidence
     } else {
         empty
@@ -62,7 +62,7 @@ fn evidence_of<'a>(
 
 /// 字节码结构事实只随 env_evidence 一起写入、一起作废，所以共用同一个包名闸门
 fn code_of(inner: &task_engine::Inner) -> &env::CodeMap {
-    if inner.env_evidence_file.is_some() && inner.env_evidence_file == inner.last_file {
+    if inner.env_evidence_pack.is_some() && inner.env_evidence_pack == inner.last_pack {
         &inner.env_code
     } else {
         // 作废态要的是空表：&HashMap::default() 生命周期不够，用静态空表兜住
@@ -73,7 +73,7 @@ fn code_of(inner: &task_engine::Inner) -> &env::CodeMap {
 
 /// jar 自报身份（mod_id + 硬依赖）只随 env_evidence 一起写入、一起作废，同一个包名闸门
 fn meta_of(inner: &task_engine::Inner) -> &env::MetaMap {
-    if inner.env_evidence_file.is_some() && inner.env_evidence_file == inner.last_file {
+    if inner.env_evidence_pack.is_some() && inner.env_evidence_pack == inner.last_pack {
         &inner.env_meta
     } else {
         static EMPTY: std::sync::OnceLock<env::MetaMap> = std::sync::OnceLock::new();
@@ -83,7 +83,7 @@ fn meta_of(inner: &task_engine::Inner) -> &env::MetaMap {
 
 /// 复核存疑名单与 env_evidence 同生共死，同一个包名闸门
 fn doubt_of(inner: &task_engine::Inner) -> std::collections::HashSet<String> {
-    if inner.env_evidence_file.is_some() && inner.env_evidence_file == inner.last_file {
+    if inner.env_evidence_pack.is_some() && inner.env_evidence_pack == inner.last_pack {
         inner.env_doubt.clone()
     } else {
         Default::default()

@@ -10,7 +10,7 @@
   "about.collapse-license-deps": "Collapse licenses & dependencies",
   "about.collapse-privacy": "Collapse data & privacy",
   "about.credentials": "Credentials",
-  "about.credentials-value": "The CurseForge API key stays in this machine's config; it never enters logs, task saves or exported packs",
+  "about.credentials-value": "Credential data stays in this machine's config; it never enters logs, task saves or exported packs",
   "about.data-source": "Data sources",
   "about.data-source-value": "Modrinth API and CurseForge API, plus the mirror chosen in Settings",
   "about.disclaimer": "SideShift is an independent third-party tool with no affiliation with, or endorsement by, Mojang Studios or Microsoft. Minecraft and its related names and assets are trademarks or copyrighted works of their respective owners. This project is released under the Apache License 2.0, ships no official content, and converts the packs you already own.",

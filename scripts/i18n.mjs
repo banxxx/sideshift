@@ -36,6 +36,11 @@ const RES = join(ROOT, "src/lib/i18n/resources");
 const LOCK = join(RES, "source-lock.json");
 const SOURCE_KEYS = join(ROOT, "src/lib/i18n/source-keys.ts");
 const TARGETS = ["en-US", "zh-TW"];
+/**
+ * 扫描根：主应用 + 两个壳的前端。壳的界面也走 `wizard.*` 这套键，漏掉一个根就等于
+ * 「英文系统下装机界面露简体」而 check 一声不响。
+ */
+const UI_ROOTS = [join(ROOT, "src"), join(ROOT, "installer/ui/src"), join(ROOT, "uninstaller/ui/src")];
 /** 繁体目录里只写「与原文不同」的条目：相同的查不到会回落到内联原文，那正是正确答案 */
 const TW_SKIP_IDENTICAL = true;
 
@@ -68,6 +73,14 @@ function* walk(dir, ext = /\.(ts|tsx)$/) {
     }
 }
 
+/** 所有扫描根串成一条流：三个消费点（调用点、残留、裸字面量）都从这里取，别再各写一次 src */
+function* walkUi() {
+    for (const dir of UI_ROOTS) {
+        if (!existsSync(dir)) continue;
+        yield* walk(dir);
+    }
+}
+
 /** 注释一律剥掉：这个仓库的注释密度极高，不剥会把设计说明当待翻文案（块标记单独扫原文） */
 function stripComments(src) {
     return src
@@ -94,7 +107,7 @@ function collect() {
         hit.files.add(rel(file));
         map.set(k, hit);
     };
-    for (const file of walk(join(ROOT, "src"))) {
+    for (const file of walkUi()) {
         if (file.includes("/i18n/") || file.includes("mock")) continue;
         const raw = readFileSync(file, "utf8");
         // 1) 动态句声明：活在注释里，必须读原文并逐行拆（排版缩进不是句子的一部分）
@@ -282,7 +295,7 @@ function check({ fix = false } = {}) {
     const UI_ATTR =
         /\b(?:title|label|placeholder|desc|sub|description|emptyText|errorText|tip|text|children)\s*=\s*\{?\s*["'`][^"'`\n]*[㐀-鿿][^"'`\n]*["'`]/g;
     const JSX_TEXT = />([^<>{}\n]*[㐀-鿿][^<>{}\n]*)</g;
-    for (const file of walk(join(ROOT, "src"))) {
+    for (const file of walkUi()) {
         if (file.includes("i18n") || file.includes("mock")) continue;
         const lines = stripComments(readFileSync(file, "utf8")).split("\n");
         lines.forEach((row, i) => {
@@ -493,7 +506,7 @@ function exportWorkbench(format = "tsv") {
 /** 广谱残留：把 src 里所有带汉字的字符串字面量捞出来（比 check 的 residue 宽得多）。只报不判错 */
 function bareLiterals() {
     const hits = [];
-    for (const file of walk(join(ROOT, "src"))) {
+    for (const file of walkUi()) {
         if (file.includes("/i18n/") || file.includes("mock")) continue;
         const raw = readFileSync(file, "utf8");
         const lines = raw.split("\n");

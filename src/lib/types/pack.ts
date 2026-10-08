@@ -22,6 +22,10 @@ export interface PackManifest {
     sourcePath?: string;
 }
 
+/** 包身份：绝对源路径，没有路径才退回文件名（与 Rust `PackManifest::identity()` 同口径）。
+ *  迟到事件与草稿都按它归属——同名不同目录的两个包不能共用一份分类结论 */
+export const packIdOf = (m: PackManifest) => m.sourcePath ?? m.fileName;
+
 /** 保留树里的一个文件条目；`keepFiles` 的取值 = 它的 `path`（逻辑相对路径，已小写） */
 export interface PackFileNode {
     /** 文件名（不含路径），如 options.txt */

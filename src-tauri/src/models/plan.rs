@@ -152,8 +152,9 @@ pub struct PlanMod {
 #[derive(Serialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct PlanClassified {
-    /// 归属包名：前端按当前 manifest.fileName 校验，切包后的迟到事件丢弃
-    pub file_name: String,
+    /// 归属包身份（绝对源路径，见 `PackManifest::identity`）：前端按当前包校验，
+    /// 换包后的迟到事件丢弃。曾经是文件名——同名不同目录的两个包因此互相串台
+    pub pack_id: String,
     /// 带全部证据层的完整方案（前端只套用到用户未手动改过的行）
     pub plan: Vec<PlanMod>,
     /// false = 在线层还没跑完（离线那次推送用），true 才是本轮最后一次事件

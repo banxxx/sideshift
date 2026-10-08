@@ -2,26 +2,12 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 
-export interface DriveOffer {
-    label: string;
-    freeBytes: number;
-    dataRoot: string;
-}
-
 export interface Plan {
     version: string;
-    /** 流程条右侧那三个字母：x64 / arm64，由 Rust 按编译目标给，前端不猜 */
+    /** 标题栏右侧那三个字母：x64 / arm64，由 Rust 按编译目标给，前端不猜 */
     arch: string;
-    /** 够用的非系统固定盘，剩余空间降序；第一个就是预选档 */
-    drives: DriveOffer[];
-    /** 没有候选盘时的回落数据根（用户目录下） */
-    fallbackDataRoot: string;
+    /** 默认安装位置：与 NSIS 模板 currentUser 的默认值同源，用户不改就是它 */
     installDir: string;
-}
-
-/** 用户挑的目录归一化后的结果。产物与缓存目录由路径规则从数据根推出，界面不逐条复述 */
-export interface Layout {
-    dataRoot: string;
 }
 
 /** 与 Rust `Stage` 的 kebab-case 对齐；新增阶段必须先证明"壳真的看得见它" */
@@ -36,18 +22,18 @@ export interface Progress {
 /** 安装结果：一律是 Rust 侧实际写盘/查到的路径，页面不再用自己那份状态拼展示 */
 export interface Outcome {
     installedExe: string;
-    dataRoot: string;
+    /** 程序实际落在哪（一屏版正文里那句「已装到」读它） */
+    installDir: string;
     /** 卸载入口没换成自带那套界面时的那句话（null = 已经指向它）。装是装成了，所以它不是错误 */
     uninstallNote: string | null;
 }
 
 export const getPlan = () => invoke<Plan>("get_plan");
 
-export const resolveLayout = (root: string) =>
-    invoke<Layout>("resolve_layout", { root });
-
-export const runInstall = (dataRoot: string, installDir: string) =>
-    invoke<Outcome>("run_install", { req: { dataRoot, installDir } });
+/** 数据跟着安装目录走（`appdata` / `cache` / `output` 三个平级目录，规则在 Rust 的 layout_in）：
+ *  所以契约里只有一个目录，界面不再单独问"数据放哪" */
+export const runInstall = (installDir: string) =>
+    invoke<Outcome>("run_install", { req: { installDir } });
 
 export const cancelInstall = () => invoke<void>("cancel_install");
 
