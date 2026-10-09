@@ -4,9 +4,8 @@
   "backend.arg-files-pack-first": "兩份參數檔案都在包內 · 首次運行會自動安裝伺服器端（需本機 Java 與網路）",
   "backend.arg-files-pack-start": "兩份參數檔案都在包內；本次未生成啟動腳本，需自行按包內檔案啟動",
   "backend.cf-empty-pack": "這份 CurseForge 清單沒有聲明任何模組，包裡也沒有 jar 位元組",
-  "backend.cf-forbidden": "CurseForge 拒絕了這次請求（HTTP 403）：這把 Key 沒有該接口的權限，或者這個模組不通過接口發放下載鏈",
-  "backend.cf-key-missing": "還沒有配置 CurseForge API Key：在「設定 · 網路 · CurseForge API Key」填一把，或在 CurseForge 官方表單免費申請",
-  "backend.cf-unauthorized": "CurseForge 不接受這把 API Key（HTTP 401）：Key 已過期或被撤銷，請到設定裡重新填寫",
+  "backend.cf-forbidden": "CurseForge 拒絕了這次請求（HTTP 403）",
+  "backend.cf-unauthorized": "CurseForge 不接受這把 API Key（HTTP 401）",
   "backend.count-common": "缺 {{count}} 個常用包根檔案",
   "backend.count-dep": "{{count}} 條依賴引用全部指向包內",
   "backend.count-dep-points": "{{count}} 條依賴指向已剔除的模組",
@@ -29,7 +28,7 @@
   "report.cross-dependencies": "方案內無交叉依賴",
   "report.jars-check": "無 jar 需校驗",
   "report.launch-target-yet": "未確定啟動目標，需自行指定",
-  "report.loader-installed": "本機裝好了載入器，但依賴樹裡沒有它的本體（並樹這一步沒跑成）",
+  "report.loader-installed": "本機裝好了載入器，但依賴樹裡沒有它的本體",
   "report.loader-jar": "包內既沒有載入器本體也沒有安裝器",
   "report.mod-files": "本包無模組檔案需落位"
 }

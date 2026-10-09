@@ -120,7 +120,7 @@ export function ShiftRail({
             <header className="flex items-center justify-between gap-3">
                 <div className="flex min-w-0 items-center gap-2.5">
                     <span className="font-mono text-[11px] leading-[16px] font-semibold tracking-[1.2px] text-text-3 shrink-0">
-                        SHIFT RAIL · {t("common.conversion-rail", "转换轨道")}
+                        {t("common.conversion-rail", "转换轨道")}
                     </span>
                     <EndChip icon={Archive} label={t("common.client-pack", "客户端包")} />
                     <ArrowRight className="size-3 shrink-0 text-text-3" strokeWidth={2.5} />

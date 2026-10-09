@@ -264,7 +264,7 @@ fn loader_check(input: &Input) -> CheckResult {
                 "loader",
                 "Loader 就位",
                 CheckStatus::Fail,
-                msg!("本机装好了加载器，但依赖树里没有它的本体（并树这一步没跑成）"),
+                msg!("本机装好了加载器，但依赖树里没有它的本体"),
                 vec![format!("{}*.jar", loader_prefix(input.loader))],
             ),
         };

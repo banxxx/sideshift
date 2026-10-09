@@ -4,7 +4,7 @@
  */
 import { useNavigation } from "@/lib/navigation";
 import { AnimatePresence, motion, type Variants } from "motion/react";
-import { ArrowRight } from "lucide-react";
+import { LineDotRightHorizontal } from "lucide-react";
 import { useActiveTask, useTauriFileDrop } from "@/features/home/home-state";
 import { usePackStore } from "@/lib/pack-store";
 import { taskToRail } from "@/lib/rail-view";
@@ -89,7 +89,7 @@ export function HomePage() {
                 title={
                     <span className="inline-flex items-center gap-2">
                         {t("home.client", "客户端")}
-                        <ArrowRight aria-hidden className="size-[19px] text-accent" />
+                        <LineDotRightHorizontal aria-hidden className="size-[19px] text-accent" />
                         {t("home.server", "服务端")}
                     </span>
                 }

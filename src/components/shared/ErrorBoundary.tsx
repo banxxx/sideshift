@@ -13,7 +13,7 @@ interface Crash {
 export function CrashPanel({ detail }: { detail: string }) {
     return (
         <div className="relative h-screen p-[var(--win-inset)]">
-            <div className="h-full flex flex-col overflow-hidden bg-background text-foreground shadow-[var(--win-shadow)]">
+            <div className="app-field app-shell h-full flex flex-col overflow-hidden text-foreground shadow-[var(--win-shadow)]">
                 <div className="flex-1 flex flex-col items-center justify-center gap-2 px-8 text-center">
                     <p className="font-heading text-[15px] leading-[22px] font-semibold text-text-1">
                         {t("shell.crash-title", "界面出错了")}

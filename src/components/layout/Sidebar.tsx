@@ -3,11 +3,16 @@
  * 高亮淡底不是每行各画一块，而是一颗共享胶囊（layoutId="nav-pill"）在行间滑，与分段页签同一招、同一条弹簧。
  * 底部守「信息在左、动作在右」的全应用排布语法：版本号靠左（24px 对导航图标左缘），主题钮靠右（12px，与窗口控件同一条竖线）。
  */
-import { Home, Info, LayoutTemplate, ListChecks, Settings, Moon, Sun } from "lucide-react";
-import { useRef, useState } from "react";
-import { AnimatePresence, motion } from "motion/react";
+import { Moon, Sun } from "lucide-react";
+import { useEffect, useRef, useState, type ComponentType, type Ref } from "react";
+import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import { NotificationStack } from "./NotificationStack";
 import { HOVER_FILL, Logo, TIP_TRIGGER, Tip } from "@/components/ui";
+import { HomeIcon } from "@/components/icons/home";
+import { AlignRightIcon } from "@/components/icons/align-right";
+import { LayoutPanelTopIcon } from "@/components/icons/layout-panel-top";
+import { BadgeAlertIcon } from "@/components/icons/badge-alert";
+import { SettingsIcon } from "@/components/icons/settings";
 import { useT } from "@/lib/i18n";
 import { PILL_SLIDE } from "@/lib/springs";
 import { cn } from "@/lib/utils";
@@ -20,13 +25,21 @@ import {
     type PrimaryPage,
 } from "@/lib/navigation";
 
+/** 动效图标的手柄与组件形状（五个文件各自导出同构的 handle，这里取共同形状） */
+type NavIconHandle = { startAnimation: () => void; stopAnimation: () => void };
+type NavIcon = ComponentType<{
+    size?: number;
+    className?: string;
+    ref?: Ref<NavIconHandle>;
+}>;
+
 /** 导航五行的图标与 id（id 是路由 key，绝不翻译）；页名见下面组件里的 `navLabel` */
-const navItems: { key: PrimaryPage; icon: typeof Home }[] = [
-    { key: "home", icon: Home },
-    { key: "tasks", icon: ListChecks },
-    { key: "templates", icon: LayoutTemplate },
-    { key: "about", icon: Info },
-    { key: "settings", icon: Settings },
+const navItems: { key: PrimaryPage; icon: NavIcon }[] = [
+    { key: "home", icon: HomeIcon },
+    { key: "tasks", icon: AlignRightIcon },
+    { key: "templates", icon: LayoutPanelTopIcon },
+    { key: "about", icon: BadgeAlertIcon },
+    { key: "settings", icon: SettingsIcon },
 ];
 
 export function Sidebar() {
@@ -64,6 +77,19 @@ export function Sidebar() {
         entry.key in SECONDARY_OWNER
             ? SECONDARY_OWNER[entry.key as keyof typeof SECONDARY_OWNER]
             : (entry.key as PrimaryPage);
+
+    // 「确认到达」：图标在换页落定那一下逐笔长出来，而不是鼠标压到图标才动。五颗都常驻挂载
+    // （只有胶囊会滑），所以必须走命令式手柄；冷启动那一趟不播（首帧交给启动页与入场曲线）。
+    // 自己收闸而不靠 MotionConfig：它管 transform 类，`pathLength`/`x1` 这类 SVG 属性不在降级范围内。
+    const reduced = useReducedMotion();
+    const iconRefs = useRef<Partial<Record<PrimaryPage, NavIconHandle | null>>>({});
+    const arrivedFrom = useRef<PrimaryPage | null>(null);
+    useEffect(() => {
+        const from = arrivedFrom.current;
+        arrivedFrom.current = activePrimary;
+        if (from === null || from === activePrimary || reduced) return;
+        iconRefs.current[activePrimary]?.startAnimation();
+    }, [activePrimary, reduced]);
 
     return (
         // v5：侧栏全高、半透明白浮在氛围场上（材质令牌见 App.css「侧栏材质」段）。
@@ -120,7 +146,14 @@ export function Sidebar() {
                                 />
                             )}
                             <span className="relative z-[1] flex h-full items-center gap-2.5">
-                                <Icon className="size-4" />
+                                {/* `size` 是图形像素（站内默认 28，这里按基准收进 16），`className` 只套在外层那圈 div 上 */}
+                                <Icon
+                                    size={16}
+                                    className="shrink-0"
+                                    ref={(el) => {
+                                        iconRefs.current[item.key] = el;
+                                    }}
+                                />
                                 <span>{navLabel[item.key]}</span>
                             </span>
                         </button>

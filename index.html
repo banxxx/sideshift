@@ -22,8 +22,8 @@
        *
        * 为什么内联在这里：主包 ~632KB 执行完才有 App.css / Tailwind，而启动页必须赶上
        * HTML 首帧。所以下面不引用任何令牌，颜色是 src/App.css 的字面量副本
-       * （改 App.css 的 --bg-app / --surface-2 / --accent 时同步这里，两处口径）：
-       *   亮 #f5f6f8 #eef0f3 #4f5de5 ／ 暗 #121317 #24262e #8b95ff
+       * （改 App.css 的 --bg-app / --rail-track / --accent 时同步这里，两处口径）：
+       *   亮 #f5f6f8 #dfe2e8 #4f5de5 ／ 暗 #121317 #2a2d36 #8b95ff
        *
        * 图形只用 public/logo.svg 的切片，不画第二份几何（全应用图形单源）：
        * viewBox 已裁到图形本身，所以背景尺寸=方块尺寸时是 1:1 映射，
@@ -43,6 +43,11 @@
          * 阴影两档主题共用一条，和 App.css 一样只在基础规则里写一次。
          * 阴影在启动页也要画，不然 React 挂载那一刻投影会凭空跳出来。 */
         inset: 6px;
+        /* 圆角同样是 App.css 的字面量副本（`--win-radius: 8px`，`.app-shell` 那一档）：
+         * 少了这一条，启动页是一枚直角方块，React 挂载那一刻四角才当场收圆。
+         * 最大化时 App.css 把令牌写成 0，这里跟着一起改才会露圆边——启动页只在冷启动那一趟出现，
+         * 那一趟窗口不会是最大化态（`--win-inset` 的 6px 副本同理），故不镜像 `[data-win-max]`。 */
+        border-radius: 8px;
         z-index: 9999;
         display: flex;
         align-items: center;
@@ -131,37 +136,56 @@
       .sp-prog {
         position: relative;
         width: 132px;
-        height: 4px;
-        /* 轨道与里面的光带同一个圆角口径（999px = 4px 高的胶囊）；1px 时看着仍是直角 */
+        height: 6px;
+        /* 轨道与里面的光带同一个圆角口径（999px = 6px 高的胶囊）；1px 时看着仍是直角 */
         border-radius: 999px;
         overflow: hidden;
-        background: #eef0f3;
+        /* 轨道色借 Shift Rail 的「未达段」（App.css 的 --rail-track：亮 #dfe2e8 / 暗 #2a2d36）。
+         * 原来借 --surface-2 的 #eef0f3：压在 #f5f6f8 上实测只差 6/255，轨道等于看不见，
+         * 整条进度只剩一坨游移的蓝；#dfe2e8 是 21/255。内阴影给它一点凹槽的深度感。 */
+        background: #dfe2e8;
+        box-shadow: inset 0 1px 1px rgba(15, 18, 26, 0.07);
       }
       .dark #splash .sp-prog {
-        background: #24262e;
+        background: #2a2d36;
+        box-shadow: inset 0 1px 1px rgba(0, 0, 0, 0.35);
       }
       /* 一条光带被槽裁住：出右沿的那一刻就是入左沿的那一刻。
-         行程 -100%→333.333%（百分比按自身宽度算）= 槽宽 + 一条带宽 ⇒ 换圈处没有跳变；
-         linear ⇒ 不在首尾减速。 */
+         行程 -100%→263.158%（百分比按自身宽度算：100% + 槽宽/带宽×100% = 100 + 100/0.38）
+         = 槽宽 + 一条带宽 ⇒ 换圈处没有跳变；linear ⇒ 不在首尾减速。
+         带子里 46%–76% 是一段实心 ⇒ 读得出"有一根东西在走"，两端渐隐只给方向；
+         原来 30% 宽的全对称渐变，真正染到色的只有中间那一两列像素。 */
       .sp-prog i {
         position: absolute;
         left: 0;
         top: 0;
-        width: 30%;
+        width: 38%;
         height: 100%;
         border-radius: 999px;
-        background: linear-gradient(90deg, transparent, #4f5de5, transparent);
+        background: linear-gradient(
+          90deg,
+          transparent 0%,
+          #4f5de5 46%,
+          #4f5de5 76%,
+          transparent 100%
+        );
         animation: sp-run var(--sp-loop) linear infinite;
       }
       .dark #splash .sp-prog i {
-        background: linear-gradient(90deg, transparent, #8b95ff, transparent);
+        background: linear-gradient(
+          90deg,
+          transparent 0%,
+          #8b95ff 46%,
+          #8b95ff 76%,
+          transparent 100%
+        );
       }
       @keyframes sp-run {
         from {
           transform: translateX(-100%);
         }
         to {
-          transform: translateX(333.333%);
+          transform: translateX(263.158%);
         }
       }
       /* 退场：两段共 60ms，先让内容上移淡掉、再抽掉整张底 */

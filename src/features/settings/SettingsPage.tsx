@@ -556,7 +556,7 @@ export function SettingsPage() {
                         label={t("settings.modrinth-query", "Modrinth 查询")}
                         desc={t(
                             "settings.modrinth-mirror-desc",
-                            "网络添加的搜索/详情/版本/译文优先走 mcimirror 镜像、官方自动兜底；CurseForge 数据始终经 mcimirror 获取（无需 API Key）"
+                            "网络添加的搜索/详情/版本/译文优先走 mcimirror 镜像、官方自动兜底；CurseForge 数据始终经 mcimirror 获取"
                         )}
                     >
                         <SearchSelect
@@ -569,7 +569,7 @@ export function SettingsPage() {
                     </SettingRow>
                     <SettingRow
                         label={t("settings.parallel-downloads", "并发下载数")}
-                        desc={t("settings.threads-mod", "同时拉取模组与服务端文件的线程数（1–16）；端信息反查用的是固定的并发")}
+                        desc={t("settings.threads-mod", "同时拉取模组与服务端文件的线程数（1–16）")}
                     >
                         <Stepper
                             plain
@@ -588,7 +588,7 @@ export function SettingsPage() {
                         desc={
                             settings.envLookupSource === "off"
                                 ? t("settings.lookup-off-desc", "不发联网请求，只用包内自证、本地索引与名称兜底")
-                                : t("settings.env-lookup-source-desc", "包内证据不足时联网反查该构建的端支持度并本地缓存；选一个源，不会两个都问")
+                                : t("settings.env-lookup-source-desc", "包内证据不足时联网反查该构建的端支持度并本地缓存")
                         }
                     >
                         <SearchSelect
@@ -607,7 +607,7 @@ export function SettingsPage() {
                                 ? t("settings.mcmod-lookup-inert", "反查关掉时这一档不起作用")
                                 : t(
                                       "settings.mcmod-lookup-desc",
-                                      "平台各腿全答不上时查 MC百科词条的「运行环境」（非官方接口，默认关）"
+                                      "额外查询 MC百科词条的「运行环境」"
                                   )
                         }
                     >
