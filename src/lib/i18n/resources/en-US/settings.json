@@ -100,5 +100,6 @@
   "settings.where-finished": "Where finished server packs are saved",
   "settings.loader-installs": "Loader installs",
   "settings.no-installs": "No reused loader installs (Forge / NeoForge)",
-  "settings.installs-count": "{{count}} version(s) · the same version re-downloads on next conversion"
+  "settings.installs-count_one": "{{count}} version available for reuse",
+  "settings.installs-count_other": "{{count}} versions available for reuse"
 }

@@ -1,6 +1,6 @@
 /**
  * 左侧导航栏（宽 212）：品牌行 + 导航行 + 底部版本/主题行；点一级页＝清栈切换，二级页期间其所属一级页保持高亮。
- * 高亮淡底不是每行各画一块，而是一颗共享胶囊（layoutId="nav-pill"）在行间滑，与分段页签同一招、同一条弹簧。
+ * 高亮淡底不是每行各画一块，而是一颗常驻胶囊在行间滑（走 `y` 位移，不再走 layoutId 投影），与分段页签同一条弹簧。
  * 底部守「信息在左、动作在右」的全应用排布语法：版本号靠左（24px 对导航图标左缘），主题钮靠右（12px，与窗口控件同一条竖线）。
  */
 import { Moon, Sun } from "lucide-react";
@@ -120,9 +120,21 @@ export function Sidebar() {
 
             {/* 导航：行 36 高 r8；激活 = 白卡胶囊 + 极淡投影 + accent 字（600），
                 未激活回到 400 字重（v5 把导航字重拉开成 600/400 两档）。
-                淡底交给一颗共享胶囊（layoutId），切分类时它从旧行滑到新行——跨行也滑，不瞬移换色。
+                胶囊是一颗常驻件、靠 `y` 在行间滑（原先是每行条件挂一颗 `layoutId` 共享件）：
+                条件挂载那一路要在点击那一帧同步量两次布局做 FLIP，正是「卡手」里那个「卡」；
+                现在只有第一次渲染量布局，之后全是 transform。
+                40 = 行 36 + gap 4，行高或间距改了必须跟着改（`z-[1]` 让它压在行的底色上、
+                又输给行内文字的同一档 z——DOM 里它排最前；`pointer-events-none` 是必需的，
+                它现在是行的兄弟、盖在整列上面，不挡掉就把五行全点不动了）。
                 悬停带不走全站那条 $surface-2：侧栏面是半透白、压着场的冷光，中性灰贴上去等于没贴（判据见 App.css「侧栏材质」段的 --nav-hover） */}
-            <nav className="flex flex-col gap-1">
+            <nav className="relative flex flex-col gap-1">
+                <motion.span
+                    aria-hidden
+                    initial={false}
+                    animate={{ y: navItems.findIndex((i) => i.key === activePrimary) * 40 }}
+                    transition={PILL_SLIDE}
+                    className="pointer-events-none absolute inset-x-0 top-0 z-[1] h-9 rounded-md bg-[var(--nav-pill)] shadow-[var(--nav-pill-shadow)]"
+                />
                 {navItems.map((item) => {
                     const Icon = item.icon;
                     const active = activePrimary === item.key;
@@ -138,13 +150,6 @@ export function Sidebar() {
                                     : "font-normal text-text-2 hover:bg-[var(--nav-hover)] hover:text-text-1"
                             )}
                         >
-                            {active && (
-                                <motion.span
-                                    layoutId="nav-pill"
-                                    transition={PILL_SLIDE}
-                                    className="absolute inset-0 rounded-md bg-[var(--nav-pill)] shadow-[var(--nav-pill-shadow)]"
-                                />
-                            )}
                             <span className="relative z-[1] flex h-full items-center gap-2.5">
                                 {/* `size` 是图形像素（站内默认 28，这里按基准收进 16），`className` 只套在外层那圈 div 上 */}
                                 <Icon

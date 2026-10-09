@@ -497,6 +497,7 @@ function exportWorkbench(format = "tsv") {
         format === "csv"
             ? [head, ...rows].map((r) => r.map((c) => `"${String(c).replace(/"/g, '""')}"`).join(",")).join("\r\n")
             : [head, ...rows].map((r) => r.join("\t")).join("\n");
+    mkdirSync(join(ROOT, ".scratch"), { recursive: true });
     const file = join(ROOT, ".scratch", `i18n-workbench.${format}`);
     writeFileSync(file, text + "\n", "utf8");
     const n = (s) => rows.filter((r) => r[4] === s).length;

@@ -523,7 +523,7 @@ export function SettingsPage() {
                                 : usage.installsCount === 0
                                   ? t("settings.no-installs", "没有已复用安装的加载器（Forge / NeoForge）")
                                   : `${formatSize(usage.installsBytes)}：` +
-                                    t("settings.installs-count", "{{count}} 个版本 · 下次转换同版本会重新下载安装", {
+                                    t("settings.installs-count", "{{count}} 个版本可复用", {
                                         count: usage.installsCount,
                                     })
                         }

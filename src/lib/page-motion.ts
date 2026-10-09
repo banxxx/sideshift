@@ -1,13 +1,22 @@
 /**
  * 换页节拍与「页内错峰」唯一出处：换页走**缓动**不走弹簧（时长要能定长，且弹簧过冲与行程成正比，整页行程扛不住）。
- * 时序：旧页退 140ms → 新页淡入上浮 24px / 260ms 落定（App.tsx mode="wait" 串联）；页内块间错峰 60ms（PAGE_RISE → CARD_RISE）。
+ * 时序：旧页退 140ms → 新页上浮 24px / 260ms 落定、整屏淡入 120ms 先收口（App.tsx mode="wait" 串联）；
+ * 页内块间错峰 60ms（PAGE_RISE → CARD_RISE）。
  * TAB_SWEEP 是这套节拍的小一号；SWAP（@/components/ui/Swap）再缩一档：6px、进 180 / 出 90。
  */
 import type { Transition, Variants } from "motion/react";
 import { RISE } from "./springs";
 
-/** 页面容器入场 */
-export const PAGE_IN: Transition = { duration: 0.26, ease: [0.2, 0.8, 0.2, 1] };
+/**
+ * 页面容器入场：位移走满 260ms，透明度提前到 120ms 收口。
+ * 必须收口——页内每一块自己还要淡一次（CARD_RISE、任务卡的 180ms、首页右列），两条曲线相乘
+ * ⇒ 前 200ms 整屏几乎是空的，读出来是「闪出来」而不是「浮出来」。
+ * 不能整条撤掉——任务列表与转换模板的页头是静止块、没有自己那份淡入，撤了就变成硬跳。
+ */
+export const PAGE_IN: Transition = {
+    default: { duration: 0.26, ease: [0.2, 0.8, 0.2, 1] },
+    opacity: { duration: 0.12, ease: "easeOut" },
+};
 /** 页面容器退场：比入场短，指尖已经落到下一处，不该还等上一屏演完 */
 export const PAGE_OUT: Transition = { duration: 0.14, ease: "easeOut" };
 

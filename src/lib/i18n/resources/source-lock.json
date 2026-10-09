@@ -611,7 +611,7 @@
   "settings.follows-system": "跟随系统（当前：{{name}}）",
   "settings.get": "获取",
   "settings.install-loader": "本机安装 Loader",
-  "settings.installs-count": "{{count}} 个版本 · 下次转换同版本会重新下载安装",
+  "settings.installs-count": "{{count}} 个版本可复用",
   "settings.junk-files": "无用文件",
   "settings.language": "界面语言",
   "settings.leftover-staging": "下载错误、崩溃留下的暂存目录、空壳目录",

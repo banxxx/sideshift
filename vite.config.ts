@@ -45,7 +45,15 @@ export default defineConfig(() => ({
       : undefined,
     watch: {
       // 3. tell Vite to ignore watching `src-tauri`
-      ignored: ["**/src-tauri/**"],
+      // 监视成本按文件数付：dev 启动后第一个 CSS 请求要等这些目录逐个挂上监视。
+      // 实测 66.4s → 17.6s（产物一字节不差），凶手就是 .scratch 的 6.2 万个文件与两处 cargo target。
+      ignored: [
+        "**/src-tauri/**",
+        "**/.scratch/**",
+        "**/installer/target/**",
+        "**/uninstaller/target/**",
+        "**/dist/**",
+      ],
     },
   },
 }));

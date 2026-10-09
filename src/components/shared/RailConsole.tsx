@@ -47,7 +47,8 @@ export function RailConsole({ logs, waiting, clipHeader, className }: RailConsol
     return (
         <section
             className={cn(
-                "rounded-[12px] bg-[var(--console-bg)] backdrop-blur-[var(--blur-card)] shadow-[var(--shadow-card)] p-5 flex flex-col gap-[11px] w-full",
+                // 与 `.card-frost` 同档：背板只有不动的场，不挂 backdrop-blur（理由见 App.css 那段）
+                "rounded-[12px] bg-[var(--console-bg)] shadow-[var(--shadow-card)] p-5 flex flex-col gap-[11px] w-full",
                 className
             )}
         >

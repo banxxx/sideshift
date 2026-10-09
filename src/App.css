@@ -3,7 +3,7 @@
  * :root / .dark 定义明暗双主题原始 CSS 变量；@theme inline 把变量映射进 Tailwind 4 + shadcn 组件体系。
  * 命名与 .pen 画板图层同名（bg-app / surface / stroke / text-1..3 / accent / emerald / redstone / gold / rail-track ...），对照设计稿按名取色。
  * ============================================================ */
-@import "tailwindcss";
+@import "tailwindcss" source(none);
 @import "tw-animate-css";
 @import "shadcn/tailwind.css";
 @import "@fontsource-variable/inter";
@@ -11,12 +11,29 @@
 @import "@fontsource/jetbrains-mono/400.css";
 @import "@fontsource/jetbrains-mono/600.css";
 
+/* 候选扫描的范围：`source(none)` 关掉自动探测（它会从包根往下走整棵树，.scratch 与 cargo target
+ * 都在里面），改成只认下面这三个目录。新增源码目录必须补一条 `@source`，否则那页的 class 会静默不生成。
+ * 与两个壳里的 `@source` 是叠加的，不去重也不互相覆盖。 */
+@source "./";
+@source "../installer/ui";
+@source "../uninstaller/ui";
+
 @custom-variant dark (&:is(.dark *));
+
+/* 运行期才写上的变量在这里声明默认值：`--vt-*` 由 `src/lib/theme.ts` 在切主题前挂到 <html>，
+ * `--veil-gap` 由三个吸顶页头各自的 `[--veil-gap:…]` 挂在元素上——都不经过样式表。
+ * 不声明的话编辑器报「无法解析自定义属性」，而下面用 `var()` 的地方也就不再有单一出处了。 */
+:root {
+  --vt-x: 50%;
+  --vt-y: 50%;
+  --vt-r: 150%;
+  --veil-gap: 1.25rem;
+}
 
 /* 主题切换的圆形展开（驱动方：src/lib/theme.ts 的 switchTheme）
  * VT 期间真 DOM 被快照定格，所以旧画面静止在下层、新配色做成从圆心扩开的 clip-path；
  * 圆心/半径是切换前写在 <html> 上的 --vt-x/y/r，半径已取到视口最远角。
- * 没拿到变量时兜成屏幕中心，宁可居中铺开也不要露一块旧色。
+ * 没拿到变量时兜成屏幕中心（上面那三条默认值），宁可居中铺开也不要露一块旧色。
  *
  * 曲线口径「等速主体 + 长尾刹车」。两处要点（数值都在下面的 keyframe 里，改这两处就够）：
  * ① 刹车点要**早**：半径过了 ~80% 之后屏幕上只剩墙角，那段路再慢也看不见，所以减速必须发生在
@@ -30,15 +47,15 @@
  * 一条 cubic-bezier 做不到这个形状：(.4,0,.2,1) 两头都平，会把中段甩出去、起手还先软一下。 */
 @keyframes theme-reveal {
   from {
-    clip-path: circle(0 at var(--vt-x, 50%) var(--vt-y, 50%));
+    clip-path: circle(0 at var(--vt-x) var(--vt-y));
     animation-timing-function: linear;
   }
   22% {
-    clip-path: circle(calc(var(--vt-r, 150%) * 0.36) at var(--vt-x, 50%) var(--vt-y, 50%));
+    clip-path: circle(calc(var(--vt-r) * 0.36) at var(--vt-x) var(--vt-y));
     animation-timing-function: cubic-bezier(0.16, 0.32, 0.25, 0.99);
   }
   to {
-    clip-path: circle(var(--vt-r, 150%) at var(--vt-x, 50%) var(--vt-y, 50%));
+    clip-path: circle(var(--vt-r) at var(--vt-x) var(--vt-y));
   }
 }
 
@@ -473,8 +490,8 @@
   --veil-lift: 8px;
   margin-inline: -2rem;
   padding-inline: 2rem;
-  padding-bottom: calc(var(--veil-gap, 1.25rem) - var(--veil-lift));
-  margin-bottom: calc(var(--veil-lift) - var(--veil-gap, 1.25rem));
+  padding-bottom: calc(var(--veil-gap) - var(--veil-lift));
+  margin-bottom: calc(var(--veil-lift) - var(--veil-gap));
 }
 .page-head-veil::before {
   content: "";
@@ -492,12 +509,14 @@
   background-position: calc(-1 * var(--side-w)) calc(-1 * var(--bar-h));
 }
 
-/* 磨砂卡：半透明面 + 背后模糊 + 双层投影。这三件事必须一起给——
- * 只给影不给模糊，影会压在实心白卡下面读不出来（设计稿的影是压在场上调的）。
- * 无 layer 规则，压得住 Panel 自带的 `bg-surface` 工具类。 */
+/* 磨砂卡：半透明面 + 双层投影。面必须半透明——实心卡压不住投影（设计稿的影是压在场上调的）。
+ * 无 layer 规则，压得住 Panel 自带的 `bg-surface` 工具类。
+ * 这里刻意不写 `backdrop-filter`：卡背后只有 `.app-field` 那六团平滑径向光，糊它等于没糊
+ * （撤掉后逐像素最大差 2/255）；糊了反而给每张卡挂一份「按当前位置抓的背板快照」——兄弟卡长高把本卡往下推时快照不重抓，
+ * 卡顶那条 Δ 高的带子演出的是它原来那一段的场（暗档 #2c2618 vs #121317，光差看得见；
+ * 浅档场近乎均色，所以只有暗档报出来）。纯色面没有参照系，错不了。 */
 .card-frost {
   background-color: var(--surface-card);
-  backdrop-filter: blur(var(--blur-card));
   box-shadow: var(--shadow-card);
 }
 
