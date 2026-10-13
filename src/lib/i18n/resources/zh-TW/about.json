@@ -6,6 +6,7 @@
   "about.ack-source": "鳴謝名單",
   "about.ack-source-value": "名單與自帶頭像取自專案自管的靜態地址；登記了 Minecraft 玩家名的貢獻者，其皮膚由本機向 Mojang 公開檔案介面查詢、貼圖直連其 CDN 取回。這些請求不攜帶帳號、憑據或本地檔案信息；名單快照與皮膚副本留存於本機配置目錄，供離線顯示",
   "about.acknowledgements": "致謝名單",
+  "about.api-doc": "API 文檔",
   "about.collapse-ack": "收起致謝名單",
   "about.collapse-license-deps": "收起許可與依賴",
   "about.collapse-privacy": "收起資料與隱私",
@@ -27,10 +28,14 @@
   "about.source-repo": "源碼倉庫",
   "about.telemetry": "遙測統計",
   "about.telemetry-value": "未集成遙測或統計上報組件，亦不寫入本地統計資料檔案",
+  "about.tp-ghproxy": "GitHub 下載不通時的加速代理",
   "about.tp-loaders": "模組載入器生態，轉換方案判定所依據的公開規範",
+  "about.tp-mcimirror": "CurseForge 查詢的必經代理，Modrinth 側可選鏡像",
   "about.tp-meta": "模組與版本元資料來源",
+  "about.tp-minekuai": "端信息反查的可選源，模組中文簡介的出處",
   "about.tp-mirror": "可選的下載與元資料鏡像加速服務",
-  "about.tp-modnames": "模組中文名的離線詞典",
+  "about.tp-modnames": "模組中文名的離線詞典，以及端信息的補全查詢",
   "about.tp-public-api": "公開 API",
-  "about.tp-self": "本專案自身的發佈協議"
+  "about.tp-self": "本專案自身的發佈協議",
+  "about.website": "官網"
 }

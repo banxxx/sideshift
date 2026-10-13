@@ -7,6 +7,7 @@
 import { Check, RefreshCw, X, type LucideIcon } from "lucide-react";
 import type { ConversionTask, FetchTally, PipelineStage, TaskStatus } from "@/lib/types";
 import type { Tone } from "@/components/ui";
+import { normalizeLog } from "@/lib/log-normalize";
 import { t } from "@/lib/i18n";
 
 /* ---- 轨道展示词表（ShiftRail 与本文件共用；定义放在视图模型层，避免 lib 反向依赖组件） ---- */
@@ -18,6 +19,8 @@ export interface RailLog {
     time?: string;
     stage?: PipelineStage;
     message: string;
+    /** 被归一化改写过的行留着原句，复制时一起给（口径见 log-normalize.ts） */
+    evidence?: string;
     level?: "muted" | "info" | "active" | "error";
 }
 
@@ -209,17 +212,21 @@ export function taskToRail(task: ConversionTask): TaskRailView {
  */
 export function taskLogs(task: ConversionTask): RailLog[] {
     const finished = task.status !== "queued" && task.status !== "running";
-    return task.logs.map((l, i) => ({
-        time: l.time,
-        stage: l.stage,
-        message: l.message,
-        level:
-            l.level === "error"
-                ? "error"
-                : finished && i === task.logs.length - 1
-                  ? "active"
-                  : "info",
-    }));
+    return task.logs.map((l, i) => {
+        const n = normalizeLog(l.message);
+        return {
+            time: l.time,
+            stage: l.stage,
+            message: n.message,
+            evidence: n.evidence,
+            level:
+                l.level === "error"
+                    ? "error"
+                    : finished && i === task.logs.length - 1
+                      ? "active"
+                      : "info",
+        };
+    });
 }
 
 /** 收尾三态的轨道标题（轨道上没有进行态：running/queued 由 taskToRail 自己拼） */

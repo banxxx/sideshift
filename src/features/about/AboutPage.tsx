@@ -7,6 +7,7 @@
 import { useState, type ReactNode } from "react";
 import { motion } from "motion/react";
 import {
+    ArrowUpRight,
     Database,
     ExternalLink,
     KeyRound,
@@ -20,7 +21,7 @@ import * as api from "@/lib/api";
 import { CARD_RISE, PAGE_RISE } from "@/lib/page-motion";
 import { useT, type TranslateFn } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
-import { Btn, Collapse, Divider, FoldBtn, Logo, Panel, PanelHead } from "@/components/ui";
+import { Btn, Collapse, Divider, FoldBtn, HOVER_FILL, Logo, Panel, PanelHead } from "@/components/ui";
 import { AckWall } from "./AckWall";
 import { useContributors } from "./useContributors";
 
@@ -40,21 +41,36 @@ function privacyRows(t: TranslateFn): Array<[LucideIcon, string, string]> {
     ];
 }
 
+type DepMark = { text: string; url?: string };
+
 /**
- * 许可与依赖。只留**外部**的四项（加载器生态、元数据 API、镜像服务、内置名称词典的出处）加本项目
- * 自身的发布协议——`name` 与 `license` 是专有名词与 SPDX 标识，**不翻**，只有用途那句过 `t`。
+ * 许可与依赖。只列**外部**的服务与出处（加载器生态、模组元数据 API、镜像与代理、中文名的两档来源），
+ * 加本项目自身的发布协议。右端那一格有两种：有单一官网的挂**跳转钮**（点了开系统浏览器），
+ * 一格装不下一个链接的（三个加载器、两家模组 API、本项目自己的协议）留**许可标贴**——
+ * 拿不到授权条款的那档，标贴写的是**性质**（公开 API）而不是猜一个 SPDX；`name` 与 SPDX **不翻**。
  *
  * 应用栈（运行时/框架/组件基线/字体）不列在这里：这一页不是 NOTICE 文件，把工程依赖摊给用户看
  * 只增加阅读成本。Minecraft 的权利声明也不在这张表里——下面「声明」那一块已经写了，
  * 同一页两处重复只会带来两处各改一次的风险。
  */
-function licenseRows(t: TranslateFn): Array<[string, string, string]> {
+function licenseRows(t: TranslateFn): Array<[string, string, DepMark[]]> {
+    const site = t("about.website", "官网");
     return [
-        ["Fabric · Forge · NeoForge", t("about.tp-loaders", "模组加载器生态，转换方案判定所依据的公开规范"), "Apache-2.0 / LGPL"],
-        ["Modrinth API · CurseForge API", t("about.tp-meta", "模组与版本元数据来源"), t("about.tp-public-api", "公开 API")],
-        ["MC百科", t("about.tp-modnames", "模组中文名的离线词典"), "CC BY-NC-SA 4.0"],
-        ["BMCLAPI（麦块）", t("about.tp-mirror", "可选的下载与元数据镜像加速服务"), "MIT"],
-        ["Apache License 2.0", t("about.tp-self", "本项目自身的发布协议"), "Apache-2.0"],
+        ["Fabric · Forge · NeoForge", t("about.tp-loaders", "模组加载器生态，转换方案判定所依据的公开规范"), [{ text: "Apache-2.0 / LGPL" }]],
+        ["Modrinth API · CurseForge API", t("about.tp-meta", "模组与版本元数据来源"), [{ text: t("about.tp-public-api", "公开 API") }]],
+        ["mcimirror", t("about.tp-mcimirror", "CurseForge 查询的必经代理，Modrinth 侧可选镜像"), [{ text: site, url: "https://www.mcimirror.top/" }]],
+        ["BMCLAPI", t("about.tp-mirror", "可选的下载与元数据镜像加速服务"), [{ text: site, url: "https://bmclapidoc.bangbang93.com/" }]],
+        ["麦块 API", t("about.tp-minekuai", "端信息反查的可选源，模组中文简介的出处"), [{ text: t("about.api-doc", "API 文档"), url: "https://minekuai.com/open-api" }]],
+        ["MC百科", t("about.tp-modnames", "模组中文名的离线词典，以及端信息的补全查询"), [{ text: site, url: "https://www.mcmod.cn/" }]],
+        [
+            "ghfast.top · ghproxy.net",
+            t("about.tp-ghproxy", "GitHub 下载不通时的加速代理"),
+            [
+                { text: "ghfast.top", url: "https://ghfast.top/" },
+                { text: "ghproxy.net", url: "https://ghproxy.net/" },
+            ],
+        ],
+        ["Apache License 2.0", t("about.tp-self", "本项目自身的发布协议"), [{ text: "Apache-2.0" }]],
     ];
 }
 
@@ -71,21 +87,47 @@ function FactRow({ icon: Icon, label, children }: { icon: LucideIcon; label: str
     );
 }
 
-/** 依赖行：名称 + 用途竖排，许可标贴右端（两列网格里各列自己占一格，所以不套 FactRow） */
-function LicenseRow({ name, usage, license }: { name: string; usage: string; license: string }) {
+/** 右端那一格的胶囊底：许可标贴与跳转钮共用同一形状，差别只在可点与配色 */
+const DEP_PILL = "rounded-full bg-surface-2 px-2 py-0.5 font-mono text-[10px] leading-[14px] font-semibold text-text-2";
+
+/** 跳转钮：静止态与许可标贴同底同字，悬浮换淡 accent 底、文字与箭头一起升到 accent */
+function DepLink({ text, url, site }: { text: string; url: string; site: string }) {
+    return (
+        <button
+            type="button"
+            aria-label={`${site} · ${text}`}
+            onClick={() => void api.openExternal(url)}
+            className={cn(
+                DEP_PILL,
+                "inline-flex shrink-0 cursor-pointer items-center gap-1",
+                "hover:bg-accent-dim hover:text-accent",
+                HOVER_FILL
+            )}
+        >
+            {text}
+            <ArrowUpRight className="size-2.5 opacity-55" />
+        </button>
+    );
+}
+
+/** 依赖行：名称 + 用途竖排，右端那一格靠齐（两列网格里各列自己占一格，所以不套 FactRow） */
+function LicenseRow({ name, usage, marks }: { name: string; usage: string; marks: DepMark[] }) {
     return (
         <div className="flex min-w-0 items-start gap-3">
             <div className="flex min-w-0 flex-1 flex-col gap-0.5">
                 <span className="text-[12px] leading-[18px] font-semibold text-text-1">{name}</span>
                 <span className="text-[11px] leading-[16px] text-text-3">{usage}</span>
             </div>
-            <span
-                className={cn(
-                    "shrink-0 rounded-full bg-surface-2 px-2 py-0.5",
-                    "font-mono text-[10px] leading-[14px] font-semibold text-text-2"
+            <span className="flex shrink-0 flex-wrap items-center justify-end gap-1">
+                {marks.map((m) =>
+                    m.url ? (
+                        <DepLink key={m.text} text={m.text} url={m.url} site={name} />
+                    ) : (
+                        <span key={m.text} className={cn(DEP_PILL, "inline-flex items-center")}>
+                            {m.text}
+                        </span>
+                    )
                 )}
-            >
-                {license}
             </span>
         </div>
     );
@@ -196,11 +238,11 @@ export function AboutPage() {
                     />
                     <Collapse when={licenseOpen} gap={10}>
                         <FoldBody>
-                            {/* 两列并排（等分 fr，不写固定宽）：五条 = 2×2 再落单一条，读起来是一份对照表
+                            {/* 两列并排（等分 fr，不写固定宽）：八条 = 4 行满格，读起来是一份对照表
                                 而不是清单；窗口最小 1120 时单列约容 21 字，最长的用途句不换行 */}
                             <div className="grid grid-cols-2 gap-x-6 gap-y-3">
-                                {licenseRows(t).map(([name, usage, license]) => (
-                                    <LicenseRow key={name} name={name} usage={usage} license={license} />
+                                {licenseRows(t).map(([name, usage, marks]) => (
+                                    <LicenseRow key={name} name={name} usage={usage} marks={marks} />
                                 ))}
                             </div>
                         </FoldBody>

@@ -30,6 +30,7 @@ import {
 } from "@/lib/format";
 import { t, tSource, useT } from "@/lib/i18n";
 import { errOf } from "@/lib/errors";
+import { normalizeLog } from "@/lib/log-normalize";
 import type { ActivityInfo, ConversionReport, ConversionTask } from "@/lib/types";
 import { TaskErrorCard } from "@/features/tasks/detail/TaskErrorCard";
 import { ActivitySubBar, activityMeasure, activityVerb } from "@/features/tasks/detail/ActivityBar";
@@ -238,11 +239,15 @@ export function TaskDetailPage() {
     const actionKey = running ? "running" : task.status;
     const started = task.startedAt ?? task.createdAt;
     const elapsed = (task.finishedAt ?? Date.now()) - started;
-    const lastLog = task.logs[task.logs.length - 1];
+    const lastLog = normalizeLog(task.logs[task.logs.length - 1]?.message ?? "");
     /** 当前动作只在运行中有意义：终态下事件里的残值不该再画子条 */
     const act = task.status === "running" ? activity : undefined;
     const hiddenLogs = Math.max(0, task.logs.length - LOG_RENDER_CAP);
-    const visibleLogs = hiddenLogs > 0 ? task.logs.slice(-LOG_RENDER_CAP) : task.logs;
+    // 只整理真正要显示的这几行（口径与判据见 log-normalize.ts）
+    const visibleLogs = (hiddenLogs > 0 ? task.logs.slice(-LOG_RENDER_CAP) : task.logs).map((l) => ({
+        ...l,
+        ...normalizeLog(l.message),
+    }));
     const counts = task.counts;
     const packName = truncateMiddle(
         task.pack.fileName.replace(/\.(mrpack|zip|7z)$/i, ""),
@@ -277,9 +282,11 @@ export function TaskDetailPage() {
     };
 
     const copyPlan = async () => {
-        if (!report) return;
+        // 没有报告也照样能复制：方案是任务快照，失败与取消那两态缺的只是【产物】一节
         try {
-            await navigator.clipboard.writeText(buildPlanSummary(task, report, outPath));
+            // 「新增模组」要逐条列名，报告里只有计数 ⇒ 复制这一下现取方案快照（本地读档，不联网）
+            const plan = await api.getTaskPlan(task.id).catch(() => null);
+            await navigator.clipboard.writeText(buildPlanSummary(task, report, outPath, plan));
             setPlanCopied(true);
             window.setTimeout(() => setPlanCopied(false), 2000);
         } catch (e) {
@@ -457,10 +464,10 @@ export function TaskDetailPage() {
                                                 >
                                                     {act
                                                         ? `${activityVerb(act.kind)} · ${act.subject}`
-                                                        : (lastLog ? tSource(lastLog.message) : t("tasks.waiting-log", "等待日志…"))}
+                                                        : (lastLog.message ? tSource(lastLog.message) : t("tasks.waiting-log", "等待日志…"))}
                                                 </span>
                                                 <Tip
-                                                    label={act?.subject ?? (lastLog ? tSource(lastLog.message) : undefined)}
+                                                    label={act?.subject ?? (lastLog.message ? tSource(lastLog.message) : undefined)}
                                                     align="start"
                                                     wide
                                                 />
@@ -517,7 +524,10 @@ export function TaskDetailPage() {
                                             title={t("tasks.logs", "日志")}
                                             right={
                                                 <LogCopyButton
-                                                    logs={task.logs}
+                                                    logs={task.logs.map((l) => ({
+                                                        ...l,
+                                                        ...normalizeLog(l.message),
+                                                    }))}
                                                     header={`SideShift 日志 · ${task.pack.fileName} · ${task.id}`}
                                                 />
                                             }
@@ -664,24 +674,26 @@ export function TaskDetailPage() {
                                 </Btn>
                             )}
                             {task.status === "success" && (
-                                <>
-                                    <Btn
-                                        variant="primary"
-                                        full
-                                        className="font-semibold"
-                                        onClick={() => void openOutput()}
-                                    >
-                                        {t("tasks.open-output", "打开输出位置")}
-                                    </Btn>
-                                    <Btn
-                                        size="sm"
-                                        full
-                                        className="bg-surface text-text-1"
-                                        onClick={() => void copyPlan()}
-                                    >
-                                        {planCopied ? t("tasks.plan-copied", "已复制方案") : t("tasks.copy-plan", "复制转换方案")}
-                                    </Btn>
-                                </>
+                                <Btn
+                                    variant="primary"
+                                    full
+                                    className="font-semibold"
+                                    onClick={() => void openOutput()}
+                                >
+                                    {t("tasks.open-output", "打开输出位置")}
+                                </Btn>
+                            )}
+                            {/* 复制方案不挑成败：方案是任务快照，失败与取消照样能抄走重跑，
+                                只有跑着的时候它还没定下来 */}
+                            {!running && (
+                                <Btn
+                                    size="sm"
+                                    full
+                                    className="bg-surface text-text-1"
+                                    onClick={() => void copyPlan()}
+                                >
+                                    {planCopied ? t("tasks.plan-copied", "已复制方案") : t("tasks.copy-plan", "复制转换方案")}
+                                </Btn>
                             )}
                         </Swap>
                         {/* 回退固定占动作组最后一条 */}

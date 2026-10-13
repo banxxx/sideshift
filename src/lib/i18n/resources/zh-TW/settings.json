@@ -52,7 +52,7 @@
   "settings.mcmod-lookup-desc": "額外查詢 MC百科詞條的「運行環境」",
   "settings.mcmod-lookup-inert": "反查關閉時這一檔不起作用",
   "settings.mod-files": "還沒有下載過模組檔案",
-  "settings.modrinth-mirror-desc": "網路添加的搜尋/詳情/版本/譯文優先走 mcimirror 鏡像、官方自動兜底；CurseForge 資料始終經 mcimirror 獲取",
+  "settings.modrinth-mirror-desc": "網路添加的搜尋/詳情/版本/譯文優先走 mcimirror 鏡像、官方自動兜底",
   "settings.modrinth-query": "Modrinth 查詢",
   "settings.name-count": "已清理{{name}} {{count}} 項 · {{size}}",
   "settings.nothing-clean": "沒有需要清理的{{name}}",

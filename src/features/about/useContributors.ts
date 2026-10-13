@@ -50,9 +50,11 @@ export function useContributors() {
 
     useEffect(() => {
         let on = true;
-        // 快照每次进页都读：本地一次文件读、不走网络，而且「上一次启动存下来的那份」要立刻可见
+        // 快照每次进页都读：本地一次文件读、不走网络，而且「上一次启动存下来的那份」要立刻可见。
+        // 空快照照样定档（`take` 自己分 ready/none）：本次启动只对账一次，第二次进页没有请求在飞，
+        // 这一档要是挡掉，状态就永远停在 pending
         void api.loadAckSnapshot().then((list) => {
-            if (on && list?.people.length) take(list);
+            if (on && list) take(list);
         });
         if (!reconciled) void pull();
         return () => {

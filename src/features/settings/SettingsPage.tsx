@@ -556,7 +556,7 @@ export function SettingsPage() {
                         label={t("settings.modrinth-query", "Modrinth 查询")}
                         desc={t(
                             "settings.modrinth-mirror-desc",
-                            "网络添加的搜索/详情/版本/译文优先走 mcimirror 镜像、官方自动兜底；CurseForge 数据始终经 mcimirror 获取"
+                            "网络添加的搜索/详情/版本/译文优先走 mcimirror 镜像、官方自动兜底"
                         )}
                     >
                         <SearchSelect

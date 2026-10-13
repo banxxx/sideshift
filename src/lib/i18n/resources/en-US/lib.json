@@ -27,6 +27,8 @@
   "lib.install": "Install",
   "lib.installing": "Installing",
   "lib.jar-metadata": "Jar metadata",
+  "lib.log-net-offline": "Can't reach the download source. Check your network or proxy",
+  "lib.log-net-timeout": "Download timed out. Try again later",
   "lib.mcmod-entry": "Wiki entry",
   "lib.minutes-seconds": "{{minutes}}m {{seconds}}s",
   "lib.mirror-project": "Modrinth mirror",

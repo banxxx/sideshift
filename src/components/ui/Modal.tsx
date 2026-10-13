@@ -81,7 +81,12 @@ export function ModalShell({
                         "scrim-veil fixed inset-[var(--win-inset)] z-50 transition-opacity duration-200",
                         "data-[starting-style]:opacity-0 data-[ending-style]:opacity-0"
                     )}
-                />
+                >
+                    {/* 标题那一行的全透明拖拽带：只换事件归属，不带任何底色/模糊 ⇒ 磨砂面照旧。
+                        必须是遮罩的子元素（同层绘制 ⇒ 永远压不过弹窗面）且属性挂在它自己身上
+                        （tauri 的 drag.js 只认命中的那个元素，裸属性不吃祖先）。 */}
+                    <div data-tauri-drag-region className="absolute inset-x-0 top-0 h-[var(--bar-h)]" />
+                </DialogPrimitive.Backdrop>
                 <DialogPrimitive.Popup
                     className={cn(
                         // v5：弹窗面是近白半透明 + 磨砂 + modal 投影，不再吃描边

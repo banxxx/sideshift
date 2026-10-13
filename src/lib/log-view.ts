@@ -8,13 +8,16 @@ export interface ClipLog {
     time?: string;
     stage?: string;
     message: string;
+    /** 归一化改写过的行：原句跟着一起复制，界面干净、贴出来仍带着证据 */
+    evidence?: string;
 }
 
 /** 一行一条：`14:02:11 [parser] 读取清单 …`；头部用于带上线程/任务上下文 */
 export function logsToClipText(logs: ClipLog[], header?: string): string {
-    const lines = logs.map((l) =>
-        [l.time, l.stage ? `[${l.stage}]` : "", l.message].filter(Boolean).join(" ")
-    );
+    const lines = logs.map((l) => {
+        const text = l.evidence ? `${l.message} — ${l.evidence}` : l.message;
+        return [l.time, l.stage ? `[${l.stage}]` : "", text].filter(Boolean).join(" ");
+    });
     return header ? `${header}\n${lines.join("\n")}` : lines.join("\n");
 }
 

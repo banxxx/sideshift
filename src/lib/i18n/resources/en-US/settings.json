@@ -54,7 +54,7 @@
   "settings.mcmod-lookup-desc": "Additionally looks up the MC Wiki entry's runtime-environment line",
   "settings.mcmod-lookup-inert": "Has no effect while side lookup is off",
   "settings.mod-files": "No mod files downloaded yet",
-  "settings.modrinth-mirror-desc": "Search/detail/versions/translations from Modrinth prefer the mcimirror proxy with official fallback; CurseForge data always comes via mcimirror",
+  "settings.modrinth-mirror-desc": "Search/detail/versions/translations from Modrinth prefer the mcimirror proxy with official fallback",
   "settings.modrinth-query": "Modrinth queries",
   "settings.name-count_one": "{{name}}: {{count}} item cleaned · {{size}}",
   "settings.name-count_other": "{{name}}: {{count}} items cleaned · {{size}}",
