@@ -5,7 +5,7 @@
  * 本文件只留「状态 → 派生 → 动作 → 右栏摘要」数据主干：设置卡见 OptionCards，方案卡见 ModPlanCard，方案行见 PlanModRow，静态选项见 constants。
  */
 import { Archive, ChevronRight, Download, Folder, Layers, TriangleAlert } from "lucide-react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { motion } from "motion/react";
 import * as api from "@/lib/api";
 import { usePackStore, type PlanDraft } from "@/lib/pack-store";
@@ -75,8 +75,14 @@ export function ConvertPage() {
     const [tab, setTab] = useState<ModDisposition>("remove");
     const [mcOptions, setMcOptions] = useState<SelectOption[]>([]);
     const [loaderOptions, setLoaderOptions] = useState<SelectOption[]>([]);
+    /** 加载器列表那条腿的取数状态。只有 `failed` 会改界面（那颗下拉的 placeholder）：
+     *  「没取到」与「这一档确实没有可用版本」是两句话，压成同一句「待选择」就是在骗人。 */
+    const [loaderListState, setLoaderListState] = useState<"idle" | "loading" | "failed">("idle");
     /** 已经为哪一档 MC 版本拉过加载器列表；与当前 `mcVersion` 不等 ⇒ 用户换过档，选中值要跟着重选 */
     const loaderMcRef = useRef<string | null>(null);
+    /** 在飞请求的序号：只有最新那一趟的结果能落地。换档与「点开重拉」两条腿共用这一个作废口径，
+     *  迟到的回包既不能盖掉新档的列表，也不能把已经取到的那一档又写成「没取到」。 */
+    const loaderReqRef = useRef(0);
     /** 源包 `modrinth.index.json` 声明的加载器版本：换档后查不到可用列表时回归的默认选择 */
     const declaredLoaderRef = useRef<string>("");
     // 处置清单弹窗：null=关；remove/keep 决定壳的视角（剔除/保留共用一壳）
@@ -280,24 +286,19 @@ export function ConvertPage() {
         };
     }, [packId]);
 
-    // MC 版本变更 → 重新拉取该版本可用的加载器版本，并让**选中值**跟着这一档走。
-    // 2026-09-28 实测两件事：Fabric 的 `versions/loader/{mc}` 对 1.13 以上各档给的是同一份全量表
-    // （所以这一档的"变化"来自候选列表整份，而不是选中值自己挪位）；Forge/NeoForge 才是按 MC 分代
-    // （1.20.1 是 47.x、1.21 是 2.x），旧号在新档里不存在 ⇒ 必须重选，否则会留在一个跑不通的号上，
-    // 而 SearchSelect 找不到匹配项时是原样把字符串显示出来的，看上去就是"切了版本没反应"。
     const mcVersion = options?.mcVersion;
-    useEffect(() => {
-        if (!mcVersion) return;
-        // 换档时上一轮的迟到回包不能盖成新档的列表（与 Java 探测那条腿同一个 alive 口径）
-        let alive = true;
-        // 首次装载那一档的版本号来自源包声明（`modrinth.index.json` 的 dependencies），属于「包里写的」
-        // 而不是「我们选的」，不能在这里改写；只有用户换过 MC 版本才重选。
-        const switched = loaderMcRef.current !== mcVersion;
-        loaderMcRef.current = mcVersion;
+    /** 拉某一档 MC 版本的加载器列表。`switched` 只有换档那条腿传 true：首次装载那一档是源包
+     *  `modrinth.index.json` 声明的（「包里写的」而不是「我们选的」），不该被动；点开下拉重拉时选中值
+     *  早就落地了，同样不改写——人只是点开看一眼，不该被换掉。 */
+    const loadLoaderVersions = useCallback((mc: string, switched: boolean) => {
+        const seq = ++loaderReqRef.current;
+        setLoaderListState("loading");
         /** 选中值落到新档：用户的挑选在新档依然成立就不动，否则取推荐项（无推荐取首项）；
          *  列表空（那档查无可用版本，或请求失败）时回归源包声明那一档——他定的口径：拉不到数据就用默认。 */
-        const settle = (opts: SelectOption[]) => {
+        const settle = (opts: SelectOption[], status: "idle" | "failed") => {
+            if (seq !== loaderReqRef.current) return;
             setLoaderOptions(opts);
+            setLoaderListState(status);
             if (!switched) return;
             const rec = opts.find((o) => o.recommended) ?? opts[0];
             setOptions((o) => {
@@ -306,17 +307,43 @@ export function ConvertPage() {
             });
         };
         void api
-            .listLoaderVersions(mcVersion)
-            .then((l) => {
-                if (alive) settle(l.map(toOption));
-            })
-            .catch(() => {
-                if (alive) settle([]);
+            .listLoaderVersions(mc)
+            .then((l) => settle(l.map(toOption), "idle"))
+            .catch((e: unknown) => {
+                if (seq !== loaderReqRef.current) return;
+                settle([], "failed");
+                // 与 MC 版本列表同一口径：列表空着不等于「这个包没有可选版本」，得说一句话把原因挂出来
+                notify(
+                    t("convert.loader-list-failed", "Loader 版本列表没取到 · {{reason}}", {
+                        reason: errOf(e),
+                    }),
+                    "error"
+                );
             });
+    }, []);
+
+    // MC 版本变更 → 重新拉取该版本可用的加载器版本，并让**选中值**跟着这一档走。
+    // 2026-09-28 实测两件事：Fabric 的 `versions/loader/{mc}` 对 1.13 以上各档给的是同一份全量表
+    // （所以这一档的"变化"来自候选列表整份，而不是选中值自己挪位）；Forge/NeoForge 才是按 MC 分代
+    // （1.20.1 是 47.x、1.21 是 2.x），旧号在新档里不存在 ⇒ 必须重选，否则会留在一个跑不通的号上，
+    // 而 SearchSelect 找不到匹配项时是原样把字符串显示出来的，看上去就是"切了版本没反应"。
+    useEffect(() => {
+        if (!mcVersion) return;
+        const switched = loaderMcRef.current !== mcVersion;
+        loaderMcRef.current = mcVersion;
+        loadLoaderVersions(mcVersion, switched);
         return () => {
-            alive = false;
+            // 换档/离开页面：把在飞那一趟作废，迟到的回包不能盖成新结论（与 Java 探测那条腿同一个 alive 口径）
+            loaderReqRef.current++;
         };
-    }, [mcVersion]);
+    }, [mcVersion, loadLoaderVersions]);
+
+    /** 点开下拉就重发一次：这一档的列表是网络取来的，断网那一趟留下的空列表不会自己补回来
+     *  （出口与 Java 那颗的 `onJavaProbe` 同一个），省掉的是「换个 MC 版本再换回来」或者重进页面。 */
+    const reloadLoaderVersions = () => {
+        if (!mcVersion || loaderListState === "loading") return;
+        loadLoaderVersions(mcVersion, false);
+    };
 
     // 需求线也跟着 MC 版本走：不重取的话，提示里那句「本次需要 Java N 及以上」、「自动选择」挑哪一枚、
     // 实跑那把筛子用的都还是**源包**那一档（1.20.1 的包切到 1.21 仍然按 17 去跑 installer）。
@@ -816,6 +843,8 @@ export function ConvertPage() {
                             loader={loader}
                             mcOptions={mcOptions}
                             loaderOptions={loaderOptions}
+                            loaderListFailed={loaderListState === "failed"}
+                            onLoaderOpen={reloadLoaderVersions}
                             javaProbe={javaProbe}
                             onJavaProbe={reprobeJava}
                         />

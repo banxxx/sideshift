@@ -3,7 +3,7 @@
  * 页面注册表按导航栈栈顶渲染；新增页面 = 在 navigation.tsx 扩 key + 此处注册组件
  */
 import type { ComponentType } from "react";
-import { useEffect } from "react";
+import { useEffect, useLayoutEffect } from "react";
 import { AnimatePresence, MotionConfig, motion } from "motion/react";
 import { Sidebar } from "@/components/layout/Sidebar";
 import { TitleBar } from "@/components/layout/TitleBar";
@@ -54,7 +54,10 @@ function Shell() {
     // 这个开关写在 <html> 而不是外壳 div 上：`--win-inset` 得让**body 层的 portal**（弹窗遮罩）
     // 也读得到——遮罩收在卡片边沿上靠的就是这一个数，留在外壳 div 上时它只覆盖到那一棵子树。
     const { isMaximized } = useWindowControls();
-    useEffect(() => {
+    // 必须 layout effect：`isMaximized` 是异步 IPC 回来的，回来那一帧窗口尺寸已经改完了，
+    // 用被动的 `useEffect` 会先按旧值画一遍（整窗往外扩 6px、四角与投影那一圈还在），
+    // 下一帧才收掉 ⇒ 最大化那一下的「闪」。与 `useLogFollow` 同一口径：改 DOM 得赶在画之前。
+    useLayoutEffect(() => {
         document.documentElement.toggleAttribute("data-win-max", isMaximized);
     }, [isMaximized]);
 

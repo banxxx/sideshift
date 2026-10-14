@@ -2,7 +2,7 @@
  * 运行日志控制台卡（v5 ConsoleCard）：与 ShiftRail 平级的独立卡——卡头「运行日志 + 时间芯片 + 复制」，
  * 日志行直接排在卡面上（不再有内嵌的描边小盒）。
  * 时间芯片取末行日志的 HH:MM（没有日志时落到本地时钟），是「这份日志新鲜到什么时候」的一眼读数。
- * 行为与原轨道内嵌控制台一致：log-scroll 定高滚动、新行贴底（useLogFollow）、复制走 LogCopyButton。
+ * 行为与原轨道内嵌控制台一致：日志区随窗口长高（`.log-scroll` + `.log-fill`）、新行贴底（useLogFollow）、复制走 LogCopyButton。
  */
 import { useRef } from "react";
 import { cn } from "@/lib/utils";
@@ -68,11 +68,11 @@ export function RailConsole({ logs, waiting, clipHeader, className }: RailConsol
                 />
             </header>
 
-            {/* 日志区：v5 没有内嵌小盒，行直接排在卡面上；定高滚动口径沿用原控制台
-                （12.5vh 上限 100：1200×800 下正好 ≈4 行，窗口变矮跟着收） */}
+            {/* 日志区：v5 没有内嵌小盒，行直接排在卡面上。高度不写在这里——`.log-fill`（App.css）
+                给下限（原控制台口径）与上限（滚动口剩下的那一截），窗口最大化时卡片跟着长高。 */}
             <div
                 ref={logBoxRef}
-                className="log-scroll h-[clamp(56px,12.5vh,100px)] overflow-y-auto flex flex-col gap-2"
+                className="log-scroll log-fill flex flex-col gap-2 overflow-y-auto"
             >
                 {logs.length === 0 && waiting ? (
                     <p className="flex items-center gap-2.5 font-mono text-[11px] leading-[16px]">

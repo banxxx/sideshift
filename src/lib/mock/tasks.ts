@@ -511,14 +511,11 @@ export function mockClearTrash(): number {
     return n;
 }
 
-/** 镜像 Rust 的 `msg!`：一条模板句同时给出「渲染好的中文整句」和「模板 + 参数」。
- *  两边口径必须一致——mock 里只给整句的话，界面上那条永远翻不出来，真机却翻得出来，
- *  自测就会在两种数据下看到两套语言。 */
 /** 镜像 Rust 的 `l10n::value_text`：槽值贴进句子里的那段文本 */
 function valueText(v: unknown): string {
     if (typeof v === "string") return v;
     if (v && typeof v === "object") {
-        const m = v as BackendMsg;
+        const m = v as Partial<BackendMsg>;
         // 槽值本身又是句模板时：内层连它一起渲染，不能 `[object Object]`
         if (typeof m.key === "string") return renderMsg(m.key, m.args ?? undefined).zh;
         return JSON.stringify(v);
@@ -530,7 +527,7 @@ function valueText(v: unknown): string {
  *  两边口径必须一致——mock 里只给整句的话，界面上那条永远翻不出来，真机却翻得出来，
  *  自测就会在两种数据下看到两套语言。 */
 function renderMsg(key: string, args?: Record<string, unknown> | null) {
-    const zh = key.replace(/\{\{\s*(\w+)\s*\}\}/g, (_, slot: string) => {
+    const zh = key.replace(/\{\{\s*(\w+)\s*}}/g, (_, slot: string) => {
         const v = args?.[slot];
         // 漏传参数一眼看出来（Rust 同款：槽原样留着），不静默变空串
         return v == null ? `{{${slot}}}` : valueText(v);

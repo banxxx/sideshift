@@ -82,6 +82,8 @@ export function RuntimeEnvCard({
     loader,
     mcOptions,
     loaderOptions,
+    loaderListFailed,
+    onLoaderOpen,
     javaProbe,
     onJavaProbe,
     readOnly,
@@ -93,6 +95,11 @@ export function RuntimeEnvCard({
     loader: string;
     mcOptions: SelectOption[];
     loaderOptions: SelectOption[];
+    /** Loader 列表那一趟请求失败了：placeholder 换成「没取到 · 点开重试」。
+     *  空列表有两种来路（那档真没有可用版本 / 请求没成），压成同一句「待选择」就是在骗人。 */
+    loaderListFailed?: boolean;
+    /** 点开 Loader 下拉时重拉一次列表：这一档的候选是网络取来的，断网那趟留下的空列表不会自己补回来 */
+    onLoaderOpen?: () => void;
     /** 本机 JDK 探测结果（只在开了「本机安装 Loader」时才有值；null = 还在探）。
      *  它同时是那颗下拉的候选来源：事前检查与候选必须是同一份事实，不然提示说的和列表给的对不上。
      *  回看态（`readOnly`）不传：那一态要核对的是「当时那套配置」，本机现在有没有 Java 与它无关。 */
@@ -159,11 +166,17 @@ export function RuntimeEnvCard({
                     label={`${loader} Loader`}
                     value={options?.loaderVersion ?? ""}
                     options={loaderOptions}
-                    // 裸 zip 没有 dependencies 段：列表到位前这一格是空的，给一句「待选择」而不是留白
-                    placeholder={t("convert.await-loader-version", "待选择")}
+                    // 裸 zip 没有 dependencies 段：列表到位前这一格是空的，给一句「待选择」而不是留白；
+                    // 请求没成的那一趟换成「没取到 · 点开重试」，同一段落里只换字、不动框
+                    placeholder={
+                        loaderListFailed
+                            ? t("convert.loader-list-none", "没取到 · 点开重试")
+                            : t("convert.await-loader-version", "待选择")
+                    }
                     searchable
                     searchPlaceholder={t("convert.search-versions", "搜索版本…")}
                     readOnly={readOnly}
+                    onOpen={onLoaderOpen}
                     onChange={(v) => patch({ loaderVersion: v })}
                 />
                 <SearchSelect

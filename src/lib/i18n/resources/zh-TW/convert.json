@@ -54,6 +54,8 @@
   "convert.keepable-folders": "包內未檢測到可保留的內容（mods 之外沒有資源檔案）",
   "convert.kept-client": "客戶端保留內容",
   "convert.launch-args": "啟動參數",
+  "convert.loader-list-failed": "Loader 版本列表沒取到 · {{reason}}",
+  "convert.loader-list-none": "沒取到 · 點開重試",
   "convert.local-java": "本地 Java 環境",
   "convert.manual-edits": "已清空手動修改，方案回到自動分類結果",
   "convert.max-players": "最大人數",

@@ -676,12 +676,7 @@ export function TaskDetailPage() {
                             {/* 复制方案不挑成败：方案是任务快照，失败与取消照样能抄走重跑，
                                 只有跑着的时候它还没定下来 */}
                             {!running && (
-                                <Btn
-                                    size="sm"
-                                    full
-                                    className="bg-surface text-text-1"
-                                    onClick={() => void copyPlan()}
-                                >
+                                <Btn size="sm" full onClick={() => void copyPlan()}>
                                     {planCopied ? t("tasks.plan-copied", "已复制方案") : t("tasks.copy-plan", "复制转换方案")}
                                 </Btn>
                             )}

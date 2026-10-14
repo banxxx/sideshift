@@ -174,7 +174,7 @@ const shardOf = (key) => key.split(".")[0];
 
 /** 一个键在这份表里算不算「有译文」：count 键看 _one/_other，其余看基础形 */
 const hasEntry = (table, key, zh) =>
-    key in table || (/\{\{\s*count\s*\}\}/.test(zh ?? "") && (`${key}_one` in table || `${key}_other` in table));
+    key in table || (/\{\{\s*count\s*}}/.test(zh ?? "") && (`${key}_one` in table || `${key}_other` in table));
 
 /** 表里属于这个键的所有条目（含单复数两形），用来逐条比对插值槽 */
 function entriesOf(table, key) {
@@ -257,7 +257,7 @@ function check({ fix = false } = {}) {
                     say("SLOT", `${lng} ${entry} 插值槽与原文不一致\n      原文: ${zh}\n      译文: ${value}`);
                 }
             }
-            if (/\{\{\s*count\s*\}\}/.test(zh) && lng === "en-US" && !(`${key}_one` in table))
+            if (/\{\{\s*count\s*}}/.test(zh) && lng === "en-US" && !(`${key}_one` in table))
                 say("PLURAL", `${lng} ${key} 是 count 键却没有 _one/_other`);
         }
     }

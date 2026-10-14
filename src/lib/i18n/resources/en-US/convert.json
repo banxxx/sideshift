@@ -65,6 +65,8 @@
   "convert.kept": "Kept",
   "convert.kept-client": "Kept client content",
   "convert.launch-args": "Launch args",
+  "convert.loader-list-failed": "Couldn't load the loader version list · {{reason}}",
+  "convert.loader-list-none": "Not loaded · click to retry",
   "convert.local": "Local",
   "convert.local-java": "Local Java",
   "convert.manual-edits": "Manual edits cleared; plan back to auto-classified",

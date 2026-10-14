@@ -46,7 +46,7 @@
   "lib.net-notfound": "{{site}} doesn't have that content",
   "lib.net-offline": "Can't reach {{site}}. Check your network or proxy",
   "lib.net-parse": "Couldn't read the data returned. Try again later",
-  "lib.net-retry": "Download failed after several retries. Check your network",
+  "lib.net-retry": "Download failed after retrying. Check your network",
   "lib.net-server": "{{site}} is unavailable right now. Try again later",
   "lib.net-timeout": "{{site}} is taking too long. Try again later",
   "lib.parse": "Parse",

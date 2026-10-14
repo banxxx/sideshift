@@ -60,7 +60,7 @@ export function netText(code: string): string | null {
         case "io":
             return t("lib.net-io", "本机读写文件失败，检查磁盘空间后重试");
         case "retry":
-            return t("lib.net-retry", "下载重试了几次都没成功，检查网络后重试");
+            return t("lib.net-retry", "下载重试后未成功，检查网络后重试");
         case "http":
             // 认不出的状态码：只说「没完成」，数字留在 detail 里给诊断信息用
             return t("lib.net-http", "{{site}} 没能完成这次请求，稍后重试", { site, status });

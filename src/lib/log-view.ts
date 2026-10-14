@@ -44,6 +44,8 @@ export function useLogFollow(ref: RefObject<HTMLElement | null>): void {
     const atBottom = useRef(true);
     /** 上一次提交时框内内容的签名，用来认出"这一帧只是别的状态在重渲染" */
     const tail = useRef("");
+    /** 上一次提交时容器自己的高度：换高是第三种变化（既不是新行、也不是用户滚动） */
+    const height = useRef(0);
 
     useLayoutEffect(() => {
         const el = ref.current;
@@ -58,6 +60,13 @@ export function useLogFollow(ref: RefObject<HTMLElement | null>): void {
         const sig = `${el.childElementCount}|${last?.textContent ?? ""}`;
         const hasNewLine = sig !== tail.current;
         tail.current = sig;
+        /* 容器自己换高（首页日志区随窗口长高/收矮）既不发 scroll 也不带来新行：不补这一口，
+           取消最大化之后 scrollTop 还停在旧位置，看到的是清单中间那截，得等下一条日志才回到底。 */
+        const boxH = el.clientHeight;
+        if (boxH !== height.current) {
+            height.current = boxH;
+            if (atBottom.current) el.scrollTop = el.scrollHeight;
+        }
         if (hasNewLine && atBottom.current) el.scrollTop = el.scrollHeight;
 
         return () => el.removeEventListener("scroll", onScroll);

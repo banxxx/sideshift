@@ -91,7 +91,8 @@ export function normalizeLog(raw: string): NormalizedLog {
 
 /** 认后端那句「模板 + 参数」（Rust: `l10n::Msg`，序列化后就是 key/args/zh 三个字段） */
 function isBackendMsg(v: unknown): v is BackendMsg {
-    return typeof v === "object" && v !== null && typeof (v as BackendMsg).key === "string";
+    // 字段来自 IPC，静态类型管不到运行时 ⇒ 这里按「可能是残缺的」查，Partial 就是给这个判据让路的
+    return typeof v === "object" && v !== null && typeof (v as Partial<BackendMsg>).key === "string";
 }
 
 /**
