@@ -3,6 +3,7 @@
  * 并预置一组历史样例让列表 / 详情 / 报告 / 错误卡都能直接走查。
  */
 import type {
+    BackendMsg,
     CheckResult,
     ConversionOptions,
     ConversionReport,
@@ -29,36 +30,62 @@ const tasks = new Map<string, ConversionTask>();
 const timers = new Map<string, ReturnType<typeof setInterval>>();
 let seq = 0;
 
+/** 一条样例日志：整句必给，「模板 + 参数」按 Rust 那边的同款形状一起给（见 `logMsg`） */
+type LogSample = Pick<TaskLogLine, "message"> & Partial<Pick<TaskLogLine, "messageMsg">>;
+
 /** 一段模拟阶段：走到 until 就换下一段，logs 是该段的样例日志 */
-type StageSeg = { stage: ConversionTask["stage"]; until: number; logs: string[] };
+type StageSeg = { stage: ConversionTask["stage"]; until: number; logs: LogSample[] };
 
 const stagePlan: StageSeg[] = [
-    { stage: "parser", until: 15, logs: ["读取清单 vault-hunters 2.4.1 · minecraft-1.20.1"] },
+    {
+        stage: "parser",
+        until: 15,
+        logs: [logMsg("读取清单 {{fileName}} · minecraft-{{mcVersion}}", { fileName: "vault-hunters 2.4.1", mcVersion: "1.20.1" })],
+    },
     {
         stage: "detector",
         until: 30,
         logs: [
-            "包内内容：模组 187 个 · 其他文件 62 个 · 需联网补取 0 个",
-            "方案确认：剔除 41 · 保留 146 · 新增 2",
-            "剔除名单：Sodium、Iris、Xaero's Minimap…等 41 个",
+            logMsg("包内内容：模组 {{mods}} 个 · 其他文件 {{extras}} 个 · 需联网补取 {{offPack}} 个", {
+                mods: 187,
+                extras: 62,
+                offPack: 0,
+            }),
+            logMsg("方案确认：剔除 {{remove}} · 保留 {{keep}} · 新增 {{add}}", { remove: 41, keep: 146, add: 2 }),
+            logMsg("剔除名单：{{list}}…等 {{count}} 个", {
+                list: "Sodium、Iris、Xaero's Minimap",
+                count: 41,
+            }),
         ],
     },
     {
         stage: "downloader",
         until: 82,
         logs: [
-            "取件计划 146 项 · 需联网 24（≈128.0 MB）· 整合包 118 · 本地 0 · 缓存命中 4 · 并发 6",
-            "复用缓存 fabric-api-0.92.2+1.20.1.jar · 1.2 MB",
-            "联网获取 spark-1.10.60.jar · 2.4 MB",
-            "取件 · 模组 · 118 个 · 86.0 MB",
+            logMsg("取件计划 {{total}} 项 · 需联网 {{net}}（≈{{netSize}}）· 整合包 {{pack}} · 本地 {{local}} · 缓存命中 {{cached}} · 并发 {{concurrency}}", {
+                total: 146,
+                net: 24,
+                netSize: "128.0 MB",
+                pack: 118,
+                local: 0,
+                cached: 4,
+                concurrency: 6,
+            }),
+            logMsg("复用缓存 {{file}} · {{size}}", { file: "fabric-api-0.92.2+1.20.1.jar", size: "1.2 MB" }),
+            logMsg("联网获取 {{file}} · {{size}}", { file: "spark-1.10.60.jar", size: "2.4 MB" }),
+            logMsg("取件 · {{label}} · {{files}} 个 · {{size}}", { label: "模组", files: 118, size: "86.0 MB" }),
         ],
     },
     {
         stage: "builder",
         until: 100,
         logs: [
-            "生成包根文件：start.bat、start.sh、eula.txt、server.properties",
-            "打包 vault-hunters-2.4.1-server.zip · 148 个文件 · 96.4 MB",
+            logMsg("生成包根文件：{{list}}", { list: "start.bat、start.sh、eula.txt、server.properties" }),
+            logMsg("打包 {{fileName}} · {{entries}} 个文件 · {{size}}", {
+                fileName: "vault-hunters-2.4.1-server.zip",
+                entries: 148,
+                size: "96.4 MB",
+            }),
         ],
     },
 ];
@@ -74,7 +101,7 @@ function now(): string {
 const loaderJar: StageSeg = {
     stage: "downloader",
     until: 34,
-    logs: ["安装器就位：forge-1.20.1-47.2.0-installer.jar · 4.9 MB"],
+    logs: [logMsg("安装器就位：{{fileName}} · {{size}}", { fileName: "forge-1.20.1-47.2.0-installer.jar", size: "4.9 MB" })],
 };
 
 /**
@@ -86,9 +113,19 @@ const installer: StageSeg = {
     stage: "installer",
     until: 42,
     logs: [
-        "本机安装 · Java 21 · 官方安装器已启动",
-        "安装器 · 已写出 1328 个文件 · 106.4 MB",
-        "本机安装完成 · 用时 158.2 秒 · 顶层 run.bat、run.sh",
+        logMsg("本机安装 {{subject}} · Java {{java}} · {{path}}", {
+            subject: "Forge 1.20.1-47.2.0",
+            java: "21",
+            path: "C:\\Java\\jdk-21\\bin\\java.exe",
+        }),
+        logMsg("下载依赖库"),
+        logMsg("安装器报告成功"),
+        logMsg("本机安装完成 · {{subject}} · {{counts}} · 用时 {{secs}} 秒 · {{layout}}", {
+            subject: "Forge 1.20.1-47.2.0",
+            counts: logMsg("{{files}} 个文件 · {{size}}", { files: 1328, size: "106.4 MB" }).messageMsg,
+            secs: "158.2",
+            layout: logMsg("顶层 {{scripts}} + {{jars}}", { scripts: "run.bat、run.sh", jars: "forge-1.20.1-47.2.0-server.jar" }).messageMsg,
+        }),
     ],
 };
 
@@ -122,6 +159,13 @@ const NET_SAMPLE = [
  */
 
 const MIN = 60_000;
+
+/**
+ * seed-failed 的那句明细，与 `map_download_error` 同形（`{file} — 请求超时：{url}`）。
+ * 明细必须带 URL：前端认病因靠的就是它，少了这条 dev 里看到的和真机不是一套（见 `log-normalize.ts`）。
+ */
+const FAILED_DETAIL =
+    "forge-installer.jar — 请求超时：https://files.minecraftforge.net/maven/net/minecraftforge/forge/1.16.5-36.2.39/forge-1.16.5-36.2.39-installer.jar（已重试 3 次）";
 
 type SeedTask = Omit<ConversionTask, "options" | "counts" | "logs"> &
     Partial<Pick<ConversionTask, "options" | "counts" | "logs">>;
@@ -162,15 +206,24 @@ const HISTORY: ConversionTask[] = [
         finishedAt: Date.now() - 37 * MIN,
         error: {
             stage: "downloader",
-            title: "forge-installer 退出码 1",
-            detail: "下载 maven.minecraftforge.net 超时（已重试 3 次），可在设置中切换镜像源",
+            // 与真机同口径：种类码给界面那句话，长诊断串留在 detail 里备查（见 `src/lib/errors.ts`）
+            // 明细必须带 URL——真机那句是 `{file} — 请求超时：{url}`，前端归一化那层靠它认出病因
+            code: "net:timeout:files.minecraftforge.net",
+            title: "文件获取失败",
+            detail: FAILED_DETAIL,
             retryable: true,
             attempts: 3,
         },
         logs: [
-            { time: "14:02:11", stage: "parser", message: "读取清单 medieval-world 1.3 · minecraft-1.16.5", level: "info" },
-            { time: "14:02:19", stage: "detector", message: "发现 forge-36.2.39 · 74 个模组 · 18 个客户端专属已标记剔除", level: "info" },
-            { time: "14:07:03", stage: "downloader", message: "forge-installer.jar 下载超时 · 第 3 次重试失败", level: "error" },
+            { time: "14:02:11", stage: "parser", ...logMsg("读取清单 {{fileName}} · minecraft-{{mcVersion}}", { fileName: "medieval-world 1.3", mcVersion: "1.16.5" }), level: "info" },
+            { time: "14:02:19", stage: "detector", ...logMsg("方案确认：剔除 {{remove}} · 保留 {{keep}} · 新增 {{add}}", { remove: 18, keep: 52, add: 4 }), level: "info" },
+            {
+                time: "14:07:03",
+                stage: "downloader",
+                // 失败行的形状与 `events.rs::fail` 一致：外层「标题 · 明细」，标题是登记过的固定句
+                ...logMsg("{{title}} · {{detail}}", { title: "文件获取失败", detail: FAILED_DETAIL }),
+                level: "error",
+            },
         ],
     }),
     seedTask({
@@ -187,8 +240,8 @@ const HISTORY: ConversionTask[] = [
         outputFileName: "create-server-1.21.4.zip",
         outputSizeBytes: 412 * 1024 * 1024,
         logs: [
-            { time: "11:20:41", stage: "parser", message: "读取清单 create-fabric 1.21.4 · minecraft-1.21.4", level: "info" },
-            { time: "11:25:02", stage: "builder", message: "生成 start.sh / start.bat · 打包 create-server-1.21.4.zip", level: "info" },
+            { time: "11:20:41", stage: "parser", ...logMsg("读取清单 {{fileName}} · minecraft-{{mcVersion}}", { fileName: "create-fabric 1.21.4", mcVersion: "1.21.4" }), level: "info" },
+            { time: "11:25:02", stage: "builder", ...logMsg("打包 {{fileName}} · {{entries}} 个文件 · {{size}}", { fileName: "create-server-1.21.4.zip", entries: 122, size: "393.1 MB" }), level: "info" },
         ],
     }),
     seedTask({
@@ -215,8 +268,8 @@ const HISTORY: ConversionTask[] = [
         startedAt: Date.now() - 26 * 60 * MIN,
         finishedAt: Date.now() - 22 * 60 * MIN,
         logs: [
-            { time: "13:41:08", stage: "detector", message: "发现 fabric-loader 0.15.3 · 342 个模组 · 96 个客户端专属已标记剔除", level: "info" },
-            { time: "13:45:52", stage: "downloader", message: "任务已被用户取消", level: "warn" },
+            { time: "13:41:08", stage: "detector", ...logMsg("方案确认：剔除 {{remove}} · 保留 {{keep}} · 新增 {{add}}", { remove: 96, keep: 240, add: 6 }), level: "info" },
+            { time: "13:45:52", stage: "downloader", ...logMsg("任务已被用户取消"), level: "warn" },
         ],
     }),
     seedTask({
@@ -232,8 +285,8 @@ const HISTORY: ConversionTask[] = [
         outputFileName: "fo-7.1-server.zip",
         outputSizeBytes: 236 * 1024 * 1024,
         logs: [
-            { time: "09:12:30", stage: "parser", message: "读取清单 fabulously-optimized 7.1 · minecraft-1.20.1", level: "info" },
-            { time: "09:16:12", stage: "builder", message: "生成 start.sh / start.bat · 打包 fo-7.1-server.zip", level: "info" },
+            { time: "09:12:30", stage: "parser", ...logMsg("读取清单 {{fileName}} · minecraft-{{mcVersion}}", { fileName: "fabulously-optimized 7.1", mcVersion: "1.20.1" }), level: "info" },
+            { time: "09:16:12", stage: "builder", ...logMsg("打包 {{fileName}} · {{entries}} 个文件 · {{size}}", { fileName: "fo-7.1-server.zip", entries: 214, size: "225.1 MB" }), level: "info" },
         ],
     }),
 ];
@@ -357,15 +410,14 @@ function advance(id: string) {
         } else {
             task.activity = undefined;
         }
-        // 每进入新阶段补一条日志（近似：按进度里程碑）
-        if (task.progress % 15 === 2) {
-            const line: TaskLogLine = {
-                time: now(),
-                stage: seg.stage!,
-                message: seg.logs[Math.floor(Math.random() * seg.logs.length)],
-                level: "info",
-            };
-            task.logs.push(line);
+        // 进入新段就补这一段的样例日志（按进度里程碑随机抽会漏掉「本机安装」那一段：
+        // 它只有 34→42 八个点，每 15 个点抽一次永远落不进去，而那几句正是嵌套模板的样例）
+        // 已推条数等于前面几段的条数 ⇒ 这一刻正好是本段第一拍，不用另存状态也不会重播
+        const before = plan.slice(0, segIdx).reduce((n, s) => n + s.logs.length, 0);
+        if (task.logs.length === before) {
+            for (const l of seg.logs) {
+                task.logs.push({ time: now(), stage: seg.stage!, ...l, level: "info" });
+            }
         }
         if (task.progress >= 100) {
             task.status = "success";
@@ -398,7 +450,7 @@ export function mockCancelTask(id: string): void {
         task.status = "cancelled";
         task.activity = undefined;
         task.finishedAt = Date.now();
-        task.logs.push({ time: now(), stage: task.stage ?? "builder", message: "任务已被用户取消", level: "warn" });
+        task.logs.push({ time: now(), stage: task.stage ?? "builder", ...logMsg("任务已被用户取消"), level: "warn" });
         // 排队行没有推进器，取消后由其替运行中任务交棒；运行中的交棒在 advance 里做
         if (wasQueued) dequeueNext();
     }
@@ -459,14 +511,42 @@ export function mockClearTrash(): number {
     return n;
 }
 
-/** 镜像 Rust 的 `msg!` + `check()`：一条模板句同时给出「渲染好的中文整句」和「模板 + 参数」。
+/** 镜像 Rust 的 `msg!`：一条模板句同时给出「渲染好的中文整句」和「模板 + 参数」。
  *  两边口径必须一致——mock 里只给整句的话，界面上那条永远翻不出来，真机却翻得出来，
  *  自测就会在两种数据下看到两套语言。 */
+/** 镜像 Rust 的 `l10n::value_text`：槽值贴进句子里的那段文本 */
+function valueText(v: unknown): string {
+    if (typeof v === "string") return v;
+    if (v && typeof v === "object") {
+        const m = v as BackendMsg;
+        // 槽值本身又是句模板时：内层连它一起渲染，不能 `[object Object]`
+        if (typeof m.key === "string") return renderMsg(m.key, m.args ?? undefined).zh;
+        return JSON.stringify(v);
+    }
+    return String(v);
+}
+
+/** 镜像 Rust 的 `msg!`：一条模板句同时给出「渲染好的中文整句」和「模板 + 参数」。
+ *  两边口径必须一致——mock 里只给整句的话，界面上那条永远翻不出来，真机却翻得出来，
+ *  自测就会在两种数据下看到两套语言。 */
+function renderMsg(key: string, args?: Record<string, unknown> | null) {
+    const zh = key.replace(/\{\{\s*(\w+)\s*\}\}/g, (_, slot: string) => {
+        const v = args?.[slot];
+        // 漏传参数一眼看出来（Rust 同款：槽原样留着），不静默变空串
+        return v == null ? `{{${slot}}}` : valueText(v);
+    });
+    return { key, args: args ?? null, zh };
+}
+
+/** 日志行那一份：字段名跟着 `TaskLogLine` 走（`message` + `messageMsg`） */
+function logMsg(key: string, args?: Record<string, unknown>): LogSample {
+    const m = renderMsg(key, args);
+    return { message: m.zh, messageMsg: m };
+}
+
 function msg(key: string, args?: Record<string, unknown>) {
-    const zh = key.replace(/\{\{\s*(\w+)\s*\}\}/g, (_, slot: string) =>
-        String(args?.[slot] ?? `{{${slot}}}`)
-    );
-    return { detail: zh, detailMsg: { key, args: args ?? null, zh } };
+    const m = renderMsg(key, args);
+    return { detail: m.zh, detailMsg: m };
 }
 
 export function mockReport(taskId: string): ConversionReport | undefined {

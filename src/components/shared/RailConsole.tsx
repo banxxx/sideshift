@@ -53,7 +53,7 @@ export function RailConsole({ logs, waiting, clipHeader, className }: RailConsol
             )}
         >
             <header className="flex items-center gap-2.5">
-                <span className="text-[12px] leading-[16px] font-semibold text-text-1">
+                <span className="text-[12px] leading-[16px] font-semibold text-text-3">
                     {t("lib.run-log", "运行日志")}
                 </span>
                 <span className="rounded-md bg-surface px-[7px] py-[2px] font-mono text-[10px] leading-[14px] text-text-3">

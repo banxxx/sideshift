@@ -1,4 +1,6 @@
 use super::*;
+use crate::l10n::Msg;
+use crate::msg;
 
 /// 开了「本机安装 Loader」⇒ 官方安装器 jar 从主轮计划里拎出来提前取（阶段 2.5），
 /// 关着 ⇒ 一切照旧，它仍是取件计划里的一项。判据只在这一个函数里，两家不会走偏
@@ -49,14 +51,17 @@ pub(super) async fn prefetch_loader_jar(
             // 途中那十几 MB 由实时条按真实字节走
             let _ = done;
             let (a, s, i) = (app_f.clone(), state_f.clone(), id_f.clone());
-            let line = format!("安装器就位：{} · {}", oc.file_name, fmt_size(oc.bytes));
+            let line = msg!(
+                "安装器就位：{{fileName}} · {{size}}",
+                {"fileName": oc.file_name.clone(), "size": fmt_size(oc.bytes)}
+            );
             log_update(
                 &a,
                 &s,
                 &i,
                 PipelineStage::Downloader,
                 if oc.retries > 0 { LogLevel::Warn } else { LogLevel::Info },
-                &line,
+                line,
                 move |t| t.progress = t.progress.max(LOADER_JAR_TO),
             );
         })
@@ -142,6 +147,7 @@ pub(super) async fn run_installer_stage(
                 stage: PipelineStage::Installer,
                 title: "本机没有可用的 Java".into(),
                 detail: probe.detail,
+                detail_msg: None,
                 code: None,
                 retryable: true,
                 attempts: None,
@@ -159,7 +165,7 @@ pub(super) async fn run_installer_stage(
                 &i,
                 PipelineStage::Installer,
                 LogLevel::Warn,
-                "方案里指定的那枚 Java 已不在本机，改用自动挑到的那一枚",
+                msg!("方案里指定的那枚 Java 已不在本机，改用自动挑到的那一枚"),
             );
         }
         push_log(
@@ -168,9 +174,13 @@ pub(super) async fn run_installer_stage(
             &i,
             PipelineStage::Installer,
             LogLevel::Info,
-            &format!(
-                "本机安装 {subject} · Java {} · {found}",
-                probe.major.map(|m| m.to_string()).unwrap_or_else(|| "?".into())
+            msg!(
+                "本机安装 {{subject}} · Java {{java}} · {{path}}",
+                {
+                    "subject": subject.clone(),
+                    "java": probe.major.map(|m| m.to_string()).unwrap_or_else(|| "?".into()),
+                    "path": found.clone()
+                }
             ),
         );
 
@@ -189,9 +199,16 @@ pub(super) async fn run_installer_stage(
         };
         // 安装器侧每 500ms 才扫一次目录，节拍已经比取件慢一个量级，不再另攒窗口
         let mut on_event = |ev: InstallEvent| match ev {
-            InstallEvent::Log(line) => {
-                push_log(&a, &s, &i, PipelineStage::Installer, LogLevel::Info, line)
-            }
+            InstallEvent::Log(line) => push_log(
+                &a,
+                &s,
+                &i,
+                PipelineStage::Installer,
+                LogLevel::Info,
+                // 里程碑行自带 `msg!` 模板；安装器喊的报错行是 `Msg::foreign`，
+                // 界面按形状整成「对象 · 病因」（见 `src/lib/log-normalize.ts`）
+                line.clone(),
+            ),
             InstallEvent::Progress { files, bytes } => {
                 let secs = started.elapsed().as_secs_f64();
                 let info = ActivityInfo {
@@ -230,7 +247,7 @@ pub(super) async fn run_installer_stage(
                     &i,
                     PipelineStage::Installer,
                     LogLevel::Info,
-                    &install_done_line(&v, &subject),
+                    install_done_line(&v, &subject),
                 );
                 // 落点要说出来：复用模式下这里就是缓存桶的坐标，用户排查「装到哪去了」只靠这一行
                 push_log(
@@ -239,7 +256,7 @@ pub(super) async fn run_installer_stage(
                     &i,
                     PipelineStage::Installer,
                     LogLevel::Info,
-                    &format!("安装目录 {}", v.dir.display()),
+                    msg!("安装目录 {{path}}", {"path": v.dir.display().to_string()}),
                 );
                 update(&a, &s, &i, |t| t.progress = INSTALL_TO, true);
                 Ok(v)
@@ -253,47 +270,63 @@ pub(super) async fn run_installer_stage(
     match joined {
         Ok(r) => r,
         // 阻塞线程本身炸了（内部 panic）：与构建侧同款口径报失败，不让人对着一个不动的进度猜
-        Err(e) => Err(InstallStop::Failed(TaskError {
-            stage: PipelineStage::Installer,
-            title: "本机安装异常".into(),
-            detail: format!("安装线程异常：{e}"),
-            code: None,
-            retryable: true,
-            attempts: None,
-            log_tail: None,
-            exit_code: None,
-        })),
+        Err(e) => {
+            let detail = msg!("安装线程异常：{{cause}}", {"cause": Msg::foreign_arg(e.to_string())});
+            Err(InstallStop::Failed(TaskError {
+                stage: PipelineStage::Installer,
+                title: "本机安装异常".into(),
+                detail_msg: Some(detail.clone()),
+                detail: detail.zh,
+                code: None,
+                retryable: true,
+                attempts: None,
+                log_tail: None,
+                exit_code: None,
+            }))
+        }
     }
 }
 
 /// 安装成功的收场行：命中复用与真装出来的说法必须分开——前者一次进程都没起。
 /// 顶层布局也写进来：第 6 步的启动脚本三分叉就是按「有没有 run 脚本 / 顶层是不是散 jar」判的，
 /// 现在让它先在日志里可见，装错了能在这一行看出来
-pub(super) fn install_done_line(installed: &Installed, subject: &str) -> String {
-    let counts = format!(
-        "{} 个文件 · {}",
-        installed.report.files,
-        fmt_size(installed.report.bytes)
+pub(super) fn install_done_line(installed: &Installed, subject: &str) -> Msg {
+    let counts = msg!(
+        "{{files}} 个文件 · {{size}}",
+        {"files": installed.report.files, "size": fmt_size(installed.report.bytes)}
     );
     let layout = describe_layout(&installed.report.scripts, &installed.report.jars);
+    // 数量与布局各是一句「模板 + 参数」，嵌进外层当参数：拍平成字符串就永远是中文
     if installed.from_cache {
-        format!("复用已装的 {subject} · {counts} · 未起进程 · {layout}")
+        msg!(
+            "复用已装的 {{subject}} · {{counts}} · 未起进程 · {{layout}}",
+            {
+                "subject": subject,
+                "counts": counts.arg(),
+                "layout": layout.arg()
+            }
+        )
     } else {
-        format!(
-            "本机安装完成 · {subject} · {counts} · 用时 {:.1} 秒 · {layout}",
-            installed.report.elapsed.as_secs_f64()
+        msg!(
+            "本机安装完成 · {{subject}} · {{counts}} · 用时 {{secs}} 秒 · {{layout}}",
+            {
+                "subject": subject,
+                "counts": counts.arg(),
+                "secs": format!("{:.1}", installed.report.elapsed.as_secs_f64()),
+                "layout": layout.arg()
+            }
         )
     }
 }
 
-pub(super) fn describe_layout(scripts: &[String], jars: &[String]) -> String {
+pub(super) fn describe_layout(scripts: &[String], jars: &[String]) -> Msg {
     let head = if scripts.is_empty() { None } else { Some(scripts.join("、")) };
     let tail = if jars.is_empty() { None } else { Some(jars.join("、")) };
     match (head, tail) {
-        (Some(s), None) => format!("顶层 {s}"),
-        (Some(s), Some(j)) => format!("顶层 {s} + {j}"),
-        (None, Some(j)) => format!("无 run 脚本，顶层散 jar {j}"),
-        (None, None) => "顶层既无 run 脚本也无散 jar".to_string(),
+        (Some(s), None) => msg!("顶层 {{scripts}}", {"scripts": s}),
+        (Some(s), Some(j)) => msg!("顶层 {{scripts}} + {{jars}}", {"scripts": s, "jars": j}),
+        (None, Some(j)) => msg!("无 run 脚本，顶层散 jar {{jars}}", {"jars": j}),
+        (None, None) => msg!("顶层既无 run 脚本也无散 jar"),
     }
 }
 
@@ -308,14 +341,14 @@ pub(super) fn install_task_error(e: &installer::InstallError) -> TaskError {
         installer::InstallError::Incomplete { .. } => "安装器报成功却没装出结果",
         installer::InstallError::Cancelled => "本机安装已取消",
     };
-    let mut detail = e.to_string();
-    if matches!(e, installer::InstallError::Timeout { .. }) {
-        detail.push_str("，安装器进程已终止，半成品已回收");
-    }
+    // 明细的中文整句与「模板 + 参数」同源于 `InstallError::detail_msg`（那边有一条单测钉住），
+    // 这里不再自己拼尾巴
+    let detail_msg = e.detail_msg();
     TaskError {
         stage: PipelineStage::Installer,
         title: title.into(),
-        detail,
+        detail_msg: Some(detail_msg.clone()),
+        detail: detail_msg.zh,
         code: None,
         retryable: true,
         attempts: None,

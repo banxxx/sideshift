@@ -82,8 +82,9 @@ export function HomePage() {
         // overflow-clip + 12px 放行带：进出场时 PackCard 右移 64px / ShiftRail 下移 72px 属于
         // 容器外变换，不裁剪会撑大 main 的滚动区域、闪出横竖滚动条。
         // 不用 overflow-hidden：那圈裁剪盒正好卡在卡片左右边缘上，会把卡的投影按 0px 切掉
-        // （外层 main 的 px-8 本来就是给影留的，这一层不该再收一次）。`clip` 同样不生成滚动容器，
+        // （外层 main 那圈横向留白本来就是给影留的，这一层不该再收一次）。`clip` 同样不生成滚动容器，
         // 只是多出 12px 放行距离——够 24px 模糊半径的一半。
+        // 正文宽度上限不在这里：它挂在 `.page-scroll` 的 padding-inline 上，八页共用一条（见 App.css）。
         <div className="flex flex-col gap-5 min-h-full relative overflow-clip [overflow-clip-margin:12px] py-6">
             <PageHeader
                 title={
@@ -126,9 +127,10 @@ export function HomePage() {
                     ) : (
                         <motion.div key="cards" className="flex flex-col gap-5">
                             {/* 上半：拖放卡（≈58% 宽）+ 已选包详情卡。
-                                高度用 36vh 卡在设计稿的 288：1200×800 下 36vh 正好 288（像素级保真），
-                                窗口变矮时先收这里，而不是把下面的轨道卡挤出滚动区 */}
-                            <div className="flex h-[clamp(256px,36vh,288px)] items-stretch gap-5">
+                                clamp(...) 是**下限**而不是定高：详情卡的四格读数 + 按钮排实测要 293px，
+                                窗口一矮 36vh 就掉到 256——写死 h- 时卡片不会变矮，只会把按钮排顶到
+                                卡框外面（定高容器只溢出、不推兄弟）。留 min-h 让内容自己把行撑开。 */}
+                            <div className="flex min-h-[clamp(256px,36vh,288px)] items-stretch gap-5">
                                 <Dropzone
                                     layoutId="dropzone"
                                     compact

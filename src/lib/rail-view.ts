@@ -7,7 +7,7 @@
 import { Check, RefreshCw, X, type LucideIcon } from "lucide-react";
 import type { ConversionTask, FetchTally, PipelineStage, TaskStatus } from "@/lib/types";
 import type { Tone } from "@/components/ui";
-import { normalizeLog } from "@/lib/log-normalize";
+import { logText } from "@/lib/log-normalize";
 import { t } from "@/lib/i18n";
 
 /* ---- 轨道展示词表（ShiftRail 与本文件共用；定义放在视图模型层，避免 lib 反向依赖组件） ---- */
@@ -213,7 +213,7 @@ export function taskToRail(task: ConversionTask): TaskRailView {
 export function taskLogs(task: ConversionTask): RailLog[] {
     const finished = task.status !== "queued" && task.status !== "running";
     return task.logs.map((l, i) => {
-        const n = normalizeLog(l.message);
+        const n = logText(l);
         return {
             time: l.time,
             stage: l.stage,

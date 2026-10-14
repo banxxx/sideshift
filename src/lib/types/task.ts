@@ -2,6 +2,7 @@
 import type { LoaderKind, PackManifest } from "./pack";
 import type { ConversionOptions } from "./options";
 import type { ActivityInfo, FetchTally } from "./activity";
+import type { BackendMsg } from "./l10n";
 
 /**
  * 流水线阶段（对应 Rust core 各模块）。`installer` 是可选的一档：
@@ -24,6 +25,11 @@ export interface TaskLogLine {
     time: string;
     stage: PipelineStage;
     message: string;
+    /**
+     * 同一句话的「模板 + 参数」（Rust: `TaskLogLine::message_msg`），界面按它查翻译目录。
+     * 磁盘上的旧任务没有这一项 ⇒ 缺省，显示照旧走 `message` 的中文整句。
+     */
+    messageMsg?: BackendMsg | null;
     level: "info" | "warn" | "error";
 }
 
@@ -93,6 +99,11 @@ export interface TaskError {
     title: string;
     /** 详情 */
     detail: string;
+    /**
+     * 同一句明细的「模板 + 参数」（Rust: `TaskError::detail_msg`），错误卡正文按它查翻译目录。
+     * 只有后端自己写的那几句有它（本机安装那一族）；其余明细走种类码或形状归一化。
+     */
+    detailMsg?: BackendMsg | null;
     /** 错误种类代码（`net:offline:api.modrinth.com` 这类），界面按它出本地化提示；
      *  `detail` 保留原句给「复制诊断信息」。旧存档没有这个字段，回落 `detail`。 */
     code?: string;

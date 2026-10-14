@@ -88,7 +88,8 @@ function Shell() {
                 <div className="flex-1 flex flex-col min-w-0">
                     <TitleBar />
                     {/* 页面内容区：设计稿 MainArea padding [24,32]（纵向 24 / 横向 32）。
-                        纵向留白**由各页自己的根元素带**（见下），这里只留横向：
+                        纵向留白**由各页自己的根元素带**（见下），横向这一圈在 `.page-scroll` 里给：
+                        它读 `--pad-x`，窗口超宽时留白跟着变大 ⇒ 正文最宽 `--page-max`，闸门对八页一次生效。
                         滚动容器自带的 padding-top 是吸顶页头盖不住的一条带子——sticky 的贴合边落在
                         内容盒（padding 之下），页头永远差着这 24px，卡片从缝里露出来。
                         契约：每个页面根元素 = `py-6`（任务列表页把 pt-6 放进吸顶盒里，好让贴合边=留白起点）。
@@ -104,7 +105,7 @@ function Shell() {
                             initial={{ opacity: 0, y: 24 }}
                             animate={{ opacity: 1, y: 0, transition: PAGE_IN }}
                             exit={{ opacity: 0, y: -10, transition: PAGE_OUT }}
-                            className="page-scroll flex-1 overflow-auto px-8"
+                            className="page-scroll flex-1 overflow-auto"
                         >
                             <EntryFreezer entry={entry}>
                                 <Page />

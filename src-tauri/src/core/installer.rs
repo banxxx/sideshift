@@ -16,7 +16,9 @@ use std::time::{Duration, Instant};
 
 use thiserror::Error;
 
+use crate::l10n::Msg;
 use crate::models::LoaderKind;
+use crate::msg;
 
 #[cfg(windows)]
 const CREATE_NO_WINDOW: u32 = 0x0800_0000;
@@ -48,8 +50,9 @@ pub struct InstallInput<'a> {
 /// 安装过程事件。没有百分比：安装器那 22k 行输出不是接口，拿它算进度是瞎猜；
 /// 能确定的是「装出了多少文件、多少字节」，走完没走完由上层标「估算」。
 pub enum InstallEvent<'a> {
-    /// 放行的一条里程碑（固定部分已翻成本地语言；报错行原样带出，只加中文前缀）
-    Log(&'a str),
+    /// 放行的一条日志。里程碑是我们自己那句（`msg!` 模板，界面翻得动）；
+    /// 报错行是安装器喊的原文，只带我们的前缀 ⇒ `Msg::foreign`，界面按形状归一化（见 `src/lib/log-normalize.ts`）
+    Log(&'a Msg),
     /// 当前已装出的文件数与字节数
     Progress { files: u64, bytes: u64 },
 }
@@ -73,12 +76,44 @@ pub enum InstallError {
     Spawn(String),
     #[error("已取消：安装器进程已终止")]
     Cancelled,
-    #[error("安装超时（{secs} 秒），安装器进程已终止")]
+    #[error("安装超时（{secs} 秒），安装器进程已终止，半成品已回收")]
     Timeout { secs: u64 },
     #[error("安装器退出码 {code}：{tail}")]
     Failed { code: String, tail: String },
     #[error("安装器报告成功，但 {dir} 里没装出 libraries/")]
     Incomplete { dir: String },
+}
+
+impl InstallError {
+    /// 同一句话的「模板 + 参数」形态，给错误卡与失败日志查翻译目录用（见 `crate::l10n`）。
+    /// 模板与上面的 `Display` 逐字对齐：**改措辞必须两处一起改**，否则中文整句与译文各说各话。
+    /// 系统/安装器给的那半截（io 错误、退出码后面的输出尾巴）是外部原文 ⇒ 走 `Msg::foreign`，
+    /// 只翻我们自己写的那半句。
+    pub fn detail_msg(&self) -> Msg {
+        match self {
+            InstallError::Io(e) => msg!(
+                "安装目录准备失败：{{cause}}",
+                {"cause": Msg::foreign_arg(e.to_string())}
+            ),
+            InstallError::Spawn(m) => msg!(
+                "启动安装器失败：{{cause}}",
+                {"cause": Msg::foreign_arg(m.clone())}
+            ),
+            InstallError::Cancelled => msg!("已取消：安装器进程已终止"),
+            InstallError::Timeout { secs } => msg!(
+                "安装超时（{{secs}} 秒），安装器进程已终止，半成品已回收",
+                {"secs": *secs}
+            ),
+            InstallError::Failed { code, tail } => msg!(
+                "安装器退出码 {{code}}：{{tail}}",
+                {"code": code.clone(), "tail": Msg::foreign_arg(tail.clone())}
+            ),
+            InstallError::Incomplete { dir } => msg!(
+                "安装器报告成功，但 {{dir}} 里没装出 libraries/",
+                {"dir": dir.clone()}
+            ),
+        }
+    }
 }
 
 /// 命令形状。三家实测一样，抽出来单测，免得以后有人按 loader 加分叉。
@@ -103,10 +138,10 @@ fn build_command(java: &Path, installer_jar: &Path, dest: &Path) -> Command {
 /// 一行输出的归类。成败一律看退出码 + 末态目录，这里只决定「值不值得让用户看见」。
 #[derive(Debug, PartialEq)]
 enum Classified {
-    /// 放行：固定文案，认不出来就少说一句，不影响成败
-    Milestone(&'static str),
-    /// 放行：安装器自己喊的错，原样带出
-    Reason(String),
+    /// 放行：固定文案（`msg!` 模板，界面翻得动），认不出来就少说一句，不影响成败
+    Milestone(Msg),
+    /// 放行：「安装器报错：」是我们的前缀（带模板），后面那半句是安装器原文（`Msg::foreign`）
+    Reason(Msg),
     /// 丢弃：只留在有界尾巴里备查
     Noise,
 }
@@ -119,20 +154,23 @@ fn classify(line: &str) -> Classified {
     }
     // Forge 写 "minecraft"，NeoForge 写 "Minecraft"
     if l.eq_ignore_ascii_case("Considering minecraft server jar") {
-        return Classified::Milestone("下载服务端本体");
+        return Classified::Milestone(msg!("下载服务端本体"));
     }
     if l.eq_ignore_ascii_case("Downloading libraries") {
-        return Classified::Milestone("下载依赖库");
+        return Classified::Milestone(msg!("下载依赖库"));
     }
     if l.ends_with("The server installed successfully") {
-        return Classified::Milestone("安装器报告成功");
+        return Classified::Milestone(msg!("安装器报告成功"));
     }
     if l.starts_with("Failed to")
         || l.starts_with("Error:")
         || l.starts_with("Caused by:")
         || l.contains("Exception: ")
     {
-        return Classified::Reason(format!("安装器报错：{l}"));
+        return Classified::Reason(msg!(
+            "安装器报错：{{cause}}",
+            {"cause": Msg::foreign_arg(l.to_string())}
+        ));
     }
     Classified::Noise
 }
@@ -216,7 +254,7 @@ fn top_level(dir: &Path) -> (Vec<String>, Vec<String>) {
 
 /// 一条管道的读循环：只把放行的行塞进通道，其余进有界尾巴。
 /// 进程一死管道就关闭，这里随之退出（`scope` 的 join 因此不会挂住）。
-fn pump<R: Read>(src: R, tail: &Mutex<VecDeque<String>>, tx: &mpsc::Sender<String>, reasons: &AtomicUsize) {
+fn pump<R: Read>(src: R, tail: &Mutex<VecDeque<String>>, tx: &mpsc::Sender<Msg>, reasons: &AtomicUsize) {
     let mut reader = BufReader::new(src);
     let mut line = String::new();
     loop {
@@ -229,11 +267,12 @@ fn pump<R: Read>(src: R, tail: &Mutex<VecDeque<String>>, tx: &mpsc::Sender<Strin
         }
         match classify(&line) {
             Classified::Milestone(m) => {
-                let _ = tx.send(m.to_string());
+                let _ = tx.send(m);
             }
-            Classified::Reason(msg) => {
+            Classified::Reason(m) => {
                 if reasons.fetch_add(1, Ordering::Relaxed) < REASON_LINES {
-                    let _ = tx.send(msg);
+                    // 前缀是我们的模板、正文是安装器原文：整条放行，归一化判据在前端那层
+                    let _ = tx.send(m);
                 }
             }
             Classified::Noise => {}
@@ -254,7 +293,7 @@ enum Stop {
 fn wait_outcome(
     child: &mut Child,
     input: &InstallInput,
-    rx: &mpsc::Receiver<String>,
+    rx: &mpsc::Receiver<Msg>,
     on_event: &mut dyn FnMut(InstallEvent),
     started: Instant,
 ) -> std::io::Result<Stop> {
@@ -321,7 +360,7 @@ pub fn install(
     let stderr = child.stderr.take();
 
     let tail: Mutex<VecDeque<String>> = Mutex::new(VecDeque::new());
-    let (tx, rx) = mpsc::channel::<String>();
+    let (tx, rx) = mpsc::channel::<Msg>();
     let reasons = AtomicUsize::new(0);
 
     let stop = {
@@ -544,16 +583,16 @@ mod tests {
         // 三家共同的成功与阶段行
         assert_eq!(
             classify("Considering minecraft server jar"),
-            Classified::Milestone("下载服务端本体")
+            Classified::Milestone(msg!("下载服务端本体"))
         );
         assert_eq!(
             classify("Considering Minecraft server jar"),
-            Classified::Milestone("下载服务端本体")
+            Classified::Milestone(msg!("下载服务端本体"))
         );
-        assert_eq!(classify("Downloading libraries"), Classified::Milestone("下载依赖库"));
+        assert_eq!(classify("Downloading libraries"), Classified::Milestone(msg!("下载依赖库")));
         assert_eq!(
             classify("The server installed successfully"),
-            Classified::Milestone("安装器报告成功")
+            Classified::Milestone(msg!("安装器报告成功"))
         );
         // 刷屏大户必须全丢：1.20.1 的 22,343 行里这些占了绝大多数
         for noise in [
@@ -585,7 +624,27 @@ mod tests {
         let second = classify("java.net.ConnectException: Connection refused: getsockopt");
         assert!(matches!(second, Classified::Reason(_)), "异常行必须放行：{second:?}");
         if let Classified::Reason(m) = second {
-            assert_eq!(m, "安装器报错：java.net.ConnectException: Connection refused: getsockopt");
+            assert_eq!(
+                m.zh,
+                "安装器报错：java.net.ConnectException: Connection refused: getsockopt"
+            );
+        }
+    }
+
+    /// 六个失败种类各一条：`Display`（中文整句，进存档与复制）与 `detail_msg`（模板 + 参数，界面查目录）
+    /// 必须逐字同源。改了其中一处而没改另一处，这条就是那个出口——中文界面会先看到两套说法
+    #[test]
+    fn detail_msg_renders_exactly_what_display_says() {
+        let cases = [
+            InstallError::Io(std::io::Error::other("磁盘满了")),
+            InstallError::Spawn("X:\\jdk\\bin\\java.exe：系统找不到指定的文件".into()),
+            InstallError::Cancelled,
+            InstallError::Timeout { secs: 1800 },
+            InstallError::Failed { code: "1".into(), tail: "java.net.ConnectException".into() },
+            InstallError::Incomplete { dir: "X:\\pack".into() },
+        ];
+        for e in &cases {
+            assert_eq!(e.detail_msg().zh, e.to_string(), "Display 与模板对不上了：{e:?}");
         }
     }
 
@@ -844,7 +903,7 @@ mod tests {
             },
             &mut |ev| {
                 if let InstallEvent::Log(m) = ev {
-                    lines.push(m.to_string());
+                    lines.push(m.zh.clone());
                 }
             },
         );
@@ -876,7 +935,7 @@ mod tests {
     impl Stats {
         fn on(&mut self, ev: InstallEvent) {
             match ev {
-                InstallEvent::Log(m) => self.lines.push(m.to_string()),
+                InstallEvent::Log(m) => self.lines.push(m.zh.clone()),
                 InstallEvent::Progress { files, bytes } => {
                     assert!(
                         (files, bytes) >= self.last,

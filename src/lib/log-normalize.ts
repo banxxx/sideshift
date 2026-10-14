@@ -3,9 +3,14 @@
  * 三层判据，任何一层认不出都照原样给出——归类失败绝不能把排查要用的信息弄丢。
  * 整条 URL 不进界面（换成站名），原句留在 `evidence` 一起进复制文本。
  * 判据住在前端、认的是字符串：后端或安装器改了措辞就会退回原样显示，这是显示层收口的代价。
+ *
+ * 一行日志的取词口径在 `logText`：后端发的「模板 + 参数」（`messageMsg`）优先，按项目 i18n 设计翻成
+ * 当前档；没有这一项（旧任务、外部进程原文）才落回 `normalizeLog` 那套形状判据。
  */
-import { netText, siteName } from "@/lib/errors";
-import { t } from "@/lib/i18n";
+import { errOf, netText, siteName } from "@/lib/errors";
+import { backendText, t, tSource } from "@/lib/i18n";
+import type { BackendMsg } from "@/lib/types/l10n";
+import type { TaskError, TaskLogLine } from "@/lib/types/task";
 
 export interface NormalizedLog {
     /** 给界面看的正文 */
@@ -82,4 +87,83 @@ export function normalizeLog(raw: string): NormalizedLog {
     // 认不出病因，但整条 URL 至少不该杵在界面上；真没 URL 可换就连前缀都不动它
     const tidied = line.replace(URL_RE, (u) => siteName(hostOf(u)));
     return tidied === line ? { message: raw } : { message: tidied, evidence: raw };
+}
+
+/** 认后端那句「模板 + 参数」（Rust: `l10n::Msg`，序列化后就是 key/args/zh 三个字段） */
+function isBackendMsg(v: unknown): v is BackendMsg {
+    return typeof v === "object" && v !== null && typeof (v as BackendMsg).key === "string";
+}
+
+/**
+ * 参数值 → 能交给 i18next 的那份。两件事只有在这里做得了：
+ *  - 值是**另一句话**（后端把带参数的明细嵌进外层句子当参数）⇒ 连它一起按模板渲染；
+ *  - 值是**登记过的整句**（任务标题、分组词那类固定中文）⇒ 先翻再插；文件名/版本号/路径查不中表，原样贴。
+ * 数字与布尔照原样给（`count` 那类槽要走 i18next 的复数规则）。
+ *
+ * 下面这块登记的是后端当**槽值**发来的那几个固定词（`取件 · {{label}} …` 的分组词）：
+ * 目录名之类的目标值不在这里，它们本就该原样贴出来。
+ */
+/*i18n:
+    模组
+    加载器
+*/
+function slotValue(v: unknown): unknown {
+    if (typeof v === "string") return tSource(v);
+    if (isBackendMsg(v)) return templateText(v.zh, v);
+    return v;
+}
+
+/** 拿模板查目录渲染当前档的那句话；查不到（旧数据、这句还没登记）掉回整句 */
+function templateText(raw: string, m: BackendMsg): string {
+    const args = m.args
+        ? Object.fromEntries(Object.entries(m.args).map(([k, v]) => [k, slotValue(v)]))
+        : null;
+    return backendText(raw, m.key, args);
+}
+
+/** 一行日志的两段：整句必在，「模板 + 参数」可能缺（旧任务、外部进程原文） */
+type LogSource = Pick<TaskLogLine, "message"> & Partial<Pick<TaskLogLine, "messageMsg">>;
+
+/**
+ * 整理一行渲染结果，但**判据认的是中文原句的形状**，不是译文：
+ * 「本机安装超时（300 秒）」翻成英文会带出 `timed out`，那是我们自己的句子、不是网络病因，
+ * 拿译文去撞形状判据会把整句换成「下载超时，稍后再试」。原句本来不需要整理，译文就照原样用。
+ */
+function tidy(rawZh: string, translated: string): NormalizedLog {
+    if (normalizeLog(rawZh).message === rawZh) return { message: translated };
+    return normalizeLog(translated);
+}
+
+/**
+ * 界面取一行日志的正文：后端那句「模板 + 参数」优先（这才翻得动带文件名/数字的句子），
+ * 外部原文混在里面时（带 URL 的诊断串）照旧按形状收一次。
+ * 没有模板的行（磁盘上的旧任务、`Msg::foreign` 那类）与改造前逐字一致。
+ */
+export function logText(line?: LogSource | null): NormalizedLog {
+    const raw = line?.message ?? "";
+    if (!raw) return { message: "" };
+    const m = line?.messageMsg;
+    if (!m?.key) return normalizeLog(raw);
+    return tidy(raw, templateText(raw, m));
+}
+
+/** 失败信息的两段：种类码 + 明细（可选模板） */
+type ErrorSource = Pick<TaskError, "detail"> & Partial<Pick<TaskError, "code" | "detailMsg">>;
+
+/** 后端自己写了「模板 + 参数」的那一句，翻成当前档；没有这一项（旧任务、外部原文）返回 null */
+function detailText(err: ErrorSource): string | null {
+    const m = err.detailMsg;
+    return m?.key ? templateText(err.detail, m) : null;
+}
+
+/**
+ * 错误卡正文与列表页那句失败摘要共用的一行：种类码（`net:` / `app:`）优先，
+ * 其次后端自己写的「模板 + 参数」，都没有才落到形状判据 + 「中文 → 键」表。
+ * `short` = 列表那一行只放得下一句：翻完再按形状收一次（认不出病因的照原样，由外层截断）。
+ */
+export function errorText(err: ErrorSource, short = false): string {
+    if (err.code) return errOf(err.code);
+    const m = detailText(err);
+    if (m !== null) return short ? errOf(tidy(err.detail, m).message) : m;
+    return errOf(short ? normalizeLog(err.detail).message : err.detail);
 }

@@ -5,7 +5,9 @@ use std::sync::Arc;
 
 use tauri::{AppHandle, Emitter};
 
+use crate::l10n::Msg;
 use crate::models::*;
+use crate::msg;
 use super::persist::save_tasks;
 use super::state::AppState;
 use super::util::{now_hms, now_ms};
@@ -32,16 +34,20 @@ pub fn trim_logs(logs: &mut Vec<TaskLogLine>) {
         log_line(
             stage,
             LogLevel::Warn,
-            &format!("（日志过长，仅保留最近 {} 条）", MAX_LOG_LINES - 1),
+            msg!("（日志过长，仅保留最近 {{count}} 条）", {"count": MAX_LOG_LINES - 1}),
         ),
     );
 }
 
-pub fn log_line(stage: PipelineStage, level: LogLevel, message: &str) -> TaskLogLine {
+/// 一条日志。`msg` 是「模板 + 参数」（见 `crate::l10n`）：渲染出的中文整句进 `message`（存档、
+/// 复制、旧快照兜底全用它），模板与参数另挂一份给界面查翻译目录——带文件名/数字的句子
+/// 只有这样才能翻，光靠「中文整句 → 键」的精确表永远差那几个字。
+pub fn log_line(stage: PipelineStage, level: LogLevel, msg: Msg) -> TaskLogLine {
     TaskLogLine {
         time: now_hms(),
         stage,
-        message: message.to_string(),
+        message: msg.zh.clone(),
+        message_msg: Some(msg),
         level,
     }
 }
@@ -87,7 +93,7 @@ pub fn push_log(
     id: &str,
     stage: PipelineStage,
     level: LogLevel,
-    msg: &str,
+    msg: Msg,
 ) {
     update(
         app,
@@ -107,7 +113,7 @@ pub fn log_update(
     id: &str,
     stage: PipelineStage,
     level: LogLevel,
-    msg: &str,
+    msg: Msg,
     f: impl FnOnce(&mut ConversionTask),
 ) {
     update(
@@ -142,7 +148,20 @@ pub fn fail(app: &AppHandle, state: &Arc<AppState>, id: &str, error: TaskError) 
                 log_line(
                     error.stage,
                     LogLevel::Error,
-                    &format!("{} · {}", error.title, error.detail),
+                    // 「标题 · 明细」两段成一句：标题是我们登记的固定句，明细优先用它自己那句
+                    // 「模板 + 参数」（嵌进来当参数，界面连它一起翻）；没有模板的那几种（外部进程的
+                    // 诊断串）原样带出，判据在前端归一化那层（见 `src/lib/log-normalize.ts` 的 `logText`）
+                    msg!(
+                        "{{title}} · {{detail}}",
+                        {
+                            "title": &error.title,
+                            "detail": error
+                                .detail_msg
+                                .clone()
+                                .unwrap_or_else(|| Msg::foreign(error.detail.clone()))
+                                .arg()
+                        }
+                    ),
                 ),
             );
         },
@@ -169,7 +188,8 @@ mod tests {
             logs.push(log_line(
                 PipelineStage::Downloader,
                 LogLevel::Info,
-                &format!("取件 · config · {i} 个"),
+                // 测试数据不必登记模板，用「外部原文」那档构造即可
+                Msg::foreign(format!("取件 · config · {i} 个")),
             ));
             trim_logs(&mut logs);
             assert!(logs.len() <= MAX_LOG_LINES);

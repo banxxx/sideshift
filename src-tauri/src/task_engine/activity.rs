@@ -11,7 +11,9 @@ use std::sync::{Arc, Mutex};
 use tauri::AppHandle;
 
 use crate::core::downloader::{Fetch, ItemSpec, TransferProgress};
+use crate::l10n::Msg;
 use crate::models::{ActivityInfo, ActivityKind, ConversionTask, LogLevel, PipelineStage};
+use crate::msg;
 use super::events::log_update;
 use super::state::AppState;
 use super::util::fmt_size;
@@ -102,9 +104,14 @@ impl FetchGroups {
     }
 }
 
-/// 分组完成日志（心跳日志同口径，只是不带完成结论）
-pub fn group_line(g: &GroupTally) -> String {
-    format!("取件 · {} · {} 个 · {}", g.label, g.files, fmt_size(g.bytes))
+/// 分组完成日志（心跳日志同口径，只是不带完成结论）。
+/// `label` 是落位目录名或「加载器／模组」这类分组词：它是**值**不是模板，
+/// 界面按「槽值是已登记整句就先翻」处理（见 `src/lib/log-normalize.ts`）。
+pub fn group_line(g: &GroupTally) -> Msg {
+    msg!(
+        "取件 · {{label}} · {{files}} 个 · {{size}}",
+        {"label": &g.label, "files": g.files, "size": fmt_size(g.bytes)}
+    )
 }
 
 /// 该条目是否逐条上报。真正联网（未命中缓存）或重试过的才值得单列一条；
@@ -196,7 +203,7 @@ pub fn flush_groups(
             id,
             PipelineStage::Downloader,
             LogLevel::Info,
-            &group_line(&g),
+            group_line(&g),
             move |t| apply_fetch_counts(t, g.done, g.total, &net_u, &bytes_u, from),
         );
     }
@@ -490,7 +497,7 @@ mod tests {
         let snap = g.record("模组", 20, 2, 5).expect("取满 2 个应出一条");
         assert_eq!(snap.files, 2);
         assert_eq!(snap.bytes, 30);
-        assert_eq!(group_line(&snap), "取件 · 模组 · 2 个 · 30 B");
+        assert_eq!(group_line(&snap).zh, "取件 · 模组 · 2 个 · 30 B");
         // 同目录再来一条（预设外的迟到项）不应重复出
         assert!(g.record("模组", 99, 3, 5).is_none());
         // 未取满的目录不出

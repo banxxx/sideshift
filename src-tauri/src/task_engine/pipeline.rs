@@ -20,6 +20,8 @@ use crate::core::installer::{self, InstallEvent, Installed};
 use crate::core::java;
 use crate::core::parser::{self, ParsedPack};
 use crate::core::verify;
+use crate::l10n::Msg;
+use crate::msg;
 use crate::models::*;
 use super::activity::{
     apply_fetch_counts, build_progress, fetch_group_label, flush_groups, group_line,
@@ -32,7 +34,7 @@ use super::events::{
 use super::persist::save_tasks;
 use super::schedule::{release_and_next, remove_task_staging};
 use super::state::{is_active, AppState};
-use super::util::{brief_list, fmt_size, now_ms, sanitize, unique_mod_name};
+use super::util::{brief_list, brief_pair, fmt_size, now_ms, sanitize, unique_mod_name};
 use super::CACHE_TASKS_DIR;
 use installer_stage::{
     prefetch_loader_jar, push_loader_item, run_installer_stage, InstallStage, InstallStop,
@@ -112,6 +114,7 @@ async fn run_pipeline(app: AppHandle, state: Arc<AppState>, id: String) {
                             stage: PipelineStage::Parser,
                             title: "解析失败".into(),
                             detail: "找不到源整合包文件，请返回首页重新选择".into(),
+                            detail_msg: None,
                             code: None,
                             retryable: false,
                             attempts: None,
@@ -141,9 +144,9 @@ async fn run_pipeline(app: AppHandle, state: Arc<AppState>, id: String) {
                 &id,
                 PipelineStage::Parser,
                 LogLevel::Warn,
-                &format!(
-                    "CurseForge 编号补取：{} 行仍只有编号（本轮没查完），落位名按编号走",
-                    out.unresolved
+                msg!(
+                    "CurseForge 编号补取：{{unresolved}} 行仍只有编号（本轮没查完），落位名按编号走",
+                    {"unresolved": out.unresolved}
                 ),
             );
         }
@@ -157,9 +160,9 @@ async fn run_pipeline(app: AppHandle, state: Arc<AppState>, id: String) {
         &id,
         PipelineStage::Parser,
         LogLevel::Info,
-        &format!(
-            "读取清单 {} · minecraft-{}",
-            pack.file_name, parsed.manifest.mc_version
+        msg!(
+            "读取清单 {{fileName}} · minecraft-{{mcVersion}}",
+            {"fileName": &pack.file_name, "mcVersion": &parsed.manifest.mc_version}
         ),
     );
     // 裸 zip 把内容整体套在一层自定义文件夹里很常见（`MyPack/mods/…`）。这一层不剥就会跟着
@@ -171,9 +174,9 @@ async fn run_pipeline(app: AppHandle, state: Arc<AppState>, id: String) {
             &id,
             PipelineStage::Parser,
             LogLevel::Info,
-            &format!(
-                "包根外层目录 {} 已按实例根处理（保留内容的勾选与落位都不带这一层）",
-                parsed.root_prefix
+            msg!(
+                "包根外层目录 {{prefix}} 已按实例根处理（保留内容的勾选与落位都不带这一层）",
+                {"prefix": &parsed.root_prefix}
             ),
         );
     }
@@ -191,11 +194,13 @@ async fn run_pipeline(app: AppHandle, state: Arc<AppState>, id: String) {
         &id,
         PipelineStage::Parser,
         LogLevel::Info,
-        &format!(
-            "包内内容：模组 {} 个 · 其他文件 {} 个 · 需联网补取 {} 个",
-            parsed.mod_files.len(),
-            parsed.extra_files.len(),
-            off_pack
+        msg!(
+            "包内内容：模组 {{mods}} 个 · 其他文件 {{extras}} 个 · 需联网补取 {{offPack}} 个",
+            {
+                "mods": parsed.mod_files.len(),
+                "extras": parsed.extra_files.len(),
+                "offPack": off_pack
+            }
         ),
     );
     update(&app, &state, &id, |t| t.progress = 15, false);
@@ -217,7 +222,10 @@ async fn run_pipeline(app: AppHandle, state: Arc<AppState>, id: String) {
         &id,
         PipelineStage::Detector,
         LogLevel::Info,
-        &format!("方案确认：剔除 {} · 保留 {} · 新增 {}", counts.remove, counts.keep, counts.add),
+        msg!(
+            "方案确认：剔除 {{remove}} · 保留 {{keep}} · 新增 {{add}}",
+            {"remove": counts.remove, "keep": counts.keep, "add": counts.add}
+        ),
     );
     let removed: Vec<String> = plan
         .iter()
@@ -225,13 +233,20 @@ async fn run_pipeline(app: AppHandle, state: Arc<AppState>, id: String) {
         .map(|m| m.name.clone())
         .collect();
     if !removed.is_empty() {
+        let (list, omitted) = brief_pair(&removed);
         push_log(
             &app,
             &state,
             &id,
             PipelineStage::Detector,
             LogLevel::Info,
-            &format!("剔除名单：{}", brief_list(&removed)),
+            match omitted {
+                None => msg!("剔除名单：{{list}}", {"list": list}),
+                Some(count) => msg!(
+                    "剔除名单：{{list}}…等 {{count}} 个",
+                    {"list": list, "count": count}
+                ),
+            },
         );
     }
     for row in plan
@@ -244,17 +259,27 @@ async fn run_pipeline(app: AppHandle, state: Arc<AppState>, id: String) {
             &id,
             PipelineStage::Detector,
             LogLevel::Info,
-            &format!("自动补齐：{}（服务端运行所需）", row.name),
+            msg!(
+                "自动补齐：{{name}}（服务端运行所需）",
+                {"name": &row.name}
+            ),
         );
     }
     if !review.is_empty() {
+        let (list, omitted) = brief_pair(&review);
         push_log(
             &app,
             &state,
             &id,
             PipelineStage::Detector,
             LogLevel::Warn,
-            &format!("待人工确认：{}（跨版本组件，服务端可能仍需）", brief_list(&review)),
+            match omitted {
+                None => msg!("待人工确认：{{list}}（跨版本组件，服务端可能仍需）", {"list": list}),
+                Some(count) => msg!(
+                    "待人工确认：{{list}}…等 {{count}} 个（跨版本组件，服务端可能仍需）",
+                    {"list": list, "count": count}
+                ),
+            },
         );
     }
     update(
@@ -319,6 +344,7 @@ async fn run_pipeline(app: AppHandle, state: Arc<AppState>, id: String) {
                 blocked_required,
                 brief_list(&blocked_names)
             ),
+            detail_msg: None,
             code: None,
             retryable: false,
             attempts: None,
@@ -330,18 +356,23 @@ async fn run_pipeline(app: AppHandle, state: Arc<AppState>, id: String) {
     // 放行到这一档：缺的那些不进产物，但必须留名（报告与 README 逐条列，不是静默丢）
     let skipped_mods: Vec<String> = blocked_names.clone();
     if !blocked_names.is_empty() {
+        let (list, omitted) = brief_pair(&blocked_names);
         push_log(
             &app,
             &state,
             &id,
             PipelineStage::Downloader,
             LogLevel::Warn,
-            &format!(
-                "跳过 {} 个拿不到文件的模组（必选 {} 个，已同意）：{}",
-                blocked_names.len(),
-                blocked_required,
-                brief_list(&blocked_names)
-            ),
+            match omitted {
+                None => msg!(
+                    "跳过 {{skipped}} 个拿不到文件的模组（必选 {{required}} 个，已同意）：{{list}}",
+                    {"skipped": blocked_names.len(), "required": blocked_required, "list": list}
+                ),
+                Some(count) => msg!(
+                    "跳过 {{skipped}} 个拿不到文件的模组（必选 {{required}} 个，已同意）：{{list}}…等 {{count}} 个",
+                    {"skipped": blocked_names.len(), "required": blocked_required, "list": list, "count": count}
+                ),
+            },
         );
     }
 
@@ -380,6 +411,7 @@ async fn run_pipeline(app: AppHandle, state: Arc<AppState>, id: String) {
                             stage: PipelineStage::Downloader,
                             title: "CurseForge 取链接失败".into(),
                             detail,
+                            detail_msg: None,
                             code: e.net_code(),
                             retryable: true,
                             attempts: None,
@@ -423,6 +455,7 @@ async fn run_pipeline(app: AppHandle, state: Arc<AppState>, id: String) {
                             stage: PipelineStage::Downloader,
                             title: "CurseForge 取链接失败".into(),
                             detail,
+                            detail_msg: None,
                             code: e.net_code(),
                             retryable: true,
                             attempts: None,
@@ -481,6 +514,7 @@ async fn run_pipeline(app: AppHandle, state: Arc<AppState>, id: String) {
                         stage: PipelineStage::Downloader,
                         title: "依赖解析失败".into(),
                         detail,
+                        detail_msg: None,
                         code: e.net_code(),
                         retryable: true,
                         attempts: None,
@@ -552,10 +586,18 @@ async fn run_pipeline(app: AppHandle, state: Arc<AppState>, id: String) {
             &id,
             PipelineStage::Downloader,
             if n == 0 { LogLevel::Warn } else { LogLevel::Info },
-            &format!(
-                "保留目录 {dir}{moved} · {n} 个文件{}",
-                if n == 0 { "（包内无此目录，已跳过）" } else { "" }
-            ),
+            // 「已跳过」那句是条件尾巴：做成两条模板，别把中文塞进参数当空串
+            if n == 0 {
+                msg!(
+                    "保留目录 {{dir}}{{moved}} · 0 个文件（包内无此目录，已跳过）",
+                    {"dir": dir, "moved": moved}
+                )
+            } else {
+                msg!(
+                    "保留目录 {{dir}}{{moved}} · {{count}} 个文件",
+                    {"dir": dir, "moved": moved, "count": n}
+                )
+            },
         );
     }
     for file in &options.keep_files {
@@ -572,10 +614,14 @@ async fn run_pipeline(app: AppHandle, state: Arc<AppState>, id: String) {
             &id,
             PipelineStage::Downloader,
             if n == 0 { LogLevel::Warn } else { LogLevel::Info },
-            &format!(
-                "保留文件 {file}{moved}{}",
-                if n == 0 { "（包内已无此文件，已跳过）" } else { "" }
-            ),
+            if n == 0 {
+                msg!(
+                    "保留文件 {{file}}{{moved}}（包内已无此文件，已跳过）",
+                    {"file": file, "moved": moved}
+                )
+            } else {
+                msg!("保留文件 {{file}}{{moved}}", {"file": file, "moved": moved})
+            },
         );
     }
 
@@ -585,6 +631,7 @@ async fn run_pipeline(app: AppHandle, state: Arc<AppState>, id: String) {
             stage: PipelineStage::Downloader,
             title: "未选择加载器版本".into(),
             detail: "裸 zip 包无法自动确定 Loader 版本，请在转换配置中选择后重试".into(),
+            detail_msg: None,
             code: None,
             retryable: false,
             attempts: None,
@@ -606,6 +653,7 @@ async fn run_pipeline(app: AppHandle, state: Arc<AppState>, id: String) {
                         stage: PipelineStage::Downloader,
                         title: "服务端加载器获取失败".into(),
                         detail: e.to_string(),
+                        detail_msg: None,
                         code: e.net_code(),
                         retryable: true,
                         attempts: None,
@@ -641,10 +689,13 @@ async fn run_pipeline(app: AppHandle, state: Arc<AppState>, id: String) {
             &id,
             PipelineStage::Downloader,
             LogLevel::Info,
-            &format!(
-                "服务端加载器：{jar}（{} {}）",
-                parsed.manifest.loader.as_label(),
-                options.loader_version
+            msg!(
+                "服务端加载器：{{jar}}（{{loader}} {{version}}）",
+                {
+                    "jar": jar,
+                    "loader": parsed.manifest.loader.as_label(),
+                    "version": &options.loader_version
+                }
             ),
         );
     }
@@ -678,7 +729,7 @@ async fn run_pipeline(app: AppHandle, state: Arc<AppState>, id: String) {
                     &id,
                     PipelineStage::Downloader,
                     LogLevel::Warn,
-                    "任务已取消，取件中止",
+                    msg!("任务已取消，取件中止"),
                 );
                 return;
             }
@@ -718,7 +769,7 @@ async fn run_pipeline(app: AppHandle, state: Arc<AppState>, id: String) {
                         &id,
                         PipelineStage::Installer,
                         LogLevel::Warn,
-                        "任务已取消，本机安装已中止",
+                        msg!("任务已取消，本机安装已中止"),
                     );
                     return;
                 }
@@ -777,14 +828,17 @@ async fn run_pipeline(app: AppHandle, state: Arc<AppState>, id: String) {
         &id,
         PipelineStage::Downloader,
         LogLevel::Info,
-        &format!(
-            "取件计划 {total} 项 · 需联网 {}（≈{}）· 整合包 {} · 本地 {} · 缓存命中 {} · 并发 {}",
-            tally.net_files,
-            fmt_size(tally.net_bytes),
-            tally.pack_files,
-            tally.local_files,
-            tally.cached_files,
-            settings.concurrency
+        msg!(
+            "取件计划 {{total}} 项 · 需联网 {{net}}（≈{{netSize}}）· 整合包 {{pack}} · 本地 {{local}} · 缓存命中 {{cached}} · 并发 {{concurrency}}",
+            {
+                "total": total,
+                "net": tally.net_files,
+                "netSize": fmt_size(tally.net_bytes),
+                "pack": tally.pack_files,
+                "local": tally.local_files,
+                "cached": tally.cached_files,
+                "concurrency": settings.concurrency
+            }
         ),
     );
     if tally.net_files == 0 {
@@ -794,7 +848,7 @@ async fn run_pipeline(app: AppHandle, state: Arc<AppState>, id: String) {
             &id,
             PipelineStage::Downloader,
             LogLevel::Info,
-            "本次无需联网：全部文件来自整合包、本地文件或下载缓存",
+            msg!("本次无需联网：全部文件来自整合包、本地文件或下载缓存"),
         );
     }
 
@@ -839,11 +893,27 @@ async fn run_pipeline(app: AppHandle, state: Arc<AppState>, id: String) {
 
             // 真正联网（含重试）的条目值得逐条盯：量级只有几十到几百条
             if reports_per_line(network, oc.cached, oc.retries) {
-                let verb = if oc.cached { "复用缓存" } else { "联网获取" };
-                let mut msg = format!("{verb} {} · {}", oc.file_name, fmt_size(oc.bytes));
-                if oc.retries > 0 {
-                    msg.push_str(&format!("（重试 {} 次后成功）", oc.retries));
-                }
+                let size = fmt_size(oc.bytes);
+                // 「复用缓存／联网获取」与「重试 N 次后成功」都是句子的一部分，不是数据：
+                // 拆成参数就永远翻不动，所以按四种组合各写一条模板（中文整句与逐条拼接完全一致）
+                let line = match (oc.cached, oc.retries) {
+                    (false, 0) => msg!(
+                        "联网获取 {{file}} · {{size}}",
+                        {"file": &oc.file_name, "size": size}
+                    ),
+                    (false, retries) => msg!(
+                        "联网获取 {{file}} · {{size}}（重试 {{retries}} 次后成功）",
+                        {"file": &oc.file_name, "size": size, "retries": retries}
+                    ),
+                    (true, 0) => msg!(
+                        "复用缓存 {{file}} · {{size}}",
+                        {"file": &oc.file_name, "size": size}
+                    ),
+                    (true, retries) => msg!(
+                        "复用缓存 {{file}} · {{size}}（重试 {{retries}} 次后成功）",
+                        {"file": &oc.file_name, "size": size, "retries": retries}
+                    ),
+                };
                 let level = if oc.retries > 0 { LogLevel::Warn } else { LogLevel::Info };
                 let (net_u, bytes_u) = (net_f.clone(), bytes_f.clone());
                 // 结算这条的在飞字节；没有下一条在飞就顺势收掉实时条
@@ -858,7 +928,7 @@ async fn run_pipeline(app: AppHandle, state: Arc<AppState>, id: String) {
                     &id_f,
                     PipelineStage::Downloader,
                     level,
-                    &msg,
+                    line,
                     move |t| {
                         apply_fetch_counts(t, done, tot, &net_u, &bytes_u, fetch_from);
                         t.activity = snap;
@@ -879,7 +949,7 @@ async fn run_pipeline(app: AppHandle, state: Arc<AppState>, id: String) {
                         &id_f,
                         PipelineStage::Downloader,
                         LogLevel::Info,
-                        &group_line(&g),
+                        group_line(&g),
                         move |t| apply_fetch_counts(t, g.done, g.total, &net_u, &bytes_u, fetch_from),
                     );
                 }
@@ -908,7 +978,14 @@ async fn run_pipeline(app: AppHandle, state: Arc<AppState>, id: String) {
         return;
     }
     if !is_active(&state, &id) {
-        push_log(&app, &state, &id, PipelineStage::Downloader, LogLevel::Warn, "任务已取消，取件中止");
+        push_log(
+            &app,
+            &state,
+            &id,
+            PipelineStage::Downloader,
+            LogLevel::Warn,
+            msg!("任务已取消，取件中止"),
+        );
         return;
     }
     push_log(
@@ -917,10 +994,13 @@ async fn run_pipeline(app: AppHandle, state: Arc<AppState>, id: String) {
         &id,
         PipelineStage::Downloader,
         LogLevel::Info,
-        &format!(
-            "取件完成 {total} 项 · 实际联网 {} 项 · 共取件 {}",
-            net_actual.load(Ordering::Relaxed),
-            fmt_size(bytes_actual.load(Ordering::Relaxed))
+        msg!(
+            "取件完成 {{total}} 项 · 实际联网 {{net}} 项 · 共取件 {{size}}",
+            {
+                "total": total,
+                "net": net_actual.load(Ordering::Relaxed),
+                "size": fmt_size(bytes_actual.load(Ordering::Relaxed))
+            }
         ),
     );
     update(&app, &state, &id, |t| t.progress = 82, true);
@@ -1019,7 +1099,10 @@ async fn run_pipeline(app: AppHandle, state: Arc<AppState>, id: String) {
                         &i,
                         PipelineStage::Builder,
                         LogLevel::Info,
-                        &format!("已打包 · {label} · {files} 个 · {}", fmt_size(*bytes)),
+                        msg!(
+                            "已打包 · {{label}} · {{files}} 个 · {{size}}",
+                            {"label": label, "files": files, "size": fmt_size(*bytes)}
+                        ),
                         move |t| {
                             t.activity = Some(snap);
                             t.progress = build_progress(done, total);
@@ -1057,6 +1140,7 @@ async fn run_pipeline(app: AppHandle, state: Arc<AppState>, id: String) {
                 stage: PipelineStage::Builder,
                 title: "构建失败".into(),
                 detail: e.to_string(),
+                detail_msg: None,
                 code: None,
                 retryable: true,
                 attempts: None,
@@ -1070,6 +1154,7 @@ async fn run_pipeline(app: AppHandle, state: Arc<AppState>, id: String) {
                 stage: PipelineStage::Builder,
                 title: "构建失败".into(),
                 detail: format!("构建线程异常：{e}"),
+                detail_msg: None,
                 code: None,
                 retryable: true,
                 attempts: None,
@@ -1092,7 +1177,16 @@ async fn run_pipeline(app: AppHandle, state: Arc<AppState>, id: String) {
         &id,
         PipelineStage::Builder,
         LogLevel::Info,
-        &format!("生成包根文件：{}", brief_list(&built.generated)),
+        {
+            let (list, omitted) = brief_pair(&built.generated);
+            match omitted {
+                None => msg!("生成包根文件：{{list}}", {"list": list}),
+                Some(count) => msg!(
+                    "生成包根文件：{{list}}…等 {{count}} 个",
+                    {"list": list, "count": count}
+                ),
+            }
+        },
     );
     // 保留内容里勾了同名包根文件 ⇒ 以包内那份为准（用户主动要自己那份）。这几个配置项这次没进产物，
     // 必须在日志里点名，否则报告页播报的还是界面上填的那套数
@@ -1103,10 +1197,16 @@ async fn run_pipeline(app: AppHandle, state: Arc<AppState>, id: String) {
             &id,
             PipelineStage::Builder,
             LogLevel::Warn,
-            &format!(
-                "沿用包内自带的 {}：这些包根文件本次未按配置生成",
-                brief_list(&built.reused_root)
-            ),
+            {
+                let (list, omitted) = brief_pair(&built.reused_root);
+                match omitted {
+                    None => msg!("沿用包内自带的 {{list}}：这些包根文件本次未按配置生成", {"list": list}),
+                    Some(count) => msg!(
+                        "沿用包内自带的 {{list}}…等 {{count}} 个：这些包根文件本次未按配置生成",
+                        {"list": list, "count": count}
+                    ),
+                }
+            },
         );
     }
     if built.overwritten {
@@ -1116,7 +1216,7 @@ async fn run_pipeline(app: AppHandle, state: Arc<AppState>, id: String) {
             &id,
             PipelineStage::Builder,
             LogLevel::Info,
-            &format!("覆写本任务上一次的输出：{final_name}"),
+            msg!("覆写本任务上一次的输出：{{fileName}}", {"fileName": final_name.clone()}),
         );
     } else if final_name != output_name {
         push_log(
@@ -1125,7 +1225,10 @@ async fn run_pipeline(app: AppHandle, state: Arc<AppState>, id: String) {
             &id,
             PipelineStage::Builder,
             LogLevel::Warn,
-            &format!("{output_name} 已被其他包占用，本次另存为 {final_name}"),
+            msg!(
+                "{{outputName}} 已被其他包占用，本次另存为 {{finalName}}",
+                {"outputName": output_name.clone(), "finalName": final_name.clone()}
+            ),
         );
     }
     push_log(
@@ -1134,11 +1237,9 @@ async fn run_pipeline(app: AppHandle, state: Arc<AppState>, id: String) {
         &id,
         PipelineStage::Builder,
         LogLevel::Info,
-        &format!(
-            "打包 {} · {} 个文件 · {}",
-            final_name,
-            built.entries,
-            fmt_size(built.size)
+        msg!(
+            "打包 {{fileName}} · {{entries}} 个文件 · {{size}}",
+            {"fileName": final_name.clone(), "entries": built.entries, "size": fmt_size(built.size)}
         ),
     );
     push_log(
@@ -1147,7 +1248,7 @@ async fn run_pipeline(app: AppHandle, state: Arc<AppState>, id: String) {
         &id,
         PipelineStage::Builder,
         LogLevel::Info,
-        &format!("输出路径 {}", built.path.display()),
+        msg!("输出路径 {{path}}", {"path": built.path.display().to_string()}),
     );
     // 自检只出一条汇总日志：逐项明细进报告卡，逐项写日志等于用日志量换看不完的字
     if !checks.is_empty() {
@@ -1155,16 +1256,24 @@ async fn run_pipeline(app: AppHandle, state: Arc<AppState>, id: String) {
             .iter()
             .filter(|c| c.status != CheckStatus::Pass)
             .collect();
-        let msg = if bad.is_empty() {
-            format!("构建自检 {} 项 · 全部通过", checks.len())
+        let summary = if bad.is_empty() {
+            msg!("构建自检 {{total}} 项 · 全部通过", {"total": checks.len()})
         } else {
             let first = bad.first().unwrap();
-            format!(
-                "构建自检 {} 项 · {} 项需关注：{} — {}",
-                checks.len(),
-                bad.len(),
-                first.label,
-                first.detail
+            // 明细本身是一句「模板 + 参数」（报告页按它翻），这里嵌进来当参数：
+            // 拍平成一个字符串就永远是中文（见 `crate::l10n::render` 的嵌套参数）
+            let detail = first
+                .detail_msg
+                .clone()
+                .unwrap_or_else(|| Msg::foreign(first.detail.clone()));
+            msg!(
+                "构建自检 {{total}} 项 · {{bad}} 项需关注：{{label}} — {{detail}}",
+                {
+                    "total": checks.len(),
+                    "bad": bad.len(),
+                    "label": first.label.clone(),
+                    "detail": detail.arg()
+                }
             )
         };
         push_log(
@@ -1173,7 +1282,7 @@ async fn run_pipeline(app: AppHandle, state: Arc<AppState>, id: String) {
             &id,
             PipelineStage::Builder,
             if bad.is_empty() { LogLevel::Info } else { LogLevel::Warn },
-            &msg,
+            summary,
         );
     }
     // zip 已在输出目录生成，暂存目录即刻回收（文件本体留在 cache/files 供跨任务复用）
@@ -1204,7 +1313,7 @@ async fn run_pipeline(app: AppHandle, state: Arc<AppState>, id: String) {
             log_line(
                 PipelineStage::Builder,
                 LogLevel::Info,
-                &format!("打包完成 · {final_name}"),
+                msg!("打包完成 · {{fileName}}", {"fileName": final_name.clone()}),
             ),
         );
         let duration_sec = t
@@ -1266,6 +1375,7 @@ fn map_download_error(app: &AppHandle, state: &Arc<AppState>, id: &str, e: &Down
             stage: PipelineStage::Downloader,
             title,
             detail,
+            detail_msg: None,
             code,
             retryable: true,
             attempts,
@@ -1295,15 +1405,16 @@ mod tests {
         }
     }
 
-    /// 收场行：复用与真装的说法分开（前者一次进程都没起），耗时只出现在真装过的那条上
+    /// 收场行：复用与真装的说法分开（前者一次进程都没起），耗时只出现在真装过的那条上。
+    /// 顺带证嵌套参数：整句里的「顶层 run.bat、run.sh」是内层那条 Msg 渲染出来的
     #[test]
     fn install_done_line_separates_cache_hit_from_real_run() {
-        let hit = install_done_line(&installed(true, &["run.bat", "run.sh"], &[], 0), "Forge 1.20.1-47.4.10");
+        let hit = install_done_line(&installed(true, &["run.bat", "run.sh"], &[], 0), "Forge 1.20.1-47.4.10").zh;
         assert!(hit.starts_with("复用已装的 Forge 1.20.1-47.4.10"), "{hit}");
         assert!(hit.contains("未起进程"), "命中必须说明零进程，否则读起来像装完了");
         assert!(!hit.contains("用时"), "命中没有耗时可报");
 
-        let real = install_done_line(&installed(false, &["run.bat", "run.sh"], &[], 226), "Forge 1.20.1-47.4.10");
+        let real = install_done_line(&installed(false, &["run.bat", "run.sh"], &[], 226), "Forge 1.20.1-47.4.10").zh;
         assert!(real.contains("本机安装完成") && real.contains("226.0 秒"), "{real}");
         assert!(real.contains("顶层 run.bat、run.sh"), "{real}");
     }
@@ -1313,10 +1424,10 @@ mod tests {
     #[test]
     fn install_done_line_names_the_layout_it_found() {
         let v = |items: &[&str]| items.iter().map(|s| s.to_string()).collect::<Vec<String>>();
-        let old = describe_layout(&v(&[]), &v(&["forge-1.16.5-36.2.39.jar", "minecraft_server.1.16.5.jar"]));
+        let old = describe_layout(&v(&[]), &v(&["forge-1.16.5-36.2.39.jar", "minecraft_server.1.16.5.jar"])).zh;
         assert!(old.starts_with("无 run 脚本，顶层散 jar "), "{old}");
-        assert_eq!(describe_layout(&v(&["run.sh"]), &v(&["a.jar"])), "顶层 run.sh + a.jar");
-        assert_eq!(describe_layout(&v(&[]), &v(&[])), "顶层既无 run 脚本也无散 jar");
+        assert_eq!(describe_layout(&v(&["run.sh"]), &v(&["a.jar"])).zh, "顶层 run.sh + a.jar");
+        assert_eq!(describe_layout(&v(&[]), &v(&[])).zh, "顶层既无 run 脚本也无散 jar");
     }
 
     /// 取消不算失败：错误卡只由 Failed 分支生成，取消走的是与取件同款的中止日志

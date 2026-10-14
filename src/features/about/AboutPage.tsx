@@ -74,16 +74,17 @@ function licenseRows(t: TranslateFn): Array<[string, string, DepMark[]]> {
     ];
 }
 
-/** 图标 + 字段名 + 一句话：隐私那六行共用的排法（图标列与字段名定宽，正文吃剩下的宽度并换行） */
+/** 图标 + 字段名 + 一句话：三格交给父级那张网格排——字段名列宽由**当前语言里最长的那条**撑开，
+ *  正文永远从列之后开始。写死列宽（原先 76px）在英文下会被字段名盖住：列不许长，文字就溢出去画在正文上 */
 function FactRow({ icon: Icon, label, children }: { icon: LucideIcon; label: string; children: ReactNode }) {
     return (
-        <div className="flex items-start gap-3">
-            <span className="flex h-[18px] w-[14px] shrink-0 items-center justify-center text-text-3">
+        <>
+            <span className="flex h-[18px] w-[14px] items-center justify-center text-text-3">
                 <Icon className="size-[13px]" strokeWidth={1.75} />
             </span>
-            <span className="w-[76px] shrink-0 text-[11px] leading-[18px] text-text-3">{label}</span>
-            <span className="min-w-0 flex-1 text-[12px] leading-[18px] text-text-1">{children}</span>
-        </div>
+            <span className="text-[11px] leading-[18px] text-text-3">{label}</span>
+            <span className="min-w-0 text-[12px] leading-[18px] text-text-1">{children}</span>
+        </>
     );
 }
 
@@ -208,11 +209,15 @@ export function AboutPage() {
                     />
                     <Collapse when={privacyOpen} gap={10}>
                         <FoldBody>
-                            {privacyRows(t).map(([icon, label, value]) => (
-                                <FactRow key={label} icon={icon} label={label}>
-                                    {value}
-                                </FactRow>
-                            ))}
+                            {/* 三列一张网格：图标列 14px、字段名列至少 76px（英文那条更长时整列跟着让，
+                                中日两种不动）、正文吃剩下的宽度且允许收缩到 0 */}
+                            <div className="grid grid-cols-[14px_minmax(76px,auto)_minmax(0,1fr)] items-start gap-x-3 gap-y-3">
+                                {privacyRows(t).map(([icon, label, value]) => (
+                                    <FactRow key={label} icon={icon} label={label}>
+                                        {value}
+                                    </FactRow>
+                                ))}
+                            </div>
                         </FoldBody>
                     </Collapse>
                 </Panel>

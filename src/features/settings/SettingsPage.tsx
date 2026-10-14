@@ -369,7 +369,7 @@ export function SettingsPage() {
             variants={PAGE_RISE}
             initial="hidden"
             animate="show"
-            className="flex flex-col gap-5 py-6"
+            className="flex flex-col gap-5 py-6 max-w-[var(--page-measure)]"
         >
             <PageHeader compact title={t("common.settings", "设置")} sub={t("settings.conversion-storage", "转换行为、存储、网络与外观偏好")} />
 
@@ -737,7 +737,7 @@ function SettingsSkeleton() {
         [t("settings.appearance-about", "外观与关于"), 4],
     ];
     return (
-        <div className="flex flex-col gap-5 py-6">
+        <div className="flex flex-col gap-5 py-6 max-w-[var(--page-measure)]">
             <PageHeader compact title={t("common.settings", "设置")} sub={t("settings.conversion-storage", "转换行为、存储、网络与外观偏好")} />
             <div className="flex w-full flex-col gap-5">
                 {groups.map(([title, rows]) => (

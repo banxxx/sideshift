@@ -25,6 +25,16 @@ pub fn brief_list(items: &[String]) -> String {
     format!("{}…等 {} 个", items[..8].join("、"), items.len())
 }
 
+/// `brief_list` 的「拆开的」版本：已列出的项 + 被省略的总数（`None` = 没截断）。
+/// 那句「…等 N 个」留在字符串里就永远是中文——只有把它抬进各条日志的模板当参数，
+/// 界面才能连它一起翻。渲染出的整句与 `brief_list` 逐字一致。
+pub fn brief_pair(items: &[String]) -> (String, Option<usize>) {
+    if items.len() <= 8 {
+        return (items.join("、"), None);
+    }
+    (items[..8].join("、"), Some(items.len()))
+}
+
 pub fn now_ms() -> i64 {
     chrono::Utc::now().timestamp_millis()
 }

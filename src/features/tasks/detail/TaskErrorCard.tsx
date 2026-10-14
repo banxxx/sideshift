@@ -7,7 +7,7 @@ import { Download, PackageOpen, RefreshCw, X, type LucideIcon } from "lucide-rea
 import type { TaskError } from "@/lib/types";
 import { truncateMiddle } from "@/lib/format";
 import { tSource, useT } from "@/lib/i18n";
-import { errOf } from "@/lib/errors";
+import { errorText } from "@/lib/log-normalize";
 import { Btn, LinkBtn, ToneChip } from "@/components/ui";
 import { cn } from "@/lib/utils";
 
@@ -122,7 +122,10 @@ export function TaskErrorCard({
             </div>
 
             {/* 详情：网络类错误只说种类（后端给的 `code`），URL/状态码留在 `detail` 里给诊断信息；
-                非网络的那批诊断串（带文件名/退出码/cause）查不中目录就照原样出中文 */}
+                本机安装那一族走后端给的「模板 + 参数」（`detailMsg`）；再剩下的诊断串（带文件名/退出码/cause）
+                查不中目录就照原样出中文。
+                最后三条不是整句，而是**插进槽里的那半截**（退出码、安装器输出尾巴）：
+                槽值也先按「中文 → 键」表就地翻，表里没有才原样贴（见 `log-normalize.ts` 的 `slotValue`）。 */}
             {/*i18n:
                 找不到源整合包文件，请返回首页重新选择
                 裸 zip 包无法自动确定 Loader 版本，请在转换配置中选择后重试
@@ -130,9 +133,12 @@ export function TaskErrorCard({
                 未检测到 Java（本机没有可用的 JDK）
                 backend.cf-unauthorized=CurseForge 不接受这把 API Key（HTTP 401）
                 backend.cf-forbidden=CurseForge 拒绝了这次请求（HTTP 403）
+                无（被信号终止）
+                （安装器没有任何输出）
+                （安装器输出未能读取）
             */}
             <p className="text-[12px] leading-[18px] font-normal text-text-2">
-                {errOf(error.code ?? error.detail)}
+                {errorText(error)}
             </p>
 
             {/* 构建失败：日志尾块（等宽 10，末行 redstone） */}

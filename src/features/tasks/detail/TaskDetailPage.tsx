@@ -30,7 +30,7 @@ import {
 } from "@/lib/format";
 import { t, tSource, useT } from "@/lib/i18n";
 import { errOf } from "@/lib/errors";
-import { normalizeLog } from "@/lib/log-normalize";
+import { logText } from "@/lib/log-normalize";
 import type { ActivityInfo, ConversionReport, ConversionTask } from "@/lib/types";
 import { TaskErrorCard } from "@/features/tasks/detail/TaskErrorCard";
 import { ActivitySubBar, activityMeasure, activityVerb } from "@/features/tasks/detail/ActivityBar";
@@ -239,14 +239,14 @@ export function TaskDetailPage() {
     const actionKey = running ? "running" : task.status;
     const started = task.startedAt ?? task.createdAt;
     const elapsed = (task.finishedAt ?? Date.now()) - started;
-    const lastLog = normalizeLog(task.logs[task.logs.length - 1]?.message ?? "");
+    const lastLog = logText(task.logs[task.logs.length - 1]);
     /** 当前动作只在运行中有意义：终态下事件里的残值不该再画子条 */
     const act = task.status === "running" ? activity : undefined;
     const hiddenLogs = Math.max(0, task.logs.length - LOG_RENDER_CAP);
-    // 只整理真正要显示的这几行（口径与判据见 log-normalize.ts）
+    // 只整理真正要显示的这几行（模板优先、形状判据兜底，口径与判据见 log-normalize.ts）
     const visibleLogs = (hiddenLogs > 0 ? task.logs.slice(-LOG_RENDER_CAP) : task.logs).map((l) => ({
         ...l,
-        ...normalizeLog(l.message),
+        ...logText(l),
     }));
     const counts = task.counts;
     const packName = truncateMiddle(
@@ -524,10 +524,7 @@ export function TaskDetailPage() {
                                             title={t("tasks.logs", "日志")}
                                             right={
                                                 <LogCopyButton
-                                                    logs={task.logs.map((l) => ({
-                                                        ...l,
-                                                        ...normalizeLog(l.message),
-                                                    }))}
+                                                    logs={task.logs.map((l) => ({ ...l, ...logText(l) }))}
                                                     header={`SideShift 日志 · ${task.pack.fileName} · ${task.id}`}
                                                 />
                                             }
@@ -553,16 +550,9 @@ export function TaskDetailPage() {
                                                     )}
                                                 </span>
                                             )}
-                                            {/* 日志正文走 `tSource`：按「中文 → 键」表就地查目录，带数字/文件名的动态句表里没有，
-                                照旧出中文（诊断产物，口径见 src-tauri/src/l18n 之外的说明）。
-                                下面登记的是后端写死的那几句固定日志。 */}
-                                            {/*i18n:
-                                                任务已取消，取件中止
-                                                本次无需联网：全部文件来自整合包、本地文件或下载缓存
-                                                方案里指定的那枚 Java 已不在本机，改用自动挑到的那一枚
-                                                重新排队：沿用上次方案（日志保留上一轮的记录）
-                                                任务已被用户取消
-                                            */}
+                                            {/* 日志正文取词走 `logText`：后端那半句「模板 + 参数」(`messageMsg`) 先按当前档翻，
+                                翻不动的行（外部进程原文、磁盘上的旧任务）才落回形状判据 + 「中文 → 键」表，照旧出中文。
+                                口径与判据见 `src/lib/log-normalize.ts`；固定句的键由 `src-tauri` 里的 `msg!` 一处登记。 */}
                                             {visibleLogs.map((l, i) => (
                                                 <div key={i} className="flex w-full gap-2">
                                                     <span className="shrink-0 font-mono text-[10px] leading-[14px] font-normal text-amethyst">
@@ -617,8 +607,8 @@ export function TaskDetailPage() {
                     </AnimatePresence>
                 </div>
 
-                {/* 右栏：任务信息 + 本页唯一的动作区 */}
-                <aside className="w-[280px] shrink-0">
+                {/* 右栏：任务信息 + 本页唯一的动作区（宽见 `--aside-w`） */}
+                <aside className="w-[var(--aside-w)] shrink-0">
                     <Panel gap={10}>
                         <PanelHead title={t("tasks.task-info", "任务信息")} />
                         <InfoRow label={t("tasks.started", "开始时间")} value={formatStamp(started)} />

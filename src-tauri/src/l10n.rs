@@ -1,7 +1,12 @@
 //! 后端→前端的文案出口：把「一句中文」升级成「模板 + 参数」，界面才能翻。
 //! - `key` 是带 `{{slot}}` 的简体中文模板，同时就是前端 i18next 的键（「键 = 原文」，见 `src/lib/i18n/index.ts`）；
 //!   `zh` 是渲染好的中文整句，供日志、剪贴板、README 与缺目录条目时兜底。
-//! - 不做语言判断（前端切语言）；日志行（`TaskLogLine.message`）保持中文不走这层；不带参数的固定句子由前端直接拿原文当键。当前消费者：`core/verify.rs`。
+//! - 不做语言判断（前端切语言）；不带参数的固定句子由前端直接拿原文当键。
+//!   消费者：`core/verify.rs`（自检明细）、`core/installer.rs`（安装失败的六种明细 `detail_msg`）、
+//!   `task_engine`（任务日志行 `TaskLogLine::message_msg`、失败日志行的「标题 · 明细」），
+//!   其中外部进程的原文走 `Msg::foreign`。失败卡 `TaskError` 的 title 仍是整句（前端按原文查表），
+//!   detail 由 thiserror 拼出：我们自己写的那几种同时带 `detail_msg`，剩下的（带文件名/cause 的诊断串）
+//!   由前端按形状归一化（见 `src/lib/log-normalize.ts`）。
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -16,6 +21,32 @@ pub struct Msg {
     pub args: Value,
     /// 渲染好的中文整句：日志、剪贴板、缺目录条目时的兜底
     pub zh: String,
+}
+
+impl Msg {
+    /// **外部进程的原文**（本机 Java 安装器逐行输出那一类）：不是本项目写的句子，没有模板可登记，
+    /// 界面按原样显示。刻意做成显式构造函数而不是 `From<&str>`——后者会让
+    /// `push_log(…, &format!("…"))` 悄悄编译通过，等于给「后端往外发多少句话」那张扫描表开漏。
+    pub fn foreign(text: impl Into<String>) -> Self {
+        let zh = text.into();
+        Self {
+            key: zh.clone(),
+            args: Value::Null,
+            zh,
+        }
+    }
+
+    /// 把另一句话嵌进本句的槽里（`json!` 收的是可序列化值，这层折一下让调用点读得下去）。
+    /// 渲染与界面都认这种形状：见 `render` 的嵌套参数与 `src/lib/log-normalize.ts` 的 `slotText`。
+    pub fn arg(&self) -> Value {
+        serde_json::to_value(self).unwrap_or_default()
+    }
+
+    /// 外部进程的原文（安装器喊的报错、系统 io 消息）当参数嵌进来：界面认不出模板，
+    /// 只会按形状归一化之后原样显示那半句，我们自己写的那半句照翻
+    pub fn foreign_arg(text: impl Into<String>) -> Value {
+        Self::foreign(text).arg()
+    }
 }
 
 /// 把 `{{slot}}` 换成 `args` 里的值。查不到的槽**原样留着**：
@@ -33,17 +64,29 @@ pub fn render(template: &str, args: &Value) -> String {
         let slot = &rest[at + 2..at + end];
         let value = match args.get(slot) {
             Some(Value::Null) | None => format!("{{{{{slot}}}}}"),
-            // 字符串按原值贴上去；数字/布尔同理；对象数组用紧凑 JSON（正常用法里不会出现）
-            Some(v) => match v.as_str() {
-                Some(s) => s.to_string(),
-                None => v.to_string(),
-            },
+            Some(v) => value_text(v),
         };
         out.push_str(&value);
         rest = &rest[at + end + 2..];
     }
     out.push_str(rest);
     out
+}
+
+/// 参数值 → 贴进句子里的那段文本。
+///
+/// 值本身也可以是一句 `Msg`（`json!({"detail": 某个 Msg})` 嵌进来的对象）：一句日志里套着
+/// 另一句带参数的话时（自检汇总那行嵌着失败项的明细、安装收场行嵌着顶层布局），只有把内层
+/// 也当模板渲染，界面才能连它一起翻。认的判据是「对象 + `key` 是字符串」，其他对象/数组
+/// 仍按紧凑 JSON 贴出（正常用法里不会出现）。
+fn value_text(v: &Value) -> String {
+    if let Some(template) = v.as_object().and_then(|m| m.get("key")).and_then(|k| k.as_str()) {
+        return render(template, v.get("args").unwrap_or(&Value::Null));
+    }
+    match v.as_str() {
+        Some(s) => s.to_string(),
+        None => v.to_string(),
+    }
 }
 
 /// `msg!("解析包清单")` / `msg!("模组 {{count}} 个全部落位", {"count": n})`
@@ -99,7 +142,17 @@ mod tests {
         assert_eq!(render("版本 {{v}}", &json!({"v": "1.20.1"})), "版本 1.20.1");
     }
 
-    /// 任务存档里存的旧 `TaskError` 没有 `titleMsg` 这一项：整条必须还能反序列化，
+    /// 一句里套一句：外层整句必须与当初手写的那条逐字一致，否则嵌套只是把中文换坏了
+    #[test]
+    fn nested_msg_renders_through_its_own_template() {
+        let inner = msg!("{{done}}/{{total}} 个已取件", {"total": 146, "done": 41});
+        let outer = msg!("进度：{{detail}}", {"detail": serde_json::to_value(&inner).unwrap()});
+        assert_eq!(outer.zh, "进度：41/146 个已取件");
+        // 序列化后仍是对象（前端按 `key` 认出它、连它一起翻）
+        assert!(outer.args.get("detail").unwrap().is_object());
+    }
+
+    /// 任务存档里存的旧 `TaskLogLine` / `CheckResult` 没有「模板 + 参数」那一项：整条必须还能反序列化，
     /// 否则老任务列表会因为多了一个字段而整块读不出来
     #[test]
     fn msg_round_trips_and_old_payloads_still_load() {

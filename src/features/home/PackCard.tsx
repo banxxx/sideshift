@@ -41,9 +41,8 @@ export function PackCard({
     const failed = status === "error";
     /** 读数区（分隔线 + 四格）该不该摆：解析中要摆骨架，有 manifest 要摆真值。
      *  解析失败且没有任何读数时四格全是「–」——纯噪音，撤掉。
-     *  这张卡的外框由 HomePage 那一行的定高（h-[clamp(256px,36vh,288px)]）撑着，而静止态
-     *  内容就已经贴着 288：失败文案那 2 行没有地方去，就会画到下面的轨道上面去（定高容器
-     *  不会把兄弟往下推，只会溢出叠印）。撤掉 128px 的空读数区才是把预算还给文案。 */
+     *  HomePage 那一行只给下限（min-h）不给定高，所以这里砍掉 128px 空读数区后，
+     *  卡片会跟着文案一起收，失败文案不必再叠印到下面的轨道卡上。 */
     const showMeta = parsing || !!manifest;
 
     return (

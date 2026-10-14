@@ -875,8 +875,8 @@ export function ConvertPage() {
                     </motion.div>
                 </div>
 
-                {/* 右栏：配置模板小卡 + 转换摘要（280px 固定宽） */}
-                <motion.aside variants={CARD_RISE} className="flex w-[280px] shrink-0 flex-col gap-4">
+                {/* 右栏：配置模板小卡 + 转换摘要（宽见 `--aside-w`：设计稿 280，超宽窗口按比例长） */}
+                <motion.aside variants={CARD_RISE} className="flex w-[var(--aside-w)] shrink-0 flex-col gap-4">
                     <TemplateMiniCard options={options} patch={patch} />
                     <Panel gap={14}>
                         <PanelHead title={t("convert.conversion-summary", "转换摘要")} />

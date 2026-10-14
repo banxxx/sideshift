@@ -8,6 +8,7 @@ use serde::Serialize;
 use tauri::AppHandle;
 
 use crate::models::*;
+use crate::msg;
 use super::events::{log_line, push_line};
 use super::persist::save_tasks;
 use super::pipeline::spawn_pipeline;
@@ -109,7 +110,7 @@ pub fn retry_task(app: &AppHandle, state: &Arc<AppState>, id: &str) -> Option<St
             log_line(
                 PipelineStage::Parser,
                 LogLevel::Info,
-                "重新排队：沿用上次方案（日志保留上一轮的记录）",
+                msg!("重新排队：沿用上次方案（日志保留上一轮的记录）"),
             ),
         );
         // 取消标志必须复位，否则新一轮每个回调都会被它拦死
@@ -187,7 +188,7 @@ pub fn cancel(app: &AppHandle, state: &Arc<AppState>, id: &str) {
                 t.finished_at = Some(now_ms());
                 t.activity = None;
                 let stage = t.stage.unwrap_or(PipelineStage::Parser);
-                push_line(t, log_line(stage, LogLevel::Warn, "任务已被用户取消"));
+                push_line(t, log_line(stage, LogLevel::Warn, msg!("任务已被用户取消")));
             }
         }
         save_tasks(app, &inner);

@@ -15,9 +15,10 @@
       {
         "title": "SideShift",
         "width": 1200,
-        "height": 860,
+        "height": 840,
         "minWidth": 1120,
         "minHeight": 700,
+        "center": true,
         "decorations": false,
         "shadow": false,
         "transparent": true,

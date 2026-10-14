@@ -600,8 +600,8 @@ export function TemplateEditPage() {
                     </Panel>
                 </div>
 
-                {/* 右栏 280px：保存只在这一处（页头那格放脏标记），读数与出口同列 */}
-                <aside className="flex w-[280px] shrink-0 flex-col gap-5">
+                {/* 右栏（宽见 `--aside-w`）：保存只在这一处（页头那格放脏标记），读数与出口同列 */}
+                <aside className="flex w-[var(--aside-w)] shrink-0 flex-col gap-5">
                     <Panel gap={14}>
                         <PanelHead title={t("templates.summary", "模板摘要")} />
                         {/* 0 是新建那一屏唯一的信号：不弹提示、不给气泡，染金 + 保存禁用就是反馈 */}

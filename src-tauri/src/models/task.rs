@@ -72,7 +72,12 @@ pub enum LogLevel {
 pub struct TaskLogLine {
     pub time: String,
     pub stage: PipelineStage,
+    /// 后端渲染好的中文整句：存档、复制、README 与缺目录条目时的兜底，界面缺省也显示它
     pub message: String,
+    /// 同一句话的「模板 + 参数」（见 `crate::l10n`）：界面按它查翻译目录。
+    /// 磁盘上的旧任务没有这一项 → `None`，前端照旧显示 `message`，行为与改造前逐字一致。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub message_msg: Option<Msg>,
     pub level: LogLevel,
 }
 
@@ -136,6 +141,12 @@ pub struct TaskError {
     pub stage: PipelineStage,
     pub title: String,
     pub detail: String,
+    /// 同一句明细的「模板 + 参数」（见 `crate::l10n`）：错误卡正文按它查翻译目录。
+    /// `detail` 仍是渲染好的中文整句（诊断信息复制、README 与缺目录时兜底）。
+    /// 只有**我们自己写的那几句**有它（本机安装那一族）；其余明细沿用既有口径：种类码 → 形状归一化 → 原样。
+    /// 磁盘上的旧任务没有这一项 → `None`，界面行为与改造前逐字一致。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub detail_msg: Option<Msg>,
     /// 失败种类代码（`net:offline:api.modrinth.com` 这一串）：界面上给人看的是它翻出来的
     /// 那句本地化文案，`detail` 里那条带 URL/状态码的原句只进「复制诊断信息」。
     /// 归不了类的失败（中文整句的那些）没有码 ⇒ 旧档缺这个字段也照样成立

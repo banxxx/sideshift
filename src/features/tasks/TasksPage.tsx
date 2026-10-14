@@ -11,7 +11,7 @@ import * as api from "@/lib/api";
 import { notify } from "@/lib/notify";
 import { t, tSource, useT, type TranslateFn } from "@/lib/i18n";
 import { errOf } from "@/lib/errors";
-import { normalizeLog } from "@/lib/log-normalize";
+import { errorText, logText } from "@/lib/log-normalize";
 import { useNavigation } from "@/lib/navigation";
 import { BAR_COLOR, needsNetwork, progressChip, runCounts, stageLabel } from "@/lib/rail-view";
 import { formatDuration, formatElapsed, formatSize, loaderLabel, outputNameOf, truncateMiddle } from "@/lib/format";
@@ -568,13 +568,12 @@ function TaskCard({ task, onDelete }: { task: ConversionTask; onDelete: () => vo
             )}
 
             {/* 失败态：错误盒（$bg-app + $redstone-dim 描边）。
-                安装器那条 detail 是「退出码 + 最多三句原因」用 " / " 拼的，整句贴上来要四行；
-                列表这里只留一句病因（先归一化再走 errOf，认不出的照样原样截断），全文在详情页错误卡。 */}
+                安装器那条 detail 是「退出码 + 最多三句原因」，整句贴上来要四行；
+                列表这里只留一句（种类码 → 后端模板 → 形状判据，口径见 `errorText`），全文在详情页错误卡。 */}
             {task.status === "failed" && task.error && (
                 <div className="w-full rounded-[12px] border border-redstone-dim bg-bg-app px-4 py-3">
                     <span className="block truncate font-mono text-[11px] leading-[16px] font-normal text-redstone">
-                        {tSource(task.error.title)} ·{" "}
-                        {errOf(task.error.code ?? normalizeLog(task.error.detail).message)}
+                        {tSource(task.error.title)} · {errorText(task.error, true)}
                     </span>
                 </div>
             )}
@@ -659,9 +658,9 @@ function chipLabel(task: ConversionTask, base: string): string {
 /** row3 左侧明细行 */
 function detailLine(task: ConversionTask): string {
     if (task.status === "running" || task.status === "queued") {
-        const raw = task.logs[task.logs.length - 1]?.message;
+        const last = task.logs[task.logs.length - 1];
         const where = task.stage ? `${stageLabel(task.stage, needsNetwork(task))} ·` : `${t("tasks.queued", "排队")} ·`;
-        return [where, raw === undefined ? t("tasks.waiting", "等待开始…") : tSource(normalizeLog(raw).message)].filter(Boolean).join(" ");
+        return [where, last === undefined ? t("tasks.waiting", "等待开始…") : tSource(logText(last).message)].filter(Boolean).join(" ");
     }
     if (task.status === "success") {
         const c = task.counts;
