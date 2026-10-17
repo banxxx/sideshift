@@ -284,8 +284,9 @@ async fn run(
     cancel: &Arc<AtomicBool>,
 ) -> Result<UpdateStatus, String> {
     let url = release_tag_url(tag);
-    // 与 check_update 同一条取法：短超时 + 两次尝试（全局 120s 在这一档是黑洞）
-    let body = super::api_json(client(), &url)
+    // 与 check_update 同一条取法（先直连、失败退跟随系统代理，各一发 10 秒）；
+    // 资产字节仍走下面那颗吃系统代理的 `client()`，两件事别混
+    let body = super::api_json(&url)
         .await
         .map_err(|c| fail(app, c))?;
     let rel = release::parse_one(&body, &url).map_err(|c| fail(app, c))?;

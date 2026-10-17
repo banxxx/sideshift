@@ -41,8 +41,8 @@ fn local_facts(app: &AppHandle, state: &Arc<AppState>) -> Result<Local, String> 
 /// 敲那一趟，把版本比较、渠道、能不能一键装全部算完再回。
 ///
 /// 端点是 release **列表**而不是 `/releases/latest`（原因见 `core::update::releases_url`）；
-/// 判据都在 Rust 侧算，前端只渲染。取 JSON 走 `update::api_json`（10s 短超时 + 两次尝试，
-/// 全局 120s 在这一档是黑洞；API 层无镜像，原因见那边的注释）。
+/// 判据都在 Rust 侧算，前端只渲染。取 JSON 走 `update::api_json`（先直连、失败退到跟随系统代理，
+/// 各一发 10 秒；为什么这一跳默认不吃代理，原因见那边的注释）。
 async fn gather(app: &AppHandle, state: &Arc<AppState>) -> Result<UpdateInfo, String> {
     let Local {
         channel,
@@ -51,9 +51,8 @@ async fn gather(app: &AppHandle, state: &Arc<AppState>) -> Result<UpdateInfo, St
         ..
     } = local_facts(app, state)?;
 
-    let dl = downloader_of(state);
     let url = update::releases_url();
-    let body = update::api_json(&dl.client, &url).await?;
+    let body = update::api_json(&url).await?;
     let releases = update::release::parse(&body, &url)?;
 
     // 便携形态（exe 旁边就是 portable.flag）一期不给一键更新：

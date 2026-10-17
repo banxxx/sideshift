@@ -667,6 +667,9 @@ export function SettingsPage() {
                         <Btn
                             size="sm"
                             icon={RefreshCw}
+                            /* 转圈只给图标本体，不给整颗钮：整块转会把悬停底色和按压缩放一起带歪。
+                             * 和占用统计那颗刷新钮共用 SPIN_CLASS，全站一个节奏 */
+                            className={cn(upd.checking && SPIN_CLASS)}
                             onClick={() => {
                                 // 那一轮在跑或已就位时这颗钮是「回到它」：重查会把用户正看着的进度顶掉。
                                 // 结论现在住在 store 里、跨页留着，所以「查过且有新版」同样直接回那扇窗
