@@ -45,13 +45,15 @@ pub const NSIS_UNINSTALLER_STASHED: &str = "nsis-uninstall.exe";
 
 /* ---------------- 缓存目录里「我们名下」的条目 ---------------- */
 
-/// 四个缓存桶：`{cache}\{名}\`，每个都装一类可再生数据，设置页那张卡按桶清理。
+/// 五个缓存桶：`{cache}\{名}\`，每个都装一类可再生数据，设置页那张卡按桶清理。
 /// 名字单源在这里而不是各写入方各留一份：卸载壳能编到的只有本文件（`#[path]` 共享面），
 /// 它要删的清单必须和写入方建目录时用的是同一份字符串。写入方从本文件 `pub use` 回去
 pub const CACHE_FILES_DIR: &str = "files";
 pub const CACHE_TASKS_DIR: &str = "tasks";
 pub const CACHE_INSTALLS_DIR: &str = "installs";
 pub const CACHE_UPDATE_DIR: &str = "update";
+/// 本机开服验证的解包副本（`verify\{task_id}\`）：可由交付包随时重解，所以它确实可再生
+pub const CACHE_VERIFY_DIR: &str = "verify";
 /// 三张躺在缓存根（不在任何桶里）的索引：`cf-files-index.json` / `env-index.json` /
 /// `java-index.json`。它们刻意放在可清理目录**之外**（不可再生或再生很贵），但字节确实
 /// 是我们在缓存根里落的 ⇒ 卸载要收，设置页的清理不认它们
@@ -69,6 +71,7 @@ pub const CACHE_OWNED: &[&str] = &[
     CACHE_TASKS_DIR,
     CACHE_INSTALLS_DIR,
     CACHE_UPDATE_DIR,
+    CACHE_VERIFY_DIR,
     CACHE_CF_INDEX,
     CACHE_ENV_INDEX,
     CACHE_JAVA_INDEX,
@@ -457,7 +460,7 @@ mod tests {
         std::fs::remove_dir_all(base).ok();
     }
 
-    /// 卸载壳的删除清单必须列全四个桶 + 三张根索引：漏一条就是卸载后留在用户机器上没人收
+    /// 卸载壳的删除清单必须列全五个桶 + 三张根索引：漏一条就是卸载后留在用户机器上没人收
     #[test]
     fn owned_cache_entries_list_buckets_and_indexes() {
         assert_eq!(
@@ -467,6 +470,7 @@ mod tests {
                 CACHE_TASKS_DIR,
                 CACHE_INSTALLS_DIR,
                 CACHE_UPDATE_DIR,
+                CACHE_VERIFY_DIR,
                 CACHE_CF_INDEX,
                 CACHE_ENV_INDEX,
                 CACHE_JAVA_INDEX,

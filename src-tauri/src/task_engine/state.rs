@@ -10,7 +10,7 @@ use crate::core::env;
 use crate::core::parser::ParsedPack;
 use crate::models::*;
 use super::persist::{load_settings, load_templates, load_tasks};
-use super::schedule::sweep_task_staging;
+use super::schedule::{sweep_task_staging, sweep_verify_copies};
 use super::trash::Trashed;
 
 #[derive(Default)]
@@ -47,6 +47,13 @@ pub struct Inner {
     /// 联网反查仍在后台跑的那个包身份（跑完或换包即清）。classify_pack 靠它区分
     /// 「缓存命中、本轮已经结束」和「缓存命中、但在线层还在补」——后者还得继续挂「分类中」。
     pub env_online_pack: Option<String>,
+    /// 本机开服验证的会话表（按任务 id）。内存态；盘上的那份是副本根里的 `.verify-run.json`
+    /// 与 `verify.log`，冷启动时由 `task_engine::verify` 按副本重建
+    pub verifies: HashMap<String, VerifySession>,
+    /// 验证的独占槽位：起的是真服务端进程，两条一起跑抢的是同一份内存与同一个端口
+    pub verify_current: Option<String>,
+    /// 验证的取消标志（与 `cancel` 分开一张表：同一个任务可以同时有「转换在取消」和「验证在取消」）
+    pub verify_cancel: HashMap<String, Arc<AtomicBool>>,
 }
 
 pub struct AppState {
@@ -69,6 +76,8 @@ impl AppState {
         ));
         load_tasks(app, &mut inner);
         sweep_task_staging(&inner);
+        // 验证副本同一条判据：任务不在了，副本也就没人认了（它随时可由交付包重解）
+        sweep_verify_copies(&inner);
         Self {
             inner: Mutex::new(inner),
         }

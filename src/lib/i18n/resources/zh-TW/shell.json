@@ -7,7 +7,6 @@
   "common.copy": "複製",
   "common.copy-failed": "複製失敗：剪貼板不可用",
   "common.copy-logs": "複製全部日誌",
-  "common.copy-text": "複製為文本，可直接粘貼",
   "common.loaders-version": "識別載入器與版本",
   "common.logs-yet": "暫無日誌",
   "common.matches": "無匹配項",

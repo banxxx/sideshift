@@ -23,4 +23,8 @@ export const EVENTS = {
     updateProgress: "update://progress",
     /** 启动后那一趟自动检查查出「有新版且能一键装」（载荷是 `UpdateInfo`）。只点角标，不弹窗 */
     updateAvailable: "update://available",
+    /** 本机开服验证的一步换态 / 一行日志（载荷是 `VerifyProgress`，只带增量） */
+    verifyProgress: "verify://progress",
+    /** 一轮验证结束（通过/失败/超时/取消都发；载荷只有 taskId，页面据此回拉整份快照） */
+    verifyDone: "verify://done",
 } as const;

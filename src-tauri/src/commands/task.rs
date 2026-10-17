@@ -98,6 +98,8 @@ pub async fn clear_trash(state: S<'_>) -> Result<usize, String> {
     let n = ids.len();
     for id in ids {
         task_engine::remove_task_staging(&state, &id);
+        // 副本与暂存同一档命运：回收站清空就是彻底丢弃，验证会话也不再有意义
+        task_engine::remove_verify_copy(&state, &id);
     }
     Ok(n)
 }
@@ -112,5 +114,54 @@ pub fn get_report(state: S<'_>, task_id: String) -> Option<ConversionReport> {
 #[tauri::command]
 pub fn get_task_plan(state: S<'_>, task_id: String) -> Vec<PlanMod> {
     lock(&state).plans.get(&task_id).cloned().unwrap_or_default()
+}
+
+/* ---------------- 本机开服验证 ---------------- */
+
+/// 验证会话快照：六步 + 日志环 + 结论，页面一次拿全；进度事件只带增量行，
+/// 收到 done 就再拉一次这个（口径与 get_task 一样）
+#[tauri::command]
+pub fn get_verify_state(state: S<'_>, id: String) -> VerifySession {
+    task_engine::verify_session(&state, &id)
+}
+
+/// 开一轮验证：解包到副本、按交付包自己的脚本起进程、等那句就绪。
+/// 同步返回只代表「排上了」，结果一律走事件与快照
+#[tauri::command]
+pub fn start_verify(app: AppHandle, state: S<'_>, id: String) -> Result<(), String> {
+    task_engine::start_verify(&app, &state, &id)
+}
+
+/// 取消：立旗 + 记一行，执行体那侧杀进程并写终态
+#[tauri::command]
+pub fn cancel_verify(app: AppHandle, state: S<'_>, id: String) -> bool {
+    task_engine::cancel_verify(&app, &state, &id)
+}
+
+/// 副本 mods 目录的清单（启停弹窗的「已启用 / 已停用」两档共用一份表，切档不再问后端）
+#[tauri::command]
+pub fn list_verify_mods(state: S<'_>, id: String) -> Result<Vec<VerifyModEntry>, String> {
+    task_engine::verify_mods(&state, &id)
+}
+
+#[tauri::command]
+pub fn set_verify_mod_enabled(
+    state: S<'_>,
+    id: String,
+    file: String,
+    enabled: bool,
+) -> Result<ModToggleResult, String> {
+    task_engine::toggle_verify_mod(&state, &id, &file, enabled)
+}
+
+/// 清理验证目录：副本整份删掉，会话回到默认那一档（结果与日志一起丢，重新验证才有新的）。
+/// 递归删走 IO，与其余三颗清理按钮同为 async
+#[tauri::command]
+pub async fn clean_verify_dir(
+    app: AppHandle,
+    state: S<'_>,
+    id: String,
+) -> Result<(), String> {
+    task_engine::clean_verify_dir(&app, &state, &id)
 }
 

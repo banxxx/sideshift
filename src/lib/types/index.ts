@@ -12,6 +12,7 @@ export * from "./template";
 export * from "./activity";
 export * from "./task";
 export * from "./report";
+export * from "./verify";
 export * from "./mods";
 export * from "./settings";
 export * from "./update";

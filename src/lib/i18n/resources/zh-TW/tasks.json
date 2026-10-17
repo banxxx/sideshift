@@ -66,6 +66,7 @@
   "tasks.loading-task": "正在讀取任務狀態…",
   "tasks.loading-tasks": "正在讀取任務…",
   "tasks.local-install": "本機安裝",
+  "tasks.local-verify": "本地開服驗證",
   "tasks.logs": "日誌",
   "tasks.offline": "無需聯網",
   "tasks.open-output": "打開輸出位置",

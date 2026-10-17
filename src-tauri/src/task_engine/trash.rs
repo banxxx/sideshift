@@ -2,7 +2,7 @@
 //! 遗留的暂存目录由下次启动的 `sweep_task_staging` 收掉，不依赖退出钩子。
 //! 撤回要求暂存目录原地保留（`delete_task` 只搬进回收站不删），真正丢弃只发生在 `clear_trash`。
 
-use std::sync::atomic::AtomicBool;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 use serde::Serialize;
@@ -54,6 +54,12 @@ pub fn trash_task(app: &AppHandle, inner: &mut Inner, id: &str) -> bool {
         },
     );
     inner.cancel.remove(id);
+    // 删掉的任务不再需要本机验证：验证还在跑就把旗立下去，执行体自己收尾（副本随后会被清空）
+    if inner.verify_current.as_deref() == Some(id) {
+        if let Some(flag) = inner.verify_cancel.get(id) {
+            flag.store(true, Ordering::Relaxed);
+        }
+    }
     save_tasks(app, inner);
     true
 }

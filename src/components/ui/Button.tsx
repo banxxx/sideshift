@@ -1,5 +1,5 @@
 /**
- * 按钮族。md：h36 padding[0,16] 13；sm：h32 padding[0,12] 12；xs：h28 padding[0,12] 11（primary 700 / outline 500）。
+ * 按钮族。md：h36 padding[0,16] 13；sm：h32 padding[0,12] 12；xs：h28 padding[0,12] 11（primary 700 / soft·outline 600·500）。
  * title 一律不落到 DOM（系统灰泡不受样式管）：Btn/IconBtn 拿到它就补 aria-label、挂触发类，气泡由 Tip 画——调用方照旧写 title 即可。
  */
 import { ChevronRight, type LucideIcon } from "lucide-react";
@@ -7,11 +7,15 @@ import { cn } from "@/lib/utils";
 import { Tip, TIP_TRIGGER } from "./Tip";
 import { HOVER_PRESS } from "./HoverFill";
 
-type BtnVariant = "primary" | "outline" | "ghost" | "danger";
+type BtnVariant = "primary" | "soft" | "outline" | "ghost" | "danger";
 type BtnSize = "md" | "sm" | "xs";
 
 const BTN_VARIANT: Record<BtnVariant, string> = {
     primary: "bg-accent font-bold text-accent-ink shadow-[var(--shadow-btn)] hover:opacity-90",
+    /** 淡一档的实心：同族色但让出主位（一屏有第二颗主动作时用，别拿它当 outline 的替身）。
+        底色走 accent 的百分比而不是 `--accent-dim`——那枚只有 8% 浓度，铺在白卡上发虚；
+        描边与底色同向加深，hover 才有两处一起动，光靠 `opacity` 在浅底上看不出来。 */
+    soft: "border border-accent/35 bg-accent/15 font-semibold text-accent hover:border-accent/60 hover:bg-accent/25",
     outline:
         "border border-stroke bg-veil-pill font-medium text-text-2 hover:bg-surface-2 hover:text-text-1",
     ghost: "bg-transparent font-medium text-text-2 hover:bg-surface-2 hover:text-text-1",

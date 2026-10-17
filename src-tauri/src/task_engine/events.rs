@@ -20,7 +20,13 @@ pub const EVENT_CLASSIFIED: &str = "plan://classified";
 /// 单任务日志上限：保留目录命中 kubejs/资源包这类目录时条目数以千计，日志不设上限会把
 /// tasks.json 撑到 MB 级、并让每次进度事件都全量搬运日志给前端 —— 实测 7340 行直接把界面卡死。
 /// 超限后只留最近这些条（含一条截断标记），复制与存档口径一致。
-const MAX_LOG_LINES: usize = 600;
+/// 本机开服验证的输出流用的是**同一条预算**（`task_engine::verify`），所以这里对两边可见。
+pub(crate) const MAX_LOG_LINES: usize = 600;
+
+/// 「日志过长」那一句截断说明：转换任务日志与验证日志共用同一句、同一个数
+pub(crate) fn truncation_msg() -> Msg {
+    msg!("（日志过长，仅保留最近 {{count}} 条）", {"count": MAX_LOG_LINES - 1})
+}
 
 /// 超限时裁到最近 MAX_LOG_LINES 条，并在头部放一条截断说明（旧头已被裁掉，所以永远只有一条）
 pub fn trim_logs(logs: &mut Vec<TaskLogLine>) {
@@ -29,14 +35,7 @@ pub fn trim_logs(logs: &mut Vec<TaskLogLine>) {
     }
     let stage = logs.last().map(|l| l.stage).unwrap_or(PipelineStage::Parser);
     logs.drain(..logs.len() - (MAX_LOG_LINES - 1));
-    logs.insert(
-        0,
-        log_line(
-            stage,
-            LogLevel::Warn,
-            msg!("（日志过长，仅保留最近 {{count}} 条）", {"count": MAX_LOG_LINES - 1}),
-        ),
-    );
+    logs.insert(0, log_line(stage, LogLevel::Warn, truncation_msg()));
 }
 
 /// 一条日志。`msg` 是「模板 + 参数」（见 `crate::l10n`）：渲染出的中文整句进 `message`（存档、

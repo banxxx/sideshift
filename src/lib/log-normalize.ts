@@ -126,6 +126,15 @@ function templateText(raw: string, m: BackendMsg): string {
 type LogSource = Pick<TaskLogLine, "message"> & Partial<Pick<TaskLogLine, "messageMsg">>;
 
 /**
+ * 后端单独发来的一句话（验证的六步摘要、阻塞项、环境提示）：带模板就按当前档翻，
+ * 没有模板（`Msg::foreign` 那类外部原文）照原句。
+ * 日志行**不走这里**，那类还要按形状收一次（去 URL、认病因），入口是 `logText`。
+ */
+export function msgText(raw: string, m?: BackendMsg | null): string {
+    return m?.key ? templateText(raw, m) : raw;
+}
+
+/**
  * 整理一行渲染结果，但**判据认的是中文原句的形状**，不是译文：
  * 「本机安装超时（300 秒）」翻成英文会带出 `timed out`，那是我们自己的句子、不是网络病因，
  * 拿译文去撞形状判据会把整句换成「下载超时，稍后再试」。原句本来不需要整理，译文就照原样用。

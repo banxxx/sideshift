@@ -57,7 +57,6 @@ export function LogCopyButton({ logs, header, variant = "labeled", className }: 
             icon={copied ? Check : Copy}
             onClick={() => void copy()}
             disabled={empty}
-            title={empty ? t("common.logs-yet", "暂无日志") : t("common.copy-text", "复制为文本，可直接粘贴")}
         >
             {copied ? t("common.copied", "已复制") : t("common.copy", "复制")}
         </Btn>

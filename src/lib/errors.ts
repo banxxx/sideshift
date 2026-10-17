@@ -165,6 +165,12 @@ export function errOf(e: unknown): string {
                 这条任务已经不在列表里（可能刚被撤回或重复删除）
                 回收站里已经没有这条任务（可能刚被清空）
                 任务列表里已经有这条任务，撤回没有执行
+                verify.err-gone=这条任务已经不在了，没有可验证的交付包
+                verify.err-converting=这条任务还在转换，等它出结果再验证
+                verify.err-verify-busy=已经有一条验证在跑，先等它结束或把它停掉
+                verify.err-task-busy=有转换任务正在跑，先等它结束再验证
+                verify.err-mod-busy=这条任务正在验证，先停掉再改模组
+                verify.err-clean-busy=这条任务正在验证，先停掉再清目录
             */
             raw
         )

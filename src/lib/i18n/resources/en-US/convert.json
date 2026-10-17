@@ -60,6 +60,7 @@
   "convert.install-loader": "Install loader locally (upload to go live)",
   "convert.java-detected": "No Java detected locally",
   "convert.java-line-failed": "Couldn't load the Java requirement · {{reason}}",
+  "convert.java-required": "Required",
   "convert.jdk-picked": " · the JDK picked in the plan is no longer installed",
   "convert.keepable-folders": "Nothing keepable in the pack (no resource files outside mods)",
   "convert.kept": "Kept",

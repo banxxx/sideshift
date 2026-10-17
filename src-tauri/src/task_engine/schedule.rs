@@ -7,6 +7,7 @@ use std::sync::Arc;
 use serde::Serialize;
 use tauri::AppHandle;
 
+use crate::core::verify_copy;
 use crate::models::*;
 use crate::msg;
 use super::events::{log_line, push_line};
@@ -174,6 +175,23 @@ pub fn sweep_task_staging(inner: &Inner) {
             let _ = std::fs::remove_dir_all(entry.path());
         }
     }
+}
+
+/// 启动回收：注册表里已无此任务的**验证副本**。判据与上面那条完全一样，
+/// 副本随时可由交付包重解，所以留着只占盘不占理（`verify` 桶空了连根壳一起收）
+pub fn sweep_verify_copies(inner: &Inner) {
+    verify_copy::sweep_orphans(
+        &PathBuf::from(&inner.settings.cache_dir),
+        |name| inner.tasks.contains_key(name),
+    );
+}
+
+/// 彻底丢弃一条任务时连带收掉它的验证副本与会话（`clear_trash` 那一档）。
+/// 递归删必须在解锁之后做：这里自己锁一次，与 `remove_task_staging` 同一规矩。
+pub fn remove_verify_copy(state: &AppState, id: &str) {
+    let cache_dir = state.inner.lock().unwrap().settings.cache_dir.clone();
+    let _ = verify_copy::teardown(&PathBuf::from(cache_dir), id);
+    state.inner.lock().unwrap().verifies.remove(id);
 }
 
 pub fn cancel(app: &AppHandle, state: &Arc<AppState>, id: &str) {

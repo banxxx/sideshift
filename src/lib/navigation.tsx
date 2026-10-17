@@ -19,8 +19,9 @@ export type PrimaryPage = "home" | "tasks" | "templates" | "about" | "settings";
 /**
  * 二级页面 key：报告与方案不再是独立页面，它们收在任务详情的页签里
  * （转换配置是唯一剩下的深页，且只有「新建转换」这一个写入口；模板编辑页同理，是模板列表的唯一写入口）
+ * `verify` 是任务详情的下一层：本机开服验证有自己的会话快照与日志，不挤进任务详情的页签
  */
-export type SecondaryPage = "convert" | "task" | "template";
+export type SecondaryPage = "convert" | "task" | "verify" | "template";
 
 export type PageKey = PrimaryPage | SecondaryPage;
 
@@ -28,6 +29,7 @@ export type PageKey = PrimaryPage | SecondaryPage;
 export const SECONDARY_OWNER: Record<SecondaryPage, PrimaryPage> = {
     convert: "home",
     task: "tasks",
+    verify: "tasks",
     template: "templates",
 };
 

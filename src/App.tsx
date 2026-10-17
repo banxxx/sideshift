@@ -14,6 +14,7 @@ import { AboutPage } from "@/features/about/AboutPage";
 import { SettingsPage } from "@/features/settings/SettingsPage";
 import { ConvertPage } from "@/features/convert/ConvertPage";
 import { TaskDetailPage } from "@/features/tasks/detail/TaskDetailPage";
+import { VerifyPage } from "@/features/tasks/verify/VerifyPage";
 import { TemplatesPage } from "@/features/templates/TemplatesPage";
 import { TemplateEditPage } from "@/features/templates/TemplateEditPage";
 import { TrashBin } from "@/features/tasks/TrashBin";
@@ -40,6 +41,7 @@ const pages: Record<PageKey, ComponentType> = {
     settings: SettingsPage,
     convert: ConvertPage,
     task: TaskDetailPage,
+    verify: VerifyPage,
     templates: TemplatesPage,
     template: TemplateEditPage,
 };

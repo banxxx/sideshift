@@ -3,7 +3,6 @@
  * 并预置一组历史样例让列表 / 详情 / 报告 / 错误卡都能直接走查。
  */
 import type {
-    BackendMsg,
     CheckResult,
     ConversionOptions,
     ConversionReport,
@@ -11,12 +10,13 @@ import type {
     PackManifest,
     PlanMod,
     StartResult,
-    TaskLogLine,
     TrashEntry,
 } from "@/lib/types";
 import { yieldedIn } from "@/lib/types";
 import { outputNameOf, loaderLabel } from "@/lib/format";
 import { hasInstallerStage } from "@/lib/rail-view";
+import type { LogSample } from "./msg";
+import { logMsg, msg } from "./msg";
 import {
     mockDefaultOptions,
     mockManifest,
@@ -29,9 +29,6 @@ import { mockLoadSettings } from "./settings";
 const tasks = new Map<string, ConversionTask>();
 const timers = new Map<string, ReturnType<typeof setInterval>>();
 let seq = 0;
-
-/** 一条样例日志：整句必给，「模板 + 参数」按 Rust 那边的同款形状一起给（见 `logMsg`） */
-type LogSample = Pick<TaskLogLine, "message"> & Partial<Pick<TaskLogLine, "messageMsg">>;
 
 /** 一段模拟阶段：走到 until 就换下一段，logs 是该段的样例日志 */
 type StageSeg = { stage: ConversionTask["stage"]; until: number; logs: LogSample[] };
@@ -509,41 +506,6 @@ export function mockClearTrash(): number {
     const n = trash.size;
     trash.clear();
     return n;
-}
-
-/** 镜像 Rust 的 `l10n::value_text`：槽值贴进句子里的那段文本 */
-function valueText(v: unknown): string {
-    if (typeof v === "string") return v;
-    if (v && typeof v === "object") {
-        const m = v as Partial<BackendMsg>;
-        // 槽值本身又是句模板时：内层连它一起渲染，不能 `[object Object]`
-        if (typeof m.key === "string") return renderMsg(m.key, m.args ?? undefined).zh;
-        return JSON.stringify(v);
-    }
-    return String(v);
-}
-
-/** 镜像 Rust 的 `msg!`：一条模板句同时给出「渲染好的中文整句」和「模板 + 参数」。
- *  两边口径必须一致——mock 里只给整句的话，界面上那条永远翻不出来，真机却翻得出来，
- *  自测就会在两种数据下看到两套语言。 */
-function renderMsg(key: string, args?: Record<string, unknown> | null) {
-    const zh = key.replace(/\{\{\s*(\w+)\s*}}/g, (_, slot: string) => {
-        const v = args?.[slot];
-        // 漏传参数一眼看出来（Rust 同款：槽原样留着），不静默变空串
-        return v == null ? `{{${slot}}}` : valueText(v);
-    });
-    return { key, args: args ?? null, zh };
-}
-
-/** 日志行那一份：字段名跟着 `TaskLogLine` 走（`message` + `messageMsg`） */
-function logMsg(key: string, args?: Record<string, unknown>): LogSample {
-    const m = renderMsg(key, args);
-    return { message: m.zh, messageMsg: m };
-}
-
-function msg(key: string, args?: Record<string, unknown>) {
-    const m = renderMsg(key, args);
-    return { detail: m.zh, detailMsg: m };
 }
 
 export function mockReport(taskId: string): ConversionReport | undefined {

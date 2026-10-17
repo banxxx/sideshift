@@ -8,7 +8,7 @@ use std::time::{Duration, SystemTime};
 
 use crate::core::data_root::{
     CACHE_CF_INDEX, CACHE_ENV_INDEX, CACHE_FILES_DIR, CACHE_INSTALLS_DIR, CACHE_JAVA_INDEX,
-    CACHE_MARKER, CACHE_TASKS_DIR, CACHE_UPDATE_DIR,
+    CACHE_MARKER, CACHE_TASKS_DIR, CACHE_UPDATE_DIR, CACHE_VERIFY_DIR,
 };
 use crate::core::downloader::is_partial_name;
 use crate::core::update::fetch::busy as update_running;
@@ -300,6 +300,7 @@ fn cache_dir_is_ours(cache_dir: &Path) -> bool {
         CACHE_TASKS_DIR,
         CACHE_INSTALLS_DIR,
         CACHE_UPDATE_DIR,
+        CACHE_VERIFY_DIR,
     ];
     let indexes = [CACHE_ENV_INDEX, CACHE_CF_INDEX, CACHE_JAVA_INDEX];
     if buckets.iter().any(|d| cache_dir.join(d).is_dir())
@@ -468,7 +469,7 @@ fn file_name(path: &Path) -> String {
 }
 
 /// 目录内字节合计。深度不固定，用显式栈——保留目录动辄几百个文件，不拿栈空间赌
-fn dir_bytes(dir: &Path) -> u64 {
+pub(crate) fn dir_bytes(dir: &Path) -> u64 {
     let mut stack = vec![dir.to_path_buf()];
     let mut total = 0u64;
     while let Some(d) = stack.pop() {

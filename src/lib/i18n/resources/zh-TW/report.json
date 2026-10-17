@@ -73,6 +73,7 @@
   "report.deps-intact": "依賴閉合",
   "report.dirs-kept": "隨包保留內容",
   "report.duration-total": "· 總耗時 {{duration}}",
+  "report.duration-used": "用時",
   "report.entry-2": "開啟",
   "report.extracted-folder": "在解壓目錄執行 java -Xmx{{memory}}M -jar {{jar}}{{nogui}}{{fabricNote}}{{aikarNote}}",
   "report.fabric-server": "（Fabric 伺服器端 jar 首次運行會聯網裝出載入器）",

@@ -44,6 +44,7 @@
   "tasks.loading-task": "Loading task status…",
   "tasks.loading-tasks": "Loading tasks…",
   "tasks.local-install": "Local install",
+  "tasks.local-verify": "Local server verification",
   "tasks.logs": "Logs",
   "tasks.offline": "offline",
   "tasks.open-output": "Open output",

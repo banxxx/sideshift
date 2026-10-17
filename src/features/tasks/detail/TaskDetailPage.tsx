@@ -89,7 +89,7 @@ export function TaskDetailPage() {
         result: t("tasks.results", "结果"),
         plan: t("tasks.plan", "方案"),
     };
-    const { entry, switchPrimary } = useNavigation();
+    const { entry, switchPrimary, navigate } = useNavigation();
     const taskId = entry.params?.taskId as string | undefined;
     /** 列表主按钮带着落点来（已完成→结果，其余→概况） */
     const wanted = entry.params?.tab as TaskTab | undefined;
@@ -671,6 +671,16 @@ export function TaskDetailPage() {
                                     onClick={() => void openOutput()}
                                 >
                                     {t("tasks.open-output", "打开输出位置")}
+                                </Btn>
+                            )}
+                            {/* 交付包落地才有可验的东西：入口只挂在成功档，跑着/失败/取消的包还没成形 */}
+                            {task.status === "success" && (
+                                <Btn
+                                    variant="soft"
+                                    full
+                                    onClick={() => navigate("verify", { taskId: task.id })}
+                                >
+                                    {t("tasks.local-verify", "本地开服验证")}
                                 </Btn>
                             )}
                             {/* 复制方案不挑成败：方案是任务快照，失败与取消照样能抄走重跑，

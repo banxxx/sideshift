@@ -12,6 +12,8 @@ pub mod builder;
 pub mod cfpack;
 pub mod estimate;
 pub mod verify;
+pub mod verify_copy;
+pub mod verify_run;
 pub mod cleanup;
 pub mod ack;
 // 应用更新：渠道判定、release 解析（下载与安装分两期接进来）
