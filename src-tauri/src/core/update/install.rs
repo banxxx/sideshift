@@ -12,7 +12,7 @@
 //!    那道钩子只删 `$INSTDIR\appdata` 这一个子目录（文件头部专门解释了为什么绝不写
 //!    `RMDir /r "$INSTDIR"`：安装目录可能与数据根是同一个），所以产物与缓存不在它射程里。
 //! 3. **`/D=` 必须是最后一个参数**（NSIS 的写法约束：它取的是从 `/D=` 一直到行尾的那一段）。
-//!    安装壳那边同样把它放在末尾，两处同序不是巧合。
+//!    安装壳那边同样把它放在末尾，两处同序不是巧合。`/R`（装完自动开新版）排在它前面。
 
 use std::fs::File;
 use std::io::Write;
@@ -87,10 +87,15 @@ pub fn take_outcome(config_dir: &Path, current: &str) -> Option<UpdateOutcome> {
 /// 交给 NSIS 的那串参数，顺序是契约而不是风格：`/D=` 必须收尾。
 /// 带空格的目录交给 `Command` 去加引号——它按 Windows 的命令行规则包一整段，
 /// 正是 NSIS 认的那个形状（`"/D=E:\My Programs\SideShift"`）
+///
+/// `/R` 是「装完把新版开起来」：官方模板只在静默/被动那两支读它（GUI 安装器不读，那边本来就有
+/// 一枚「运行 SideShift」勾选框），而这条链走的就是 `/S`，所以正好吃到。少了它，升级完得用户
+/// 自己去找图标——安装器在 `.onInit` 就把旧进程杀了，我们那句 `exit` 都可能等不到，没人接手开。
 fn installer_args(install_dir: &Path) -> Vec<String> {
     vec![
         "/S".to_string(),
         "/UPDATE".to_string(),
+        "/R".to_string(),
         format!("/D={}", install_dir.display()),
     ]
 }
@@ -170,14 +175,15 @@ mod tests {
     }
 
     /// `/D=` 必须收尾，且 `/UPDATE` 与 `/S` 都在：少 `/UPDATE` 会删用户数据（见文件头第 2 条），
-    /// 少 `/S` 会弹一个界面替用户决定什么时候退出
+    /// 少 `/S` 会弹一个界面替用户决定什么时候退出；少 `/R` 则装完不会自己开
     #[test]
     fn installer_arguments_are_an_ordered_contract() {
         let args = installer_args(Path::new(r#"D:\My Programs\SideShift"#));
         assert_eq!(args[0], "/S");
         assert_eq!(args[1], "/UPDATE");
-        assert_eq!(args[2], r#"/D=D:\My Programs\SideShift"#);
-        assert_eq!(args.len(), 3, "多一颗就得回来看 /D= 还在不在末尾");
+        assert_eq!(args[2], "/R");
+        assert_eq!(args[3], r#"/D=D:\My Programs\SideShift"#);
+        assert_eq!(args.len(), 4, "多一颗就得回来看 /D= 还在不在末尾");
     }
 
     /// 账本写下去读得回，而且只报一次

@@ -502,6 +502,32 @@ fn partial_path(dir: &Path) -> PathBuf {
     PathBuf::from(format!("{}{PARTIAL_SUFFIX}", dir.display()))
 }
 
+/// 安装真正落位的目录：复用开 ⇒ 缓存桶那份 `.partial`（装完原子改名进真名），复用关 ⇒ 任务私有 scratch。
+/// 单流线的依赖预置要往同一个目录里写（`{work}/libraries/…`），所以这条规则只留这一份，两边不可能算歪。
+pub fn work_dir(
+    cache_dir: &Path,
+    loader: LoaderKind,
+    mc_version: &str,
+    loader_version: &str,
+    reuse: bool,
+    scratch: &Path,
+) -> PathBuf {
+    if reuse {
+        return partial_path(&install_dir(cache_dir, loader, mc_version, loader_version));
+    }
+    scratch.to_path_buf()
+}
+
+/// 开装前清掉上一次的残骸（被强杀留下的、或上次预置到一半的）：`install()` 见目录已存在就不替我们回收。
+/// 本来就不在（首次安装）不算错，其余读写失败交调用方报出去
+pub fn clear_work(work: &Path) -> std::io::Result<()> {
+    match std::fs::remove_dir_all(work) {
+        Ok(()) => Ok(()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(e) => Err(e),
+    }
+}
+
 pub struct EnsureInput<'a> {
     pub loader: LoaderKind,
     pub mc_version: &'a str,
@@ -516,6 +542,9 @@ pub struct EnsureInput<'a> {
     pub installer_jar: &'a Path,
     pub cancel: &'a AtomicBool,
     pub timeout: Duration,
+    /// 调用方已经把安装依赖预置进 `work_dir()/libraries` 并清过残骸 ⇒ 这里不许再扫一遍工作目录，
+    /// 扫一下等于把刚下载好的库全删了（安装器认「已存在且 sha1 对」的那些文件，一个请求都不发）
+    pub pre_seeded: bool,
 }
 
 #[derive(Debug)]
@@ -556,9 +585,19 @@ pub fn ensure(
         return Ok(Installed { dir: dest, from_cache: true, report });
     }
 
-    let work = partial_path(&dest);
-    // 上次被强杀留下的半成品：`install()` 见目录已存在就不会替我们回收它，先清干净再装
-    let _ = std::fs::remove_dir_all(&work);
+    let work = work_dir(
+        input.cache_dir,
+        input.loader,
+        input.mc_version,
+        input.loader_version,
+        true,
+        input.scratch,
+    );
+    // 上次被强杀留下的半成品：`install()` 见目录已存在就不会替我们回收它，先清干净再装。
+    // 预置过就不清——管线在预置之前已经清过一遍，这里再扫一次等于把刚下载好的那几百枚删掉
+    if !input.pre_seeded {
+        let _ = std::fs::remove_dir_all(&work);
+    }
     let report = run(&work)?;
 
     // 到这一步 dest 只可能是坏条目（complete_at 刚判过），删掉让位给刚装好的那份。
@@ -792,6 +831,17 @@ mod tests {
         reuse: bool,
         cancel: &'a AtomicBool,
     ) -> EnsureInput<'a> {
+        ensure_input_seeded(cache, scratch, java, reuse, false, cancel)
+    }
+
+    fn ensure_input_seeded<'a>(
+        cache: &'a Path,
+        scratch: &'a Path,
+        java: &'a Path,
+        reuse: bool,
+        pre_seeded: bool,
+        cancel: &'a AtomicBool,
+    ) -> EnsureInput<'a> {
         EnsureInput {
             loader: LoaderKind::Forge,
             mc_version: "1.20.1",
@@ -803,6 +853,7 @@ mod tests {
             installer_jar: Path::new("no-such-installer.jar"),
             cancel,
             timeout: Duration::from_secs(1),
+            pre_seeded,
         }
     }
 
@@ -874,6 +925,46 @@ mod tests {
         assert!(matches!(err, InstallError::Spawn(_)), "{err}");
         assert!(!scratch.exists(), "本次建的空目录不能留下");
         assert!(!cache.join(CACHE_INSTALLS_DIR).exists(), "复用关着就不该碰缓存桶");
+        std::fs::remove_dir_all(cache).ok();
+    }
+
+    /// 预置侧与 `ensure` 必须算同一个目录：库落到 A、子进程装在 B 就是白下几百 MB
+    #[test]
+    fn work_dir_follows_the_reuse_switch() {
+        let cache = temp("wd");
+        let scratch = temp("wd-scratch");
+        assert_eq!(
+            work_dir(&cache, LoaderKind::Forge, "1.20.1", "47.4.10", true, &scratch),
+            partial_path(&install_dir(&cache, LoaderKind::Forge, "1.20.1", "47.4.10")),
+            "复用开时装进 .partial，装完才原子改名"
+        );
+        assert_eq!(
+            work_dir(&cache, LoaderKind::NeoForge, "1.21.1", "21.1.77", false, &scratch),
+            scratch,
+            "复用关时装进任务私有目录，跟着暂存一起回收"
+        );
+        std::fs::remove_dir_all(cache).ok();
+    }
+
+    #[test]
+    fn pre_seeded_work_dir_is_not_swept() {
+        let cache = temp("seed");
+        let scratch = temp("seed-scratch");
+        let work = work_dir(&cache, LoaderKind::Forge, "1.20.1", "47.4.10", true, &scratch);
+        let lib = "net/minecraftforge/forge/1.20.1-47.4.10/forge-1.20.1-47.4.10.jar";
+        mk(&work, &format!("libraries/{lib}"), 500);
+        let cancel = AtomicBool::new(false);
+
+        // 预置过 ⇒ 给一枚不存在的 java，安装失败但刚下载好的库得留着：
+        // 扫一下就等于把几百枚校验过的文件删掉，下一趟又得重下一遍
+        let err = ensure(
+            &ensure_input_seeded(&cache, &scratch, Path::new(NO_JAVA), true, true, &cancel),
+            &mut |_| {},
+        )
+        .unwrap_err();
+
+        assert!(matches!(err, InstallError::Spawn(_)), "{err}");
+        assert!(work.join("libraries").join(lib).is_file(), "预置的库被 sweep 掉了");
         std::fs::remove_dir_all(cache).ok();
     }
 
@@ -949,14 +1040,8 @@ mod tests {
         }
     }
 
-    /// 真装一趟 + 真复用一趟（联网、约四分钟、临时目录吃 ~160MB），所以默认不跑：
-    /// `SS_INSTALLER_JAR=E:/path/forge-1.20.1-47.4.10-installer.jar cargo test --lib installer -- --ignored --nocapture`
-    /// 可用 `SS_INSTALLER_MC` / `SS_INSTALLER_VER` / `SS_INSTALLER_LOADER`（forge|neoforge）换目标版本。
-    /// 覆盖的是单测碰不到的两件事：真安装器走完 `.partial` → 原子改名落进复用目录；
-    /// 第二趟命中复用目录时**一次子进程都不起**（那趟把 java 换成不存在的路径来证明）。
-    #[test]
-    #[ignore = "联网跑真安装器"]
-    fn ensure_a_real_loader_installs_then_hits_the_cache() {
+    /// 真装测试的目标版本：jar 路径必填，其余三项按 forge 1.20.1 那档默认（两条 e2e 共用一套环境变量）
+    fn e2e_target() -> (String, String, String, LoaderKind) {
         let jar = std::env::var("SS_INSTALLER_JAR").expect("用 SS_INSTALLER_JAR 指一份本地 installer jar");
         let mc = var_or("SS_INSTALLER_MC", "1.20.1");
         let ver = var_or("SS_INSTALLER_VER", "47.4.10");
@@ -965,6 +1050,18 @@ mod tests {
             "fabric" => LoaderKind::Fabric,
             _ => LoaderKind::Forge,
         };
+        (jar, mc, ver, loader)
+    }
+
+    /// 真装一趟 + 真复用一趟（联网、约四分钟、临时目录吃 ~160MB），所以默认不跑：
+    /// `SS_INSTALLER_JAR=E:/path/forge-1.20.1-47.4.10-installer.jar cargo test --lib installer -- --ignored --nocapture`
+    /// 可用 `SS_INSTALLER_MC` / `SS_INSTALLER_VER` / `SS_INSTALLER_LOADER`（forge|neoforge）换目标版本。
+    /// 覆盖的是单测碰不到的两件事：真安装器走完 `.partial` → 原子改名落进复用目录；
+    /// 第二趟命中复用目录时**一次子进程都不起**（那趟把 java 换成不存在的路径来证明）。
+    #[test]
+    #[ignore = "联网跑真安装器"]
+    fn ensure_a_real_loader_installs_then_hits_the_cache() {
+        let (jar, mc, ver, loader) = e2e_target();
         let probe = crate::core::java::probe(&None, &None);
         let java = PathBuf::from(probe.java_path.expect("本机没有 java"));
         let cache = temp("e2e");
@@ -986,6 +1083,7 @@ mod tests {
                 installer_jar: Path::new(&jar),
                 cancel: &cancel,
                 timeout: INSTALL_TIMEOUT,
+                pre_seeded: false,
             },
             &mut |ev| stats.on(ev),
         )
@@ -1027,6 +1125,7 @@ mod tests {
                 installer_jar: Path::new(&jar),
                 cancel: &cancel,
                 timeout: INSTALL_TIMEOUT,
+                pre_seeded: false,
             },
             &mut |ev| stats.on(ev),
         )
@@ -1040,5 +1139,86 @@ mod tests {
         assert_eq!(hit.report.jars, first.report.jars);
         println!("复用命中：{} 个文件 · 顶层 {:?}", hit.report.files, hit.report.scripts);
         std::fs::remove_dir_all(cache).ok();
+    }
+
+    /// 预置那一条链的整链路实测（清单 → 我们的下载器落位 → 子进程安装），默认不跑：
+    /// `SS_INSTALLER_JAR=E:/x/neoforge-21.1.77-installer.jar SS_INSTALLER_LOADER=neoforge SS_INSTALLER_MC=1.21.1 SS_INSTALLER_VER=21.1.77 cargo test --lib installer -- --ignored --nocapture`
+    ///
+    /// 判据就一条：**装出来了**。简中网络下没预置时子进程取不到 `maven.neoforged.net`（实测退出码
+    /// 非 0），而 Java 默认连系统代理都不认 ⇒ 「我们的下载器把库放好、子进程零境外请求」这条链
+    /// 只在真成功时才算走通。下载档位钉 BMCLAPI：官方那一档本机得靠系统代理才通，测试不该依赖代理开没开。
+    #[test]
+    #[ignore = "真下载几百 MB 并起子进程"]
+    fn preseeded_libraries_carry_the_whole_install() {
+        use crate::core::downloader::{Downloader, Fetch, ItemSpec};
+        use crate::models::DownloadSource;
+
+        let (jar, mc, ver, loader) = e2e_target();
+        let probe = crate::core::java::probe(&None, &None);
+        let java = PathBuf::from(probe.java_path.expect("本机没有 java"));
+        let cache = temp("pre");
+        let scratch = temp("pre-scratch");
+        let cancel = std::sync::Arc::new(AtomicBool::new(false));
+
+        let deps = crate::core::installer_deps::list(Path::new(&jar));
+        assert!(!deps.is_empty(), "这份 jar 里读不出依赖清单，预置无从谈起");
+        let work = work_dir(&cache, loader, &mc, &ver, true, &scratch);
+        clear_work(&work).unwrap();
+        let items: Vec<ItemSpec> = deps
+            .iter()
+            .map(|d| ItemSpec {
+                fetch: Fetch::Url(d.url.clone()),
+                file_name: d.rel.rsplit('/').next().unwrap_or(&d.rel).to_string(),
+                sha1: d.sha1.clone(),
+                dest: work.join("libraries").join(&d.rel),
+                size_bytes: d.size_bytes,
+            })
+            .collect();
+        println!(
+            "[预置] {} 枚 · 声明合计 {:.1} MB",
+            items.len(),
+            deps.iter().map(|d| d.size_bytes).sum::<u64>() as f64 / 1048576.0
+        );
+
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("tokio runtime");
+        let dl = Downloader::new(cache.clone(), 8).with_source(DownloadSource::Bmclapi);
+        rt.block_on(dl.download_all(items.clone(), cancel.clone(), |_, _, _| {}))
+            .expect("预置下载失败");
+        let (files, bytes) = tally(&work.join("libraries"));
+        assert_eq!(files, items.len() as u64, "预置落位的枚数与清单不符");
+        println!("[预置] 落位 {files} 枚 · {:.1} MB", bytes as f64 / 1048576.0);
+
+        let mut stats = Stats::default();
+        let out = ensure(
+            &EnsureInput {
+                loader,
+                mc_version: &mc,
+                loader_version: &ver,
+                reuse: true,
+                cache_dir: &cache,
+                scratch: &scratch,
+                java: &java,
+                installer_jar: Path::new(&jar),
+                cancel: &cancel,
+                timeout: INSTALL_TIMEOUT,
+                pre_seeded: true,
+            },
+            &mut |ev| stats.on(ev),
+        )
+        .unwrap_or_else(|e| panic!("预置之后仍装失败：{e}"));
+
+        assert!(!out.from_cache);
+        assert_eq!(out.dir, install_dir(&cache, loader, &mc, &ver), "装好的树该原子改名进复用目录");
+        assert!(stats.lines.iter().any(|l| l == "安装器报告成功"), "{:?}", stats.lines);
+        println!(
+            "[装完] {} 个文件 · {:.1} MB · {:?}",
+            out.report.files,
+            out.report.bytes as f64 / 1048576.0,
+            out.report.elapsed
+        );
+        std::fs::remove_dir_all(&cache).ok();
     }
 }

@@ -8,6 +8,7 @@ pub mod mc_version;
 pub mod mcmod_names;
 pub mod java;
 pub mod installer;
+pub mod installer_deps;
 pub mod builder;
 pub mod cfpack;
 pub mod estimate;

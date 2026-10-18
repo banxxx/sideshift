@@ -755,6 +755,8 @@ async fn run_pipeline(app: AppHandle, state: Arc<AppState>, id: String) {
                     scratch: &scratch,
                     cancel: &cancel,
                 },
+                // 预置安装依赖走这台（档位与缓存都已挂好），省掉子进程那几十上百发境外请求
+                &mut dl,
             )
             .await
             {
