@@ -19,7 +19,7 @@ pub(crate) use persist::config_dir;
 pub(crate) use persist::webview_profile_dir;
 pub use persist::{save_settings, save_templates};
 pub use schedule::{
-    cancel, create_task, remove_task_staging, remove_verify_copy, retry_task, StartResult,
+    cancel, create_task, remove_task_dir, remove_verify_copy, retry_task, StartResult,
 };
 pub use state::{has_active_tasks, AppState, Inner};
 pub use trash::{drain_trash, entries as trash_entries, restore_task, trash_task, TrashEntry};

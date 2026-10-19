@@ -94,7 +94,7 @@ pub fn restore_task(app: &AppHandle, inner: &mut Inner, id: &str) -> Result<(), 
 /// 清空第一步（持锁）：把整叠记录换出来，只留 id 给解锁后的递归删。
 /// 必须真的「换空」——只读 keys 不摘走的话，`list_trash` 下一拍仍把这些行吐回来，
 /// 前端对账后回收站看着一条没少（长按清空就白按了）。
-/// 暂存目录的递归删要在解锁之后做：`remove_task_staging` 会再锁同一把非重入 Mutex，嵌套即自死锁。
+/// 暂存目录的递归删要在解锁之后做：`remove_task_dir` 会再锁同一把非重入 Mutex，嵌套即自死锁。
 /// 这里不落盘：回收站本来就不进 tasks.json，删掉的那些行在 `trash_task` 时就已经不在存档里了。
 pub fn drain_trash(inner: &mut Inner) -> Vec<String> {
     let drained = std::mem::take(&mut inner.trash);

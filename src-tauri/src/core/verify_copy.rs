@@ -16,7 +16,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use serde::{Deserialize, Serialize};
 
 use crate::core::cleanup::dir_bytes;
-use crate::core::data_root::CACHE_VERIFY_DIR;
+use crate::core::data_root::{self, CACHE_VERIFY_DIR};
 use crate::models::VerifyModEntry;
 
 /// 副本根里那颗幂等哨兵。以 `.` 开头 ⇒ 服务端与加载器都不会读它，也不会被算进模组清单
@@ -63,12 +63,7 @@ pub fn copy_dir(cache_dir: &Path, task_id: &str) -> Result<PathBuf, String> {
 }
 
 fn check_id(task_id: &str) -> Result<(), String> {
-    let clean = !task_id.is_empty()
-        && task_id.len() <= 64
-        && task_id
-            .chars()
-            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_');
-    if clean {
+    if data_root::is_task_id(task_id) {
         Ok(())
     } else {
         Err(format!("任务 id「{task_id}」不是可用的目录名，验证没有动任何文件"))

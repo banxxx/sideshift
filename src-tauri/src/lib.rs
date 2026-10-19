@@ -81,6 +81,7 @@ pub fn run() {
             commands::start_conversion,
             commands::list_tasks,
             commands::get_task,
+            commands::task_log_file,
             commands::cancel_task,
             commands::retry_task,
             commands::delete_task,

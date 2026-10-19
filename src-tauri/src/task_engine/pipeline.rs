@@ -19,6 +19,7 @@ use crate::core::downloader::{
 use crate::core::installer::{self, InstallEvent, Installed};
 use crate::core::java;
 use crate::core::parser::{self, ParsedPack};
+use crate::core::task_log;
 use crate::core::verify;
 use crate::l10n::Msg;
 use crate::msg;
@@ -73,7 +74,7 @@ pub fn spawn_pipeline(app: &AppHandle, state: &Arc<AppState>, id: String) {
 }
 
 async fn run_pipeline(app: AppHandle, state: Arc<AppState>, id: String) {
-    let (plan, pack, options) = {
+    let (plan, pack, options, cache_dir) = {
         let inner = state.inner.lock().unwrap();
         let task = match inner.tasks.get(&id) {
             Some(t) => t,
@@ -87,6 +88,7 @@ async fn run_pipeline(app: AppHandle, state: Arc<AppState>, id: String) {
             inner.plans.get(&id).cloned().unwrap_or_default(),
             task.pack.clone(),
             task.options.clone(),
+            inner.settings.cache_dir.clone(),
         )
     };
 
@@ -96,6 +98,9 @@ async fn run_pipeline(app: AppHandle, state: Arc<AppState>, id: String) {
         t.stage = Some(PipelineStage::Parser);
         t.started_at = Some(now_ms());
         t.progress = 8;
+        // 一轮一份日志文件：这一拍是每轮唯一的入口（首跑与重试都从这里进），
+        // 建不出来就是 None ⇒ 这一轮只有界面那条日志环，转换照跑
+        t.log_file = task_log::open_round(&PathBuf::from(&cache_dir), &id);
     }, true);
     let parsed: Arc<ParsedPack> = {
         let cached = state.inner.lock().unwrap().parsed_by_pack.get(&pack.identity()).cloned();
@@ -733,8 +738,8 @@ async fn run_pipeline(app: AppHandle, state: Arc<AppState>, id: String) {
                 );
                 return;
             }
-            // 复用关时装进任务私有目录：remove_task_staging 收的是 cache/tasks/{id} 整个目录，
-            // 「用完即弃」不用再另起一条回收路径
+            // 复用关时装进任务私有目录：remove_task_staging 收掉 cache/tasks/{id} 里除日志以外的
+            // 全部内容，「用完即弃」不用再另起一条回收路径
             let scratch = staging
                 .parent()
                 .map(|p| p.join("install-scratch"))

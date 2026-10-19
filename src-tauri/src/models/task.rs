@@ -133,6 +133,12 @@ pub struct ConversionTask {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub output_size_bytes: Option<u64>,
     pub logs: Vec<TaskLogLine>,
+    /// 本轮日志文件的绝对路径（见 `crate::core::task_log`）：`push_line` 每行往它追一份全量，
+    /// 界面那条 600 行环是渲染预算，这份文件才是账本。
+    /// `skip` ⇒ 不进 `tasks.json`、不进 IPC，所以 TS 那边没有对应字段；冷启动后是 `None`，
+    /// 「打开日志文件」那钮改扫目录取最新一份
+    #[serde(skip)]
+    pub log_file: Option<PathBuf>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]

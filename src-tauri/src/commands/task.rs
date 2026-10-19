@@ -87,8 +87,8 @@ pub fn restore_task(app: AppHandle, state: S<'_>, id: String) -> Result<(), Stri
     task_engine::restore_task(&app, &mut inner, &id)
 }
 
-/// 清空回收站：这时才真正丢弃暂存目录。递归删除必须在解锁之后做——
-/// remove_task_staging 会再锁同一把非重入 Mutex，嵌套即自死锁。
+/// 清空回收站：这时才真正丢弃整个任务目录（暂存与日志一起）——删除那一步只是搬进回收站，
+/// 撤回还要用。递归删除必须在解锁之后做：remove_task_dir 会再锁同一把非重入 Mutex，嵌套即自死锁。
 #[tauri::command]
 pub async fn clear_trash(state: S<'_>) -> Result<usize, String> {
     let ids = {
@@ -97,7 +97,7 @@ pub async fn clear_trash(state: S<'_>) -> Result<usize, String> {
     };
     let n = ids.len();
     for id in ids {
-        task_engine::remove_task_staging(&state, &id);
+        task_engine::remove_task_dir(&state, &id);
         // 副本与暂存同一档命运：回收站清空就是彻底丢弃，验证会话也不再有意义
         task_engine::remove_verify_copy(&state, &id);
     }
@@ -107,6 +107,22 @@ pub async fn clear_trash(state: S<'_>) -> Result<usize, String> {
 #[tauri::command]
 pub fn get_report(state: S<'_>, task_id: String) -> Option<ConversionReport> {
     lock(&state).reports.get(&task_id).cloned()
+}
+
+/// 「打开日志文件」要的那一条路径：内存里有本轮那份就用它（正在跑或刚跑完，看的就是这一轮），
+/// 冷启动之后内存是空的 ⇒ 扫 `{cache}\tasks\{id}\logs\` 取字典序最大的那份（时间戳定宽零填充）。
+/// 只回**真的存在**的文件：一轮还没写下第一行时路径已经定名但文件没建，给出去就是开了个空
+#[tauri::command]
+pub fn task_log_file(state: S<'_>, id: String) -> Option<String> {
+    let round = lock(&state).tasks.get(&id).and_then(|t| t.log_file.clone());
+    let path = match round {
+        Some(p) => p,
+        None => {
+            let cache_dir = lock(&state).settings.cache_dir.clone();
+            crate::core::task_log::latest(&PathBuf::from(cache_dir), &id)?
+        }
+    };
+    path.is_file().then(|| path.to_string_lossy().to_string())
 }
 
 /// 某个任务创建时确认过的方案快照（报告页展开真实剔除/保留/新增清单）。

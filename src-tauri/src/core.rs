@@ -16,6 +16,8 @@ pub mod verify;
 pub mod verify_copy;
 pub mod verify_run;
 pub mod cleanup;
+// 转换任务日志落盘：一轮一份，全量不受界面那条 600 行环约束
+pub mod task_log;
 pub mod ack;
 // 应用更新：渠道判定、release 解析（下载与安装分两期接进来）
 pub mod update;

@@ -7,6 +7,7 @@ use std::sync::Arc;
 use serde::Serialize;
 use tauri::AppHandle;
 
+use crate::core::task_log;
 use crate::core::verify_copy;
 use crate::models::*;
 use crate::msg;
@@ -56,6 +57,7 @@ pub fn create_task(
         output_path: None,
         output_size_bytes: None,
         logs: Vec::new(),
+        log_file: None,
     };
     let queued = {
         let mut inner = state.inner.lock().unwrap();
@@ -104,6 +106,9 @@ pub fn retry_task(app: &AppHandle, state: &Arc<AppState>, id: &str) -> Option<St
         t.done_bytes = None;
         t.output_file_name = None;
         t.output_size_bytes = None;
+        // 本轮的日志文件由下一轮自己开（`run_pipeline` 阶段 1），这里先撤掉旧的那份，
+        // 免得「重新排队」这一行写进上一轮的结尾。界面上那 600 行环照旧留着两轮
+        t.log_file = None;
         // 排队顺序按创建时间排，重试要顺延到队尾
         t.created_at = now_ms();
         push_line(
@@ -157,8 +162,27 @@ pub fn release_and_next(app: &AppHandle, state: &Arc<AppState>, done_id: &str) -
     next
 }
 
-/// 回收某个任务的暂存目录（cache/tasks/<id>），文件本体留在 cache/files 供跨任务复用
+/// 一轮跑完的收尾：回收 `{cache}\tasks\{id}\` 里的现场目录，只留日志那一层。
+/// 现场有 `staging`（落位文件）与 `install-scratch`（复用关时的安装半成品），以后还会多——
+/// 所以判据写成「除了日志全删」而不是逐个点名：点名漏一个就是没人收的几十 MB。
+/// 文件本体留在 `cache\files` 供跨任务复用；父目录留着给日志，任务彻底丢弃才连它一起收
 pub fn remove_task_staging(state: &AppState, id: &str) {
+    let cache_dir = state.inner.lock().unwrap().settings.cache_dir.clone();
+    let dir = PathBuf::from(cache_dir).join(CACHE_TASKS_DIR).join(id);
+    let Ok(entries) = std::fs::read_dir(&dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        if entry.file_name() == task_log::LOG_DIR_NAME {
+            continue;
+        }
+        let _ = std::fs::remove_dir_all(entry.path());
+    }
+}
+
+/// 彻底丢弃一条任务时收掉它的整个目录（现场与日志一起）。与上面那条分口的就是「任务还在不在」：
+/// 跑完一轮只清现场，删掉任务才连日志一起走——这一版定的口径
+pub fn remove_task_dir(state: &AppState, id: &str) {
     let cache_dir = state.inner.lock().unwrap().settings.cache_dir.clone();
     let _ = std::fs::remove_dir_all(PathBuf::from(cache_dir).join(CACHE_TASKS_DIR).join(id));
 }

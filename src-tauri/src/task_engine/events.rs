@@ -20,6 +20,7 @@ pub const EVENT_CLASSIFIED: &str = "plan://classified";
 /// 单任务日志上限：保留目录命中 kubejs/资源包这类目录时条目数以千计，日志不设上限会把
 /// tasks.json 撑到 MB 级、并让每次进度事件都全量搬运日志给前端 —— 实测 7340 行直接把界面卡死。
 /// 超限后只留最近这些条（含一条截断标记），复制与存档口径一致。
+/// 全量的那一遍不在这里，它按行写在 `{cache}\tasks\{id}\logs\` 下本轮那一份（`core::task_log`）。
 /// 本机开服验证的输出流用的是**同一条预算**（`task_engine::verify`），所以这里对两边可见。
 pub(crate) const MAX_LOG_LINES: usize = 600;
 
@@ -52,6 +53,11 @@ pub fn log_line(stage: PipelineStage, level: LogLevel, msg: Msg) -> TaskLogLine 
 }
 
 pub fn push_line(t: &mut ConversionTask, line: TaskLogLine) {
+    // 每一行先落文件再进环：这一条是所有日志写点的汇流处（解析/下载/打包/失败/取消都走它），
+    // 逐处补写迟早漏一处。文件不在（冷启动后的旧任务、目录建不出来）就只演环，转换照跑
+    if let Some(path) = t.log_file.as_deref() {
+        crate::core::task_log::append(path, &line);
+    }
     t.logs.push(line);
     trim_logs(&mut t.logs);
 }

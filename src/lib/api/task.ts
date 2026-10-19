@@ -135,6 +135,14 @@ export async function getTaskPlan(taskId: string): Promise<PlanMod[]> {
     );
 }
 
+/** 这一条任务该打开的那一份日志文件的绝对路径（Rust: task_log_file(id)）：
+ *  一轮一份，跑着的那轮就是当前那份，冷启动后由后端扫目录取最新那份。
+ *  null = 这一轮还没写下第一个字节（老任务、或刚点下开始） ⇒ 界面说「还没有日志文件」 */
+export async function taskLogFile(id: string): Promise<string | null> {
+    if (!isTauri) return mock.mockTaskLogFile();
+    return invokeOrMock<string | null>("task_log_file", { id }, () => mock.mockTaskLogFile());
+}
+
 /** 订阅流水线进度事件（浏览器 mock 模式无事件流，返回空取消函数） */
 export function onProgress(cb: (e: ProgressEvent) => void): Promise<UnlistenFn> {
     if (!isTauri) return Promise.resolve(() => {});

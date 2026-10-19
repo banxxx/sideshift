@@ -281,6 +281,24 @@ export function TaskDetailPage() {
         }
     };
 
+    /** 日志文件一轮一份（`{缓存}\tasks\{任务 id}\logs\`）：跑着的那轮是当前这份，
+     *  重开应用后由后端挑目录里最新的一份；一份都还没写下时直说，不去开一个空目录 */
+    const openLogFile = async () => {
+        const path = await api.taskLogFile(task.id);
+        if (!path) {
+            notify(t("tasks.no-log-file", "这一轮还没写下日志文件"), "warn");
+            return;
+        }
+        try {
+            await api.revealPath(path);
+        } catch (e) {
+            notify(
+                t("tasks.couldn-open-log", "打开日志文件失败：{{reason}}", { reason: errOf(e) }),
+                "error"
+            );
+        }
+    };
+
     const copyPlan = async () => {
         // 没有报告也照样能复制：方案是任务快照，失败与取消那两态缺的只是【产物】一节
         try {
@@ -523,10 +541,15 @@ export function TaskDetailPage() {
                                         <PanelHead
                                             title={t("tasks.logs", "日志")}
                                             right={
-                                                <LogCopyButton
-                                                    logs={task.logs.map((l) => ({ ...l, ...logText(l) }))}
-                                                    header={`SideShift 日志 · ${task.pack.fileName} · ${task.id}`}
-                                                />
+                                                <div className="flex items-center gap-2">
+                                                    <Btn size="xs" variant="ghost" onClick={() => void openLogFile()}>
+                                                        {t("tasks.open-log-file", "打开日志文件")}
+                                                    </Btn>
+                                                    <LogCopyButton
+                                                        logs={task.logs.map((l) => ({ ...l, ...logText(l) }))}
+                                                        header={`SideShift 日志 · ${task.pack.fileName} · ${task.id}`}
+                                                    />
+                                                </div>
                                             }
                                         />
                                         <div

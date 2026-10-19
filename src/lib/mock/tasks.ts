@@ -508,6 +508,12 @@ export function mockClearTrash(): number {
     return n;
 }
 
+/** 「打开日志文件」的那条路径：浏览器里没有磁盘，也没有真的日志文件可定位 ⇒ 一律说没有，
+ *  界面上走「还没有日志文件」那一句提示（真机上由后端给绝对路径） */
+export function mockTaskLogFile(): string | null {
+    return null;
+}
+
 export function mockReport(taskId: string): ConversionReport | undefined {
     ensureSeeded();
     const task = tasks.get(taskId);

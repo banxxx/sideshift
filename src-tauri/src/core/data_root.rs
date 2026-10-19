@@ -61,6 +61,17 @@ pub const CACHE_CF_INDEX: &str = "cf-files-index.json";
 pub const CACHE_ENV_INDEX: &str = "env-index.json";
 pub const CACHE_JAVA_INDEX: &str = "java-index.json";
 
+/// 任务 id 能不能直接当目录名拼路径。`task-{uuid}` 是我们自己生成的形状，但 id 从前端来，
+/// 而用它拼的每条路径都可能包含递归删除 ⇒ 带分隔符、`..`、盘符或空串的一律不拼。
+/// 验证副本与转换日志两处共用这一条判据：分叉了就是「一处拦得住、另一处拦不住」。
+/// 安装壳编走本文件但不拼任务目录，所以对它而言是 dead_code
+#[allow(dead_code)]
+pub fn is_task_id(id: &str) -> bool {
+    !id.is_empty()
+        && id.len() <= 64
+        && id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+}
+
 /// 卸载壳在缓存目录里**只允许删**这些名字，表外的字节一个不碰。判据来自人在设置里选的
 /// 目录可能正是他自己的东西（`D:\Games`、`Documents`），照着整目录递归删等于把用户文件带走
 ///
