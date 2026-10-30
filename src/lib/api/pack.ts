@@ -24,15 +24,17 @@ export async function pickPackFile(): Promise<string | null> {
     return typeof picked === "string" ? picked : null;
 }
 
-/** 打开系统文件选择器选择 .jar（Convert「从本地添加」；浏览器 dev 下返回 mock 文件名） */
-export async function pickJarFile(): Promise<string | null> {
-    if (!isTauri) return "krypton-0.2.3.jar";
+/** 打开系统文件选择器选 .jar，可多选（Convert「从本地添加」；浏览器 dev 下返回一个 mock 文件名）。
+ *  取消 = 空数组，调用方据此什么都不做 */
+export async function pickJarFiles(): Promise<string[]> {
+    if (!isTauri) return ["krypton-0.2.3.jar"];
     const { open } = await import("@tauri-apps/plugin-dialog");
     const picked = await open({
-        multiple: false,
+        multiple: true,
         filters: [{ name: t("lib.mod-files", "模组文件"), extensions: ["jar"] }],
     });
-    return typeof picked === "string" ? picked : null;
+    if (typeof picked === "string") return [picked];
+    return Array.isArray(picked) ? picked : [];
 }
 
 /** 解析整合包（Rust: parse_pack(path) -> PackManifest） */

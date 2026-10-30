@@ -11,7 +11,8 @@ import { cn } from "@/lib/utils";
 import { useT } from "@/lib/i18n";
 import { PLAN_LAND, PLAN_LAYOUT } from "@/lib/springs";
 import { badgeFor, PlanModRow } from "./PlanModRow";
-import { LAND_MAX_STEPS, LAND_STAGGER_MS } from "./constants";
+import { LAND_MAX_STEPS, LAND_STAGGER_MS, LOCAL_ADD_LIMIT } from "./constants";
+import { useJarDropZone } from "./useJarDropZone";
 import type { ListFocus } from "./modals";
 
 export interface DepWarning {
@@ -43,6 +44,8 @@ export function ModPlanCard({
     onClearEdits,
     onAddLocal,
     onAddOnline,
+    inspecting = null,
+    onDropPaths,
 }: {
     tab: ModDisposition;
     onTab: (t: ModDisposition) => void;
@@ -78,6 +81,10 @@ export function ModPlanCard({
     onClearEdits?: () => void;
     onAddLocal?: () => void;
     onAddOnline?: () => void;
+    /** 本地 .jar 的端取证进度（null = 没在跑），跑的时候占掉「查看全部新增清单」那一格 */
+    inspecting?: { done: number; total: number } | null;
+    /** OS 文件拖进「列表那一块」时回原始路径列表（过滤与上限在调用方）；不传 = 不接拖入 */
+    onDropPaths?: (paths: string[]) => void;
 }) {
     /* 入场节拍：谁「进入可见列表」谁拿一档（0、1、2…按可见顺序自上而下），换页签即重置。
        ——必须在渲染期算，不能放 effect：motion 在挂载那一趟 layout effect 里就启动 initial→animate，
@@ -86,6 +93,15 @@ export function ModPlanCard({
        要等旧页签淡出，新行挂载时 effect 早就补好了档位）。
        用 rows 的引用当幂等闩：同一批数据只算一次，StrictMode 双跑也只算一次。 */
     const t = useT();
+    const areaRef = useRef<HTMLDivElement>(null);
+    const footerRef = useRef<HTMLDivElement>(null);
+    // 分类中整卡锁定、回看态没有写入口 ⇒ 那两档连悬停框都不该亮
+    const drop = useJarDropZone(
+        areaRef,
+        footerRef,
+        !readOnly && !classifying && !!onDropPaths,
+        onDropPaths ?? (() => {})
+    );
     const cadence = useRef({
         rows: null as PlanMod[] | null,
         tab: "" as ModDisposition,
@@ -137,7 +153,26 @@ export function ModPlanCard({
 
             {/* 行区：行区顶部铺开、出口 mt-auto 钉在卡底（下方只剩 p-5 的 20 内边距）；
                 内容高低差产生的余量全部落在「列表 ↔ 出口」之间，切页签/出警告时出口不跳位 */}
-            <div className="flex min-h-0 flex-1 flex-col gap-2.5 overflow-hidden">
+            <div
+                ref={areaRef}
+                className="relative flex min-h-0 flex-1 flex-col gap-2.5 overflow-hidden"
+                {...drop.domHandlers}
+            >
+                {/* 拖入悬停那一层：虚线框档位借模板页那个空槽（12 圆角 / 1.5 虚线 / accent），
+                    绝对定位 ⇒ 亮与不亮都不占布局；高度只能量（下边界让给卡底出口区） */}
+                {drop.over && (
+                    <div
+                        aria-hidden="true"
+                        className="pointer-events-none absolute inset-x-0 top-0 flex items-center justify-center rounded-[12px] border-[1.5px] border-dashed border-accent bg-accent-dim/50"
+                        style={{ height: drop.height }}
+                    >
+                        <span className="rounded-full bg-surface px-3 py-1 text-[11px] leading-[16px] text-text-2 shadow-[var(--shadow-pop)]">
+                            {t("convert.drop-jars-here", "松开以添加 .jar · 一次最多 {{limit}} 个", {
+                                limit: LOCAL_ADD_LIMIT,
+                            })}
+                        </span>
+                    </div>
+                )}
                 <AnimatePresence mode="wait" initial={false}>
                     <motion.div
                         key={tab}
@@ -275,7 +310,7 @@ export function ModPlanCard({
 
                 {/* 出口区（行区内、钉在卡底）：剔除/保留态取链接自然高（~18），
                     新增态=查看链接居左、两枚 h32 添加按钮居右；上下不虚占固定高 */}
-                <div className="mt-auto flex shrink-0 flex-col gap-2">
+                <div ref={footerRef} className="mt-auto flex shrink-0 flex-col gap-2">
                     {/* 分类中整卡锁定：出口只给「一句数 + 一条 rail」，
                         查看全部清单 / 重新自动分类 / 添加模组 都要等结论落定才露出 */}
                     {classifying && (
@@ -361,12 +396,23 @@ export function ModPlanCard({
                             {tab === "add" && (
                                 <>
                                     <div className="flex min-w-0 items-center gap-2.5">
-                                        {counts.addTotal > 0 && (
-                                            <LinkBtn chevron onClick={() => onOpenList("add")}>
-                                                {t("convert.show-count-added", "查看全部 {{count}} 项新增清单", {
-                                                    count: counts.addTotal,
+                                        {inspecting ? (
+                                            /* 取证期间占掉「查看全部」那一格（同一位置、同一字号档）：
+                                               两个数并排会把这行撑宽，而它几秒就撤 */
+                                            <span className="truncate text-[11px] leading-[16px] text-text-3">
+                                                {t("convert.inspecting-count", "正在取证 {{done}}/{{total}}", {
+                                                    done: inspecting.done,
+                                                    total: inspecting.total,
                                                 })}
-                                            </LinkBtn>
+                                            </span>
+                                        ) : (
+                                            counts.addTotal > 0 && (
+                                                <LinkBtn chevron onClick={() => onOpenList("add")}>
+                                                    {t("convert.show-count-added", "查看全部 {{count}} 项新增清单", {
+                                                        count: counts.addTotal,
+                                                    })}
+                                                </LinkBtn>
+                                            )
                                         )}
                                     </div>
                                     {/* 两枚 h32 添加按钮：有清单时居右，空方案时整行居中；回看态摘掉 */}

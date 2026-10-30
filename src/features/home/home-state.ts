@@ -20,6 +20,7 @@ export function useTauriFileDrop(onPaths: (paths: string[]) => void): boolean {
     useEffect(() => {
         if (!isTauri) return;
         let unlisten: (() => void) | undefined;
+        let revoked = false;
         getCurrentWebview()
             .onDragDropEvent((event) => {
                 const type = event.payload.type;
@@ -33,9 +34,17 @@ export function useTauriFileDrop(onPaths: (paths: string[]) => void): boolean {
                 }
             })
             .then((fn) => {
-                unlisten = fn;
+                // 订阅是异步的，退订却可能先跑（StrictMode 双挂载、以及换页快于订阅回来的那一趟）：
+                // 那时 unlisten 还是 undefined，这份监听就永久漏在窗口上。漏下来的那只收的是
+                // **整窗**的拖放事件，所以在别的页面拖一个 .jar 也会走回这里的 parse()，
+                // 把已选的包连草稿一起换掉 ⇒ 订阅回来发现已撤销，必须当场补一次退订
+                if (revoked) fn();
+                else unlisten = fn;
             });
-        return () => unlisten?.();
+        return () => {
+            revoked = true;
+            unlisten?.();
+        };
     }, []);
     return dragging;
 }

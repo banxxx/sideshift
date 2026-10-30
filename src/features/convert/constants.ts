@@ -41,6 +41,16 @@ export const LAND_MAX_STEPS = PREVIEW_ROWS - 1;
 
 /** 页面入场节拍（容器 PAGE_RISE + 各块 CARD_RISE）已上收到 src/lib/page-motion.ts，全站共用 */
 
+/** 一次「从本地添加」的 .jar 上限（拖入与对话框多选共用）。
+ *  超限**整批不收**而不是收前 50：屏上行数悄悄少于用户拖进来的数量，是最难被发现的那种错。 */
+export const LOCAL_ADD_LIMIT = 50;
+
+/** 只认扩展名，不看内容：非 .jar（txt、zip、目录）当场滤掉，不解释成失败 */
+export const isJarPath = (path: string) => path.toLowerCase().endsWith(".jar");
+
+/** 本地行的端取证并发档：50 枚一起发就是 50 路解 zip + 联网反查，排队限成这个数 */
+export const LOCAL_INSPECT_CONCURRENCY = 4;
+
 /** 游戏模式下拉项。`value` 是写进 server.properties / 发给后端的档位值，不翻；
  *  表建在函数体里（每格一条 `t(字面量)`）：顶层建表会把标签冻在首次加载的语言上，
  *  且「表里存中文再查表」那种写法自检认不出键 */

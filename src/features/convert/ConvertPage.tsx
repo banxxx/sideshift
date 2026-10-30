@@ -46,7 +46,7 @@ import { LaunchArgsCard, KeepDirsCard, RuntimeEnvCard, ServerSettingsCard } from
 import { ModPlanCard } from "./ModPlanCard";
 import { TemplateMiniCard } from "@/features/templates/TemplateMiniCard";
 import { CARD_RISE, PAGE_RISE } from "@/lib/page-motion";
-import { PREVIEW_ROWS, toOption } from "./constants";
+import { LOCAL_ADD_LIMIT, LOCAL_INSPECT_CONCURRENCY, PREVIEW_ROWS, isJarPath, toOption } from "./constants";
 
 /** Java 探测失败那句话（两条腿共用）：定义在模块作用域，身份稳定，不必进 effect 依赖 */
 const javaProbeFailed = (e: unknown) =>
@@ -72,6 +72,8 @@ export function ConvertPage() {
     );
     /** 被停用的新增行 id：取消勾选=停用（行保留在清单，不参与构建），替代旧的「移除+撤销」链路 */
     const [disabledIds, setDisabledIds] = useState<Set<string>>(() => new Set(draft?.disabledIds));
+    /** 本地 .jar 的端取证进度（null = 没在跑）：一次最多 50 枚，不排队就是 50 路一起打网络 */
+    const [inspecting, setInspecting] = useState<{ done: number; total: number } | null>(null);
     const [tab, setTab] = useState<ModDisposition>("remove");
     const [mcOptions, setMcOptions] = useState<SelectOption[]>([]);
     const [loaderOptions, setLoaderOptions] = useState<SelectOption[]>([]);
@@ -592,15 +594,15 @@ export function ConvertPage() {
     /** 本页新增行的 id 集合（区分用户添加行与系统补行，决定 × 是否出现） */
     const extrasIds = useMemo(() => new Set(extras.map((m) => m.id)), [extras]);
 
-    const addLocal = async () => {
-        const path = await api.pickJarFile();
-        if (!path) return;
+    /** 一行的本地 .jar 形状。id 只到文件名为止 ⇒ 不同目录的同名 jar 互为覆盖（既有口径，批量下会放大） */
+    const localRow = (path: string): PlanMod => {
         const fileName = path.split(/[\\/]/).pop() ?? path;
-        const id = `local-${fileName}`;
-        const row: PlanMod = {
-            id,
-            name: fileName.replace(/\.jar$/i, ""),
-            version: fileName,
+        return {
+            id: `local-${fileName}`,
+            // 文件名只印一遍：行右侧那一格是「版本」，本地行没有版本可言，
+            // 把文件名再塞进去就是同一个字符串上下摆两次
+            name: fileName,
+            version: "",
             disposition: "add",
             clientOnly: false,
             needsReview: false,
@@ -608,50 +610,128 @@ export function ConvertPage() {
             needsDownload: false,
             localPath: path,
         };
-        // 同一 jar 再次添加 = 就地覆盖并复活（停用行重新生效）
+    };
+
+    /** 端取证排队：行先全部落地（选完立刻看得见），取证限并发跑，跑完撤掉那句「正在取证」。
+     *  单枚失败照旧逐条报因；批量只在末尾报一句总数——50 条全局提示会刷屏 */
+    const inspectLocals = async (targets: { id: string; path: string }[]) => {
+        if (targets.length === 0) return;
+        const total = targets.length;
+        const each = total === 1;
+        const queue = [...targets];
+        let done = 0;
+        let failed = 0;
+        setInspecting({ done, total });
+        const worker = async () => {
+            for (let job = queue.shift(); job; job = queue.shift()) {
+                try {
+                    const side = await api.inspectAddedMod(job.path);
+                    // 行若在这期间被删掉，下面的 map 匹配不上即自然丢弃
+                    setExtras((e) =>
+                        e.map((m) =>
+                            m.id === job.id
+                                ? {
+                                      ...m,
+                                      clientSide: side.clientSide,
+                                      serverSide: side.serverSide,
+                                      envSource: side.envSource,
+                                      bytecodeHint: side.bytecodeHint,
+                                      sizeBytes: side.sizeBytes ?? m.sizeBytes,
+                                  }
+                                : m
+                        )
+                    );
+                } catch (e: unknown) {
+                    // 行已经落地，只是端标签与体积补不上：说清楚失败，别让那一格安静地空着
+                    failed += 1;
+                    if (each) {
+                        notify(
+                            t("convert.added-mod-failed", "本地模组取证失败 · {{reason}}", {
+                                reason: errOf(e),
+                            }),
+                            "error"
+                        );
+                    }
+                } finally {
+                    done += 1;
+                    setInspecting({ done, total });
+                }
+            }
+        };
+        await Promise.all(
+            Array.from({ length: Math.min(LOCAL_INSPECT_CONCURRENCY, total) }, worker)
+        );
+        setInspecting(null);
+        if (failed > 0 && !each) {
+            notify(
+                t("convert.added-mods-failed", "{{count}} 个本地模组取证失败，端标签与体积没补上", {
+                    count: failed,
+                }),
+                "warn"
+            );
+        }
+    };
+
+    /** 本地 .jar 落地（对话框多选与拖入共用这一条）：只认 .jar；超限整批不收，一枚也不加 */
+    const addLocalJars = (paths: string[]) => {
+        const jars = paths.filter(isJarPath);
+        if (jars.length === 0) {
+            // 全被滤掉时必须说一句：否则拖完屏上什么也没变，看着像拖放根本没接上
+            notify(
+                t("convert.drop-no-jar", "拖入的 {{count}} 个文件里没有 .jar", {
+                    count: paths.length,
+                }),
+                "warn"
+            );
+            return;
+        }
+        if (jars.length > LOCAL_ADD_LIMIT) {
+            notify(
+                t("convert.local-add-limit", "一次最多添加 {{limit}} 个 .jar，本次有 {{count}} 个", {
+                    limit: LOCAL_ADD_LIMIT,
+                    count: jars.length,
+                }),
+                "warn"
+            );
+            return;
+        }
+        // 同 id 后一枚覆盖前一枚（含同一批里出现两次同名）；停用行被再次添加 = 复活
+        const byId = new Map<string, string>();
+        for (const path of jars) byId.set(localRow(path).id, path);
+        const shapes = [...byId].map(([id, path]) => ({ id, row: localRow(path) }));
+        const known = new Set(extras.map((m) => m.id));
+        const added = shapes.filter(({ id }) => !known.has(id)).length;
         setExtras((e) => {
-            const i = e.findIndex((m) => m.id === id);
-            if (i === -1) return [...e, row];
             const next = [...e];
-            next[i] = row;
+            for (const { id, row } of shapes) {
+                const i = next.findIndex((m) => m.id === id);
+                if (i === -1) next.push(row);
+                else next[i] = row;
+            }
             return next;
         });
+        const revived = new Set(byId.keys());
         setDisabledIds((s) => {
-            if (!s.has(id)) return s;
-            const next = new Set(s);
-            next.delete(id);
-            return next;
+            const next = new Set([...s].filter((id) => !revived.has(id)));
+            return next.size === s.size ? s : next;
         });
         setTab("add");
-        // 端取证异步回填：行先落地（选完立刻看得见），阶梯跑完再补端标签与真实体积。
-        // 行若在这期间被删掉，下面的 map 匹配不上即自然丢弃
-        void api
-            .inspectAddedMod(path)
-            .then((side) =>
-                setExtras((e) =>
-                    e.map((m) =>
-                        m.id === id
-                            ? {
-                                  ...m,
-                                  clientSide: side.clientSide,
-                                  serverSide: side.serverSide,
-                                  envSource: side.envSource,
-                                  bytecodeHint: side.bytecodeHint,
-                                  sizeBytes: side.sizeBytes ?? m.sizeBytes,
-                              }
-                            : m
-                    )
-                )
-            )
-            .catch((e: unknown) => {
-                // 行已经落地，只是端标签与体积补不上：说清楚失败，别让那一格安静地空着
-                notify(
-                    t("convert.added-mod-failed", "本地模组取证失败 · {{reason}}", {
-                        reason: errOf(e),
-                    }),
-                    "error"
-                );
-            });
+        // 单枚保持原来的静默：行当场就在那儿，不需要全局提示再确认一遍
+        if (byId.size > 1) {
+            notify(
+                t("convert.local-added-batch", "本地模组 · 新增 {{added}} · 覆盖 {{covered}}", {
+                    added,
+                    covered: byId.size - added,
+                }),
+                "success"
+            );
+        }
+        void inspectLocals([...byId].map(([id, path]) => ({ id, path })));
+    };
+
+    const addLocal = async () => {
+        const picked = await api.pickJarFiles();
+        if (picked.length > 0) addLocalJars(picked);
     };
 
     /** 在线添加：选中某个构建版本后回写新增列表；同模组再次添加 = 就地换版本（mods/ 不允许双版本并存） */
@@ -882,6 +962,8 @@ export function ConvertPage() {
                             onClearEdits={clearEdits}
                             onAddLocal={() => void addLocal()}
                             onAddOnline={() => setOnlineOpen(true)}
+                            inspecting={inspecting}
+                            onDropPaths={addLocalJars}
                         />
                     </motion.div>
 
