@@ -16,6 +16,7 @@
   "convert.await-loader-version": "待選擇",
   "convert.back-home": "返回首頁",
   "convert.cancel-anytime": "轉換過程可隨時取消，已下載依賴自動快取複用",
+  "convert.cf-unmerged": "清單裡另有 {{count}} 個模組沒能併入（拿不到檔案名稱），可點「重新自動分類」再試一次",
   "convert.change-folder": "更換本次目錄…",
   "convert.client-mods": "剔除客戶端模組",
   "convert.confirm-clear": "確認清空 {{count}} 項",

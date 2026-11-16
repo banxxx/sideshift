@@ -190,8 +190,24 @@ pub(super) fn parse_mrpack(
             .file_name()
             .map(|s| s.to_string_lossy().to_string())
             .unwrap_or_else(|| name.clone());
-        // 只认「某目录下的文件」，且跳过启动器重量级目录
-        let Some(j) = lower.find('/') else { continue };
+        // 根级散文件（`options.txt`、`servers.dat` 这类）：没有目录层可判，直接按可保留内容收。
+        // 这一支是格式壳剥掉之后才露出来的（`client-overrides/options.txt` → `options.txt`）：
+        // 以前这里一句 `else { continue }` 把它们整批丢掉 ⇒ 「客户端保留内容」里只剩文件夹可选
+        let Some(j) = lower.find('/') else {
+            extra_files.push(PackFile {
+                path: name,
+                file_name,
+                url: String::new(),
+                sha1: None,
+                size_bytes: size,
+                in_pack: true,
+                env_server: None,
+                env_client: None,
+                depends: Vec::new(),
+                cf: None,
+            });
+            continue;
+        };
         let top = &lower[..j];
         if top == "mods" {
             // 手动塞进 mrpack /mods 的未声明 jar：mrpack 规范允许，启动器原样安装，
@@ -256,6 +272,8 @@ pub(super) fn parse_mrpack(
         // 清单外面那层自定义文件夹（`.zip` 套壳的 mrpack 才有；正经 mrpack 恒空）。
         // CF 那层 `overrides/` 不在此列，由 logical_rel 剥
         root_prefix: root_prefix.to_string(),
+        // mrpack 的 `files[]` 每条都自带 downloads/字节，没有「只给编号」那一档 ⇒ 恒空
+        declared_cf: Vec::new(),
     })
 }
 

@@ -24,17 +24,20 @@ fn online_running_of(inner: &task_engine::Inner) -> bool {
 /// 路径那枚锚点**不许跟着名字飘**（见 `cfpack` 模块头）：任务存档里的方案行按 `src_path` 回指，
 /// 一飘就把用户的手动改判全冲掉
 ///
-/// 返回按编号声明的行数（给前端展示「这是 CF 官方导出包」的口径用）
+/// 返回 `(按编号声明并已成行的数量, 这一轮没能并进来的数量)`：前者给前端说「要从 CurseForge 取 N 个
+/// 模组」，后者是混合形包的实话——声明了、名字拿不到、这次没进方案的那批
 ///
 /// `reprobe` = 用户点「重新自动分类」：把索引里探过的取链许可作废再问一遍（`ensure` 那侧有理由）
-async fn cf_enrich(state: &S<'_>, reprobe: bool) -> usize {
+async fn cf_enrich(state: &S<'_>, reprobe: bool) -> (usize, usize) {
     let (parsed, pack_id, cache_dir) = {
         let inner = lock(&state);
         let Some(p) = last_parsed_of(&inner) else {
-            return 0;
+            return (0, 0);
         };
-        if cfpack::cf_row_count(&p) == 0 {
-            return 0;
+        // 两道都空才算「这包没有按编号声明的模组」：只看已成行的话，混合形包（实体 jar 在、
+        // 编号行还没并进来）会被当成无关包，`ensure` 一辈子跑不到它
+        if cfpack::cf_row_count(&p) == 0 && p.declared_cf.is_empty() {
+            return (0, 0);
         }
         (
             p,
@@ -42,13 +45,15 @@ async fn cf_enrich(state: &S<'_>, reprobe: bool) -> usize {
             PathBuf::from(&inner.settings.cache_dir),
         )
     };
-    let rows = cfpack::cf_row_count(&parsed);
     let dl = downloader_of(state);
     let out = cfpack::ensure(&dl, &cache_dir, &parsed, reprobe).await;
+    let rows = cfpack::cf_row_count(&out.parsed);
+    let unmerged = out.unmerged;
     // 一轮下来行内容一点没变（索引本来就热、也没许可态/端标签可写）⇒
-    // 什么都不动，尤其别把 env 取证结论清掉：那会让同一个包切页往返又重跑一整轮离线探测
-    if !out.renamed && !out.links_changed && !out.env_changed {
-        return rows;
+    // 什么都不动，尤其别把 env 取证结论清掉：那会让同一个包切页往返又重跑一整轮离线探测。
+    // `merged` 也算「变了」：新行不落进缓存就等于这轮白并
+    if !out.renamed && !out.links_changed && !out.env_changed && out.merged == 0 {
+        return (rows, unmerged);
     }
     {
         let mut inner = lock(&state);
@@ -68,7 +73,7 @@ async fn cf_enrich(state: &S<'_>, reprobe: bool) -> usize {
                 .insert(pack_id.clone(), Arc::new(out.parsed));
         }
     }
-    rows
+    (rows, unmerged)
 }
 
 
@@ -90,7 +95,7 @@ pub async fn classify_pack(
 ) -> Result<PlanClassification, String> {
     // 编号行先补取，再谈分类：这一步换掉的正是下面要快照的那一份解析缓存，排在快照之后就会
     // 拿着一份旧的名字去建方案（第一屏一排编号），而且 reuse 那条短路会把补取整个跳过
-    let cf_rows = cf_enrich(&state, force).await;
+    let (cf_rows, cf_unmerged) = cf_enrich(&state, force).await;
     // 快照 inputs：guard 必须在这个块里结束，否则 MutexGuard 跨 await 让命令 future 不 Send
     let (parsed, pack_id, strip, env_source, mcmod, cache_dir, concurrency, cached) = {
         let inner = lock(&state);
@@ -136,6 +141,7 @@ pub async fn classify_pack(
                     plan: Vec::new(),
                     online_pending: false,
                     cf_rows,
+                    cf_unmerged,
                 })
             }
         }
@@ -145,6 +151,7 @@ pub async fn classify_pack(
             plan,
             online_pending: !env_source.is_off() && online_running,
             cf_rows,
+            cf_unmerged,
         });
     }
 
@@ -300,6 +307,7 @@ pub async fn classify_pack(
                 plan: fresh.unwrap_or(plan),
                 online_pending: still_running,
                 cf_rows,
+                cf_unmerged,
             });
         }
         let app = app.clone();
@@ -454,6 +462,7 @@ pub async fn classify_pack(
         plan,
         online_pending: !offline_final,
         cf_rows,
+        cf_unmerged,
     })
 }
 
@@ -603,6 +612,7 @@ displayName = "GeckoLib"
             extra_files: Vec::new(),
             loader_version: None,
             root_prefix: String::new(),
+            declared_cf: Vec::new(),
         };
 
         let mut ev = env::EvidenceMap::new();

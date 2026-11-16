@@ -19,6 +19,8 @@
   "convert.await-loader-version": "Awaiting selection",
   "convert.back-home": "Back to home",
   "convert.cancel-anytime": "You can cancel anytime; downloads are cached and reused",
+  "convert.cf-unmerged_one": "{{count}} mod in the manifest couldn't be added (no file name). Run re-classify to try again",
+  "convert.cf-unmerged_other": "{{count}} mods in the manifest couldn't be added (no file name). Run re-classify to try again",
   "convert.change-folder": "Change folder…",
   "convert.clear-edits": "Clear my edits",
   "convert.client-mods": "Client mods removed",

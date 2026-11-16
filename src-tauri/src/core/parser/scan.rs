@@ -105,6 +105,21 @@ pub(super) fn scan_zip_entries(path: &Path, declared: &Declared, no_jar_msg: &st
                     cf: None,
                 });
             }
+        } else {
+            // 根级散文件（`options.txt`、`servers.dat`）：与 mrpack 腿同一条口径，见
+            // `parser::mrpack` 里那支同名分支。裸包这一层没有目录可判，不收就等于不给勾
+            extra_files.push(PackFile {
+                path: name.clone(),
+                file_name,
+                url: String::new(),
+                sha1: None,
+                size_bytes: *size,
+                in_pack: true,
+                env_server: None,
+                env_client: None,
+                depends: Vec::new(),
+                cf: None,
+            });
         }
     }
 
@@ -163,6 +178,9 @@ pub(super) fn scan_zip_entries(path: &Path, declared: &Declared, no_jar_msg: &st
         // 认不出时仍为 None ⇒ 前端落到列表的推荐项（旧行为）
         loader_version,
         root_prefix,
+        // 编号声明全收集一份带走：上面那道闸只决定「这次成不成行」，并不并由 `cfpack` 拿
+        // 真实文件名对完号再说（混合形包那 222 枚就是这么丢的）
+        declared_cf: declared.files.clone(),
     })
 }
 

@@ -54,7 +54,7 @@ export async function mockClassify(plan: PlanMod[]): Promise<PlanClassification>
         };
     });
     // 浏览器预览没有联网层，一次到位；样例包带真实文件名，CF 编号行恒为 0
-    return { plan: rows, onlinePending: false, cfRows: 0 };
+    return { plan: rows, onlinePending: false, cfRows: 0, cfUnmerged: 0 };
 }
 
 /**

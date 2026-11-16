@@ -107,6 +107,8 @@ export function ConvertPage() {
     /** 自动分类进行中：离线层是同步返回，在线层补全后走 classified 事件再刷一次。
      *  带草稿回来时它=「离开时联网还没跑完」，下面那条挂载 effect 会据此跟后端复核一次。 */
     const [classifying, setClassifying] = useState(draft?.onlinePending ?? false);
+    /** 清单按编号声明、这一轮没能并进方案的条数（拿不到文件名）。每一轮分类覆盖它，0 = 没有缺口 */
+    const [cfUnmerged, setCfUnmerged] = useState(0);
     /** 手动重跑的那一小段：列表已被清空、离线结论还没回来（只用来挑文案） */
     const [reclassifying, setReclassifying] = useState(false);
     /** 「清空我的修改」两段式确认（弹窗纪律：不用遮罩/确认框，第二次点击才执行） */
@@ -134,6 +136,7 @@ export function ConvertPage() {
             setReclassifying(false);
             setPlan(res.plan);
             setClassifying(res.onlinePending);
+            setCfUnmerged(res.cfUnmerged);
             if (manual) {
                 const remove = res.plan.filter((m) => m.disposition === "remove").length;
                 // 联网还没跑完时不报数：那一批发出去会把「剔除 N 项」当成结论，可方案还没落定
@@ -1054,6 +1057,18 @@ export function ConvertPage() {
                                     </div>
                                 )}
                             </>
+                        )}
+                        {/* 混合形包才会有的实话：包里躺着一些实体 jar、清单又按编号声明了一堆，
+                            而编号问不出文件名就没法判断它是否已经在包里。宁可不并，也不给同一个
+                            模组摆两份 jar（服务端最常就是崩），但少掉的这批必须当场说出来 */}
+                        {cfUnmerged > 0 && (
+                            <NoteRow icon={TriangleAlert}>
+                                {t(
+                                    "convert.cf-unmerged",
+                                    "清单里另有 {{count}} 个模组没能并入（拿不到文件名），可点「重新自动分类」再试一次",
+                                    { count: cfUnmerged }
+                                )}
+                            </NoteRow>
                         )}
                         <Btn
                             variant="primary"

@@ -14,7 +14,7 @@ use futures::stream::{self, StreamExt};
 use serde::Deserialize;
 
 use super::downloader::{CfFileMeta, Downloader};
-use super::parser::{CfRef, ParsedPack};
+use super::parser::{CfRef, PackFile, ParsedPack};
 use crate::models::{CfLink, SideFlag};
 
 /// 字面量单源在 `core::data_root`（那张表同时是卸载壳的删除清单）
@@ -114,16 +114,34 @@ pub fn cf_row_count(parsed: &ParsedPack) -> usize {
     parsed.mod_files.iter().filter(|f| f.cf.is_some()).count()
 }
 
-/// 还缺元数据的那些编号（按出现顺序去重）。索引命中的不再列入 ⇒ 第二次打开同一个包零请求
-pub fn pending_refs(parsed: &ParsedPack, index: &CfIndex) -> Vec<CfRef> {
-    let mut out: Vec<CfRef> = Vec::new();
+/// 这一包里所有「按编号声明」的坐标：已成行的 + 只声明、还没并成行的，按出现顺序去重。
+///
+/// 四个收集器一律从这里取。只盯 `mod_files` 的话，混合形包（包里有实体 jar、清单另按编号
+/// 声明一堆）的声明坐标一条都不会被问 ⇒ 索引永远冷着 ⇒ `merge` 拿不到文件名、一条也并不进
+fn cf_refs(parsed: &ParsedPack) -> Vec<&CfRef> {
+    let mut out: Vec<&CfRef> = Vec::new();
     for f in &parsed.mod_files {
-        let Some(r) = &f.cf else { continue };
-        if index.get(r).is_none() && !out.contains(r) {
-            out.push(r.clone());
+        if let Some(r) = &f.cf {
+            if !out.contains(&r) {
+                out.push(r);
+            }
+        }
+    }
+    for r in &parsed.declared_cf {
+        if !out.contains(&r) {
+            out.push(r);
         }
     }
     out
+}
+
+/// 还缺元数据的那些编号（按出现顺序去重）。索引命中的不再列入 ⇒ 第二次打开同一个包零请求
+pub fn pending_refs(parsed: &ParsedPack, index: &CfIndex) -> Vec<CfRef> {
+    cf_refs(parsed)
+        .into_iter()
+        .filter(|r| index.get(r).is_none())
+        .cloned()
+        .collect()
 }
 
 /// 把索引里的元数据贴回包内条目：**只改名字/大小/sha1/端标签/取链许可态，路径那枚锚点原样留着**（模块头有理由）
@@ -184,14 +202,11 @@ pub async fn resolve_online(
 /// 还没探过取链许可的那些编号（去重）。只有**补到元数据**的行才进这一列：回落链是按
 /// 文件名定位文件的，名字还没补回来的行既判不出 `Derived`/`Unavailable`，构建期也拿不到字节
 pub fn unprobed_refs(parsed: &ParsedPack, index: &CfIndex) -> Vec<CfRef> {
-    let mut out: Vec<CfRef> = Vec::new();
-    for f in &parsed.mod_files {
-        let Some(r) = &f.cf else { continue };
-        if index.get(r).is_some() && index.link_of(r).is_none() && !out.contains(r) {
-            out.push(r.clone());
-        }
-    }
-    out
+    cf_refs(parsed)
+        .into_iter()
+        .filter(|r| index.get(r).is_some() && index.link_of(r).is_none())
+        .cloned()
+        .collect()
 }
 
 /// 文件级端标签**没勾**的那些编号（外层已问、内层 None）：作者上传那一份时没勾
@@ -199,34 +214,26 @@ pub fn unprobed_refs(parsed: &ParsedPack, index: &CfIndex) -> Vec<CfRef> {
 /// 从 mod 对象的 `latestFiles` 聚合（`curseforge_project_sides`）给这些行兜底。
 /// 聚合答上的行把内层值升成 Some(Some(..))，下一次进同一个包不再聚合
 pub fn env_unlabeled_refs(parsed: &ParsedPack, index: &CfIndex) -> Vec<CfRef> {
-    let mut out: Vec<CfRef> = Vec::new();
-    for f in &parsed.mod_files {
-        let Some(r) = &f.cf else { continue };
-        let unlabeled = index
-            .get(r)
-            .is_some_and(|m| m.env_checked() && m.sides().is_none());
-        if unlabeled && !out.contains(r) {
-            out.push(r.clone());
-        }
-    }
-    out
+    cf_refs(parsed)
+        .into_iter()
+        .filter(|r| {
+            index
+                .get(r)
+                .is_some_and(|m| m.env_checked() && m.sides().is_none())
+        })
+        .cloned()
+        .collect()
 }
 
 /// 端标签还没问过的那些编号（去重）。只收**元数据已补到**的行：老索引条目（本功能上线前
 /// 写进 `cf-files-index.json` 的那些）没有端标签这一问的记录，重发一次元数据请求把它补齐；
 /// 补齐之后这条腿永久收队（`env_checked` 有值就不再来）。与 `unprobed_refs` 同一口径
 pub fn env_unchecked_refs(parsed: &ParsedPack, index: &CfIndex) -> Vec<CfRef> {
-    let mut out: Vec<CfRef> = Vec::new();
-    for f in &parsed.mod_files {
-        let Some(r) = &f.cf else { continue };
-        let unchecked = index
-            .get(r)
-            .is_some_and(|m| !m.env_checked());
-        if unchecked && !out.contains(r) {
-            out.push(r.clone());
-        }
-    }
-    out
+    cf_refs(parsed)
+        .into_iter()
+        .filter(|r| index.get(r).is_some_and(|m| !m.env_checked()))
+        .cloned()
+        .collect()
 }
 
 /// 在线探测：逐枚问一次「拿不拿得到字节」，批末落盘。返回**探出结论的行数**。
@@ -288,6 +295,13 @@ pub struct Enriched {
     /// Arc 必须换（classify 播种 `EnvSource::CfFile` 读的是行上那枚），端取证结论不作废——
     /// 播种发生在它自己的阶梯里，不受影响
     pub env_changed: bool,
+    /// 这一轮**新并进方案**的编号行数（声明了、字节不在包里、名字与包内实体对不上的那些）。
+    /// 混合形包（包里躺着一些 jar、清单又按编号声明了一堆）靠它把「只给编号」的那批找回来
+    pub merged: usize,
+    /// 声明了但这一轮**没能并进**的编号数：索引与网络都答不出它的真实文件名。
+    /// 少并是可补的（「重新自动分类」再跑一轮），双份是不可逆的（同一个模组两份 jar 落进
+    /// `mods/`，服务端要么加载两遍要么直接崩）⇒ 拿不到名字就不并，但必须把这个数交出去说
+    pub unmerged: usize,
 }
 
 /// 一处入口，两处调用方（自动分类、构建阶段 1）共用：读索引 → 缺的联网补 → 补端标签 →
@@ -342,7 +356,7 @@ pub async fn ensure(
     })
     .await;
     let unresolved = pending_refs(parsed, &index).len();
-    let out = enrich(parsed, &index);
+    let mut out = enrich(parsed, &index);
     // enrich 不动行序，按下标对齐比一遍就知道到底改没改
     let mut renamed = false;
     let mut links_changed = false;
@@ -358,7 +372,59 @@ pub async fn ensure(
             env_changed = true;
         }
     }
-    Enriched { parsed: out, unresolved, renamed, links_changed, env_changed }
+    let (merged_rows, unmerged) = merge(&out, &index);
+    let merged = merged_rows.len();
+    out.mod_files.extend(merged_rows);
+    Enriched { parsed: out, unresolved, renamed, links_changed, env_changed, merged, unmerged }
+}
+
+/// 把「只给编号」的声明并进方案。三条判据：
+/// - 名字对上包内实体的 ⇒ 跳过（同一枚模组列两遍会直接产出坏包，这条是当初那道闸存在的理由，
+///   现在把它从「整批不并」收窄成「只对得上号的不并」）
+/// - 名字拿不到的 ⇒ 这次不并，计入 `unmerged`（少并可补、双份不可逆）
+/// - 其余的 ⇒ 作为需下载的行加入，路径锚点仍按编号命名（与 `cf_rows` 同一条口径，
+///   任务存档里的方案行按它回指，名字不能跟着文件名飘）
+///
+/// 比对用 `file_name` 大小写不敏感全等：CF 给的名字与包内 jar 名正常同 case，但手改过的清单
+/// 与民间压缩包都见过差一个大小写的。对不上的近名（作者改过文件名）会双份，这是这条线的已知代价
+pub fn merge(parsed: &ParsedPack, index: &CfIndex) -> (Vec<PackFile>, usize) {
+    let mut added: Vec<PackFile> = Vec::new();
+    let mut unmerged = 0;
+    for r in &parsed.declared_cf {
+        // 已经成行的不算「没并进」：纯 CF 包离线时行照样在（只是名字还没补上），
+        // 把它计进 `unmerged` 等于对着用户说「这 244 个没进来」，而它们就在方案里
+        if parsed.mod_files.iter().any(|f| f.cf.as_ref() == Some(r)) {
+            continue;
+        }
+        let Some(m) = index.get(r) else {
+            unmerged += 1;
+            continue;
+        };
+        let dup = parsed
+            .mod_files
+            .iter()
+            .chain(added.iter())
+            .any(|f| f.file_name.eq_ignore_ascii_case(&m.file_name));
+        if dup {
+            continue;
+        }
+        let mut cf = r.clone();
+        cf.env = m.sides();
+        cf.link = m.link.unwrap_or_default();
+        added.push(PackFile {
+            path: format!("mods/{}-{}.jar", r.mod_id, r.file_id),
+            file_name: m.file_name.clone(),
+            url: String::new(),
+            sha1: m.sha1.clone(),
+            size_bytes: m.size_bytes,
+            in_pack: false,
+            env_server: None,
+            env_client: None,
+            depends: Vec::new(),
+            cf: Some(cf),
+        });
+    }
+    (added, unmerged)
 }
 
 #[cfg(test)]
@@ -415,6 +481,7 @@ mod tests {
             extra_files: Vec::new(),
             loader_version: None,
             root_prefix: String::new(),
+            declared_cf: Vec::new(),
         }
     }
 
@@ -435,6 +502,81 @@ mod tests {
         // 没补到的那行照旧是编号，不假装有名有大小
         assert_eq!(out.mod_files[1].file_name, "9-9.jar");
         assert_eq!(out.mod_files[1].size_bytes, 0);
+    }
+
+    /// 混合形包：包内躺着实体 jar，清单又按编号声明了一堆。三条判据一起验——
+    /// 名字对得上包内实体的跳过（同一个模组两份 jar 落进 `mods/` 最常就是崩）、
+    /// 对不上的并进来、名字拿不到的不并但**必须计数**（少并可补，静默少一批是骗人）
+    #[test]
+    fn merge_adds_declared_rows_but_never_a_second_copy() {
+        let in_pack = PackFile {
+            path: "overrides/mods/sodium-0.5.8.jar".into(),
+            file_name: "sodium-0.5.8.jar".into(),
+            url: String::new(),
+            sha1: None,
+            size_bytes: 700_000,
+            in_pack: true,
+            env_server: None,
+            env_client: None,
+            depends: Vec::new(),
+            cf: None,
+        };
+        // 纯 CF 包离线那一档：编号行早就在了，只是名字还没补上
+        let mut p = pack(vec![in_pack, row("7", "8")]);
+        p.declared_cf = vec![
+            cf_ref("1", "2"), // 与包内那枚同名 ⇒ 跳过，且不计数
+            cf_ref("3", "4"), // 名字是新的 ⇒ 并进来
+            cf_ref("5", "6"), // 索引答不出 ⇒ 不并，计入 unmerged
+            cf_ref("7", "8"), // 已经成行 ⇒ 不并、也不计数
+        ];
+        let mut index = CfIndex::default();
+        index.put(&cf_ref("1", "2"), meta("sodium-0.5.8.jar", 700_000, Some("ab")));
+        index.put(&cf_ref("3", "4"), meta("jei-1.20.1-16.0.1.jar", 900_000, Some("cd")));
+
+        let (added, unmerged) = merge(&p, &index);
+        assert_eq!(unmerged, 1, "只有「索引答不出」那一档才算没并进");
+        let names: Vec<&str> = added.iter().map(|f| f.file_name.as_str()).collect();
+        assert_eq!(names, vec!["jei-1.20.1-16.0.1.jar"]);
+        // 并进来的行与 `cf_rows` 同一条口径：编号当锚点、真名字当显示、字节不在包里
+        assert_eq!(added[0].path, "mods/3-4.jar");
+        assert_eq!(added[0].size_bytes, 900_000);
+        assert_eq!(added[0].sha1.as_deref(), Some("cd"));
+        assert!(!added[0].in_pack, "字节不在包里，构建时得联网取");
+        assert_eq!(added[0].cf.as_ref().unwrap().mod_id, "3");
+    }
+
+    /// 混合形包的声明编号必须进**待查清单**：索引是冷的时候，`merge` 拿不到名字并不等于
+    /// 可以不去问。以前四个收集器只盯 `mod_files`，而这种包一条编号行都还没成 ⇒ 待查恒空
+    /// ⇒ 索引永远冷着 ⇒ 一条都并不进方案，界面看着就是「只分析了包内那 22 个」
+    #[test]
+    fn hybrid_pack_declarations_reach_the_fetch_list() {
+        let in_pack = PackFile {
+            path: "overrides/mods/sodium-0.5.8.jar".into(),
+            file_name: "sodium-0.5.8.jar".into(),
+            url: String::new(),
+            sha1: None,
+            size_bytes: 700_000,
+            in_pack: true,
+            env_server: None,
+            env_client: None,
+            depends: Vec::new(),
+            cf: None,
+        };
+        let mut p = pack(vec![in_pack]);
+        p.declared_cf = vec![cf_ref("1", "2"), cf_ref("3", "4"), cf_ref("1", "2")];
+        let index = CfIndex::default();
+        // 重复的那一对只算一次（清单手改过的人真会重复列）
+        assert_eq!(pending_refs(&p, &index).len(), 2, "索引冷时两条声明都该去问");
+        // 索引热了以后待查清零，但取链许可那一趟还得走
+        let mut warm = CfIndex::default();
+        warm.put(&cf_ref("1", "2"), meta("sodium-0.5.8.jar", 700_000, Some("ab")));
+        warm.put(&cf_ref("3", "4"), meta("jei-1.20.1-16.0.1.jar", 900_000, Some("cd")));
+        assert_eq!(pending_refs(&p, &warm).len(), 0);
+        assert_eq!(unprobed_refs(&p, &warm).len(), 2, "没成行也要探取链许可");
+        // 并进来的只有名字对不上的那一枚，另一枚与包内实体同名 ⇒ 跳过
+        let (added, unmerged) = merge(&p, &warm);
+        assert_eq!(added.len(), 1);
+        assert_eq!(unmerged, 0);
     }
 
     /// 待查清单按索引冷热收缩：同一个包第二次进来应当零请求

@@ -255,6 +255,9 @@ use super::*;
         w.write_all(b"c").unwrap();
         w.start_file("somemods/b.jar", opts).unwrap();
         w.write_all(b"PK\x03\x04").unwrap();
+        // 根级散文件：没有目录层可判，收了才在「客户端保留内容」里勾得到
+        w.start_file("options.txt", opts).unwrap();
+        w.write_all(b"o").unwrap();
         w.finish().unwrap();
 
         let parsed = parse(&path);
@@ -264,7 +267,11 @@ use super::*;
         assert_eq!(parsed.mod_files.len(), 1);
         assert_eq!(parsed.mod_files[0].path, "mods/a.jar");
         let extras: Vec<&str> = parsed.extra_files.iter().map(|f| f.path.as_str()).collect();
-        assert_eq!(extras, vec!["mods_backup/x.cfg", "somemods/b.jar"]);
+        assert_eq!(
+            extras,
+            vec!["mods_backup/x.cfg", "options.txt", "somemods/b.jar"],
+            "根级散文件要与 mrpack 腿同一条口径（见 mrpack_jars_under_client_overrides_count_as_mods）"
+        );
     }
 
     /// 造一个「内容层级就是 mrpack 那一套、扩展名却是 .zip」的包（民间打包工具与手动改名都这样）。
@@ -462,6 +469,72 @@ use super::*;
         // 声明过的 config 只算一条（补收腿按剥壳后的路径认出它已声明）
         let extras: Vec<&str> = parsed.extra_files.iter().map(|f| f.path.as_str()).collect();
         assert_eq!(extras, vec!["overrides/config/x.toml"]);
+    }
+
+    /// mrpack 专有那两种壳名（`client-overrides` / `server-overrides`）里的 jar 也是模组。
+    /// 真包形状：`files[]` 是空的、jar 物理躺在 `client-overrides/mods/` ——
+    /// 剥壳名单当初只写了 CF 那两种，于是整包被当成「没有模组」报空
+    #[test]
+    fn mrpack_jars_under_client_overrides_count_as_mods() {
+        let path = std::env::temp_dir().join(format!(
+            "sideshift-parser-{}.mrpack",
+            uuid::Uuid::new_v4()
+        ));
+        let mut w = zip::ZipWriter::new(File::create(&path).unwrap());
+        let opts = zip::write::SimpleFileOptions::default();
+        w.start_file(MRPACK_ENTRY, opts).unwrap();
+        write!(
+            w,
+            r#"{{
+  "game": "minecraft",
+  "dependencies": {{ "minecraft": "1.21.1", "fabric-loader": "0.19.5" }},
+  "files": []
+}}"#
+        )
+        .unwrap();
+        for name in [
+            "client-overrides/mods/animatica.jar",
+            "client-overrides/mods/appleskin.jar",
+            "client-overrides/config/appleskin.json5",
+            "client-overrides/options.txt",
+            "server-overrides/mods/server-side.jar",
+        ] {
+            w.start_file(name, opts).unwrap();
+            w.write_all(b"PK\x03\x04").unwrap();
+        }
+        w.finish().unwrap();
+
+        let parsed = parse(&path);
+        let _ = std::fs::remove_file(&path);
+        assert!(parsed.manifest.parsed, "{:?}", parsed.manifest.error);
+        let mut mods: Vec<&str> = parsed.mod_files.iter().map(|f| f.path.as_str()).collect();
+        mods.sort_unstable();
+        assert_eq!(
+            mods,
+            vec![
+                "client-overrides/mods/animatica.jar",
+                "client-overrides/mods/appleskin.jar",
+                "server-overrides/mods/server-side.jar",
+            ],
+            "壳内的 jar 要进模组方案；物理名留着壳，取件才抽得到字节"
+        );
+        // 交付位置问 logical_rel：壳内壳外从此是同一个目录
+        assert_eq!(
+            parsed.logical_rel("client-overrides/mods/animatica.jar"),
+            "mods/animatica.jar"
+        );
+        assert_eq!(
+            parsed.logical_rel("server-overrides/mods/server-side.jar"),
+            "mods/server-side.jar"
+        );
+        let mut extras: Vec<&str> = parsed.extra_files.iter().map(|f| f.path.as_str()).collect();
+        extras.sort_unstable();
+        assert_eq!(
+            extras,
+            vec!["client-overrides/config/appleskin.json5", "client-overrides/options.txt"],
+            "壳根的散文件也要进可保留内容，否则界面上只剩文件夹可选"
+        );
+        assert_eq!(parsed.logical_rel("client-overrides/options.txt"), "options.txt");
     }
 
     /* ---------------- CF / MCBBS 清单这一腿 ---------------- */

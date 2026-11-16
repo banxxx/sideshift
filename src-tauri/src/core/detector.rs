@@ -517,6 +517,7 @@ mod tests {
             extra_files: Vec::new(),
             loader_version: None,
             root_prefix: String::new(),
+            declared_cf: Vec::new(),
         };
         let plan = build_plan(
             &parsed,
@@ -553,6 +554,7 @@ mod tests {
             extra_files: Vec::new(),
             loader_version: None,
             root_prefix: String::new(),
+            declared_cf: Vec::new(),
         }
     }
 

@@ -136,7 +136,7 @@ async fn run_pipeline(app: AppHandle, state: Arc<AppState>, id: String) {
     // 自动分类那一轮通常已补完并落进 `cf-files-index.json`，这里只把索引贴回行上；索引冷的档
     // （排队到重启后重跑、或分类那轮超时没查完）才真发请求——构建期每行反正还要现取一条直链，
     // 多这一发换来的是 sha1 能校验，值得
-    let parsed: Arc<ParsedPack> = if cfpack::cf_row_count(&parsed) > 0 {
+    let (parsed, cf_merged, cf_unmerged) = if cfpack::cf_row_count(&parsed) > 0 || !parsed.declared_cf.is_empty() {
         let s = state.inner.lock().unwrap().settings.clone();
         let cache_dir = PathBuf::from(&s.cache_dir);
         let dl = Downloader::new(cache_dir.clone(), s.concurrency as usize)
@@ -155,10 +155,38 @@ async fn run_pipeline(app: AppHandle, state: Arc<AppState>, id: String) {
                 ),
             );
         }
-        Arc::new(out.parsed)
+        (Arc::new(out.parsed), out.merged, out.unmerged)
     } else {
-        parsed
+        (parsed, 0, 0)
     };
+    // 混合形包（包里躺着一些实体 jar、清单又按编号声明了一堆）的并入结果落在任务日志上：
+    // 并进来多少、还有多少因为拿不到文件名而没并，两条都是这一趟的事实
+    if cf_merged > 0 {
+        push_log(
+            &app,
+            &state,
+            &id,
+            PipelineStage::Parser,
+            LogLevel::Info,
+            msg!(
+                "清单声明的 {{count}} 枚模组不在包内，已按编号加入方案，构建时下载",
+                {"count": cf_merged}
+            ),
+        );
+    }
+    if cf_unmerged > 0 {
+        push_log(
+            &app,
+            &state,
+            &id,
+            PipelineStage::Parser,
+            LogLevel::Warn,
+            msg!(
+                "{{count}} 枚声明的模组拿不到文件名，这次没有并入",
+                {"count": cf_unmerged}
+            ),
+        );
+    }
     push_log(
         &app,
         &state,

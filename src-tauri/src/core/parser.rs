@@ -76,12 +76,20 @@ pub struct ParsedPack {
     /// 而服务端按实例根读 `config/`，带着一层自定义目录的产物根本读不到。
     /// 裸 zip 与「改名成 .zip 且套了一层壳的 mrpack」都走这一条；CF 那层 `overrides/` 由 logical_rel 剥
     pub root_prefix: String,
+    /// CF 清单 `files[]` 的**声明全集**（去重后），与「它有没有变成方案行」无关。
+    ///
+    /// 为什么要单存一份：包里只要躺着实体 jar，`scan` 那条「有字节按字节、没字节才按编号」的闸
+    /// 就不把编号行做成方案行 —— 于是混合形包（实体 22 枚 + 声明 244 条）那 222 枚会整批蒸发，
+    /// 既不进方案也不参与剔除分析。编号行能不能并进来，取决于「这对编号的真实文件名是什么」，
+    /// 而那只有 `cfpack` 那轮（磁盘索引或联网）答得上来 ⇒ 声明层把名单原样留着交给它判。
+    /// mrpack 与裸 zip 恒为空：它们没有「只给编号」这一说
+    pub declared_cf: Vec<CfRef>,
 }
 
 impl ParsedPack {
-    /// 条目物理路径 → 交付包逻辑路径：先剥包根外层文件夹，再剥 `overrides/` 壳。
+    /// 条目物理路径 → 交付包逻辑路径：先剥包根外层文件夹，再剥格式壳。
     /// 保留树 / 勾选键 / 落位 / 预估四条腿都走这一个入口，判据不会漂
-    /// （`overrides/` 是格式壳、`root_prefix` 是打包习惯，两件事各剥一次，顺序固定）
+    /// （格式壳是清单格式规定的、`root_prefix` 是打包习惯，两件事各剥一次，顺序固定）
     pub fn logical_rel<'a>(&self, rel: &'a str) -> &'a str {
         logical_rel(strip_root_prefix(&self.root_prefix, rel))
     }
@@ -186,13 +194,17 @@ fn parse_by_content(path: &Path, ext: &str) -> Result<ParsedPack, String> {
     scan_zip_entries(path, &Declared::default(), NO_MODS_DIR)
 }
 
-/// CurseForge 惯例逻辑路径：`overrides/`（或 `override/`）只是格式外壳，其内容映射到包根。
+/// 逻辑路径：格式壳只是外壳，其内容映射到包根（mrpack 的 `client-overrides`/`server-overrides`
+/// 与 CF 的 `overrides`/`override` 是同一件事的四种写法）。
+/// 名单一律用 `FORMAT_SHELLS` 那一份 —— 找清单时认四条、算逻辑路径时只认两条，
+/// 结果就是把整批 `client-overrides/mods/*.jar` 判成普通保留内容、模组清单报空。
 /// 保留目录树与拷贝都按逻辑路径匹配，避免同一目录以「壳内/壳外」两种路径重复出现。
 pub fn logical_rel(rel: &str) -> &str {
     let lower = rel.to_lowercase();
-    for shell in ["overrides/", "override/"] {
-        if lower.starts_with(shell) {
-            return &rel[shell.len()..];
+    for shell in FORMAT_SHELLS {
+        // 壳名后面必须紧跟一个 `/` 才算壳：`overrides` 自己是个文件时不该被剥
+        if lower.starts_with(shell) && rel.as_bytes().get(shell.len()) == Some(&b'/') {
+            return &rel[shell.len() + 1..];
         }
     }
     rel
@@ -283,6 +295,7 @@ pub fn parse(path: &Path) -> ParsedPack {
             extra_files: Vec::new(),
             loader_version: None,
             root_prefix: String::new(),
+            declared_cf: Vec::new(),
         },
     }
 }
