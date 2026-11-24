@@ -143,9 +143,16 @@ pub(super) fn scan_zip_entries(path: &Path, declared: &Declared, no_jar_msg: &st
         .mc_version
         .clone()
         .unwrap_or_else(|| guess_mc_version(path, &entries).unwrap_or_default());
-    // mods 里那枚加载器 jar 优先（顺带取版本号），没有再退到整包字样那一档
+    // 声明与加载器本体优先；没有本体时读模组元数据，最后才用模组/包文件名的完整标记。
     let mod_jars: Vec<String> = mod_files.iter().map(|f| f.file_name.clone()).collect();
-    let guessed = guess_loader(&mod_jars, &entries, path);
+    let from_metadata = if declared.loader.is_none()
+        && !mod_jars.iter().any(|name| loader_from_jar_name(name).is_some())
+    {
+        loader_from_mod_metadata(&mut archive, &mod_files)
+    } else {
+        None
+    };
+    let guessed = guess_loader(&mod_jars, from_metadata, path);
     // 声明压过猜测；但**只有猜出来的家族与声明同家**时，jar 文件名里那档版本号才配替补——
     // 家族都猜错了还拿它的版本去填，等于把 `fabric-loader-0.15.3.jar` 当成 forge 的版本用
     let from_jars = if declared.loader.is_none() || declared.loader == Some(guessed.0) {
@@ -269,20 +276,30 @@ pub(super) fn first_version_like(s: &str) -> Option<String> {
 pub(super) fn loader_from_jar_name(name: &str) -> Option<(LoaderKind, Option<String>)> {
     let lower = name.to_lowercase();
     let stem = lower.strip_suffix(".jar")?;
-    // 名字里第一段「点分数字」就是版本号
-    let first_seg = |rest: &str| {
-        rest.split('-')
-            .find(|s| is_dotted_num(s))
-            .map(|s| s.to_string())
+    // 本体版本必须紧跟前缀，后面只允许官方本体后缀或兼容旧包的 MC 版本段。
+    // 不能跳过 helper/api 等段去找后面的数字：那会把普通模组当本体并绕过元数据。
+    let parts = |rest: &str| -> Option<Vec<String>> {
+        let segments: Vec<String> = rest.split('-').map(str::to_string).collect();
+        if !segments.first().is_some_and(|s| is_dotted_num(s))
+            || segments.iter().skip(1).any(|s| {
+                !is_dotted_num(s) && !matches!(s.as_str(), "universal" | "installer")
+            })
+        {
+            return None;
+        }
+        Some(segments)
     };
     if let Some(rest) = stem.strip_prefix("fabric-loader-") {
-        Some((LoaderKind::Fabric, first_seg(rest)))
+        let segments = parts(rest)?;
+        Some((LoaderKind::Fabric, Some(segments[0].clone())))
     } else if let Some(rest) = stem.strip_prefix("neoforge-") {
-        Some((LoaderKind::NeoForge, first_seg(rest)))
+        let segments = parts(rest)?;
+        Some((LoaderKind::NeoForge, Some(segments[0].clone())))
     } else if let Some(rest) = stem.strip_prefix("forge-") {
         // Forge 是 `forge-<MC>-<构建>[-universal]`，也有包省掉 MC 那一段直接写构建号。
         // 两段都在时构建在后；只有一段且它像 MC 版本号（`1.` 开头）就不当构建号用
-        let mut nums = rest.split('-').filter(|s| is_dotted_num(s));
+        let segments = parts(rest)?;
+        let mut nums = segments.iter().filter(|s| is_dotted_num(s));
         let ver = match (nums.next(), nums.next()) {
             (Some(_mc), Some(build)) => Some(build.to_string()),
             (Some(only), None) if !only.starts_with("1.") => Some(only.to_string()),
@@ -295,20 +312,16 @@ pub(super) fn loader_from_jar_name(name: &str) -> Option<(LoaderKind, Option<Str
 }
 
 fn is_dotted_num(s: &str) -> bool {
-    // `contains('.')` 已经排掉空串：空串的 `all()` 会返回 true，不能当版本号
-    s.contains('.') && s.chars().all(|c| c.is_ascii_digit() || c == '.')
+    s.contains('.')
+        && s.split('.').all(|part| !part.is_empty() && part.chars().all(|c| c.is_ascii_digit()))
 }
 
-/// 裸 zip 的加载器判据，两档。
-/// **强证据**：mods 目录里那枚加载器 jar 的文件名——唯一能同时给出「哪一家」和「哪一档」的来源，
-/// 版本号因此不再恒为空（以前这一档只能让前端落到候选列表的推荐项上）。
-/// **弱证据**（原样保留的旧写法）：整包条目名/包文件名里出现过 `neoforge`/`forge`/`fabric` 字样。
-/// 留着它是因为老 Forge（1.16 及以下）的包 mods 里本来就没有加载器 jar，删了这档会把整批包
-/// 统一误标成 Fabric；代价是一条 `config/forgeconfigmodifier.cfg` 也能定这一家，所以它不配给版本号。
-/// Quilt 等第四家仍落 Fabric（LoaderKind 只有三档，那条遗留未在本轮改判）。
+/// 裸 zip 的加载器判据：加载器本体 → 一致的模组元数据 → 模组/包文件名的完整标记。
+/// 配置、资源与外层目录名不是加载器声明，不参与推断。无证据时仍保留原有 Fabric 兜底；
+/// 元数据冲突时也交回文件名规则，待增加「未知/冲突」交互后再改变这条产品行为。
 fn guess_loader(
     mod_jars: &[String],
-    entries: &[(String, u64)],
+    from_metadata: Option<LoaderKind>,
     path: &Path,
 ) -> (LoaderKind, Option<String>) {
     for jar in mod_jars {
@@ -316,9 +329,11 @@ fn guess_loader(
             return (hit.0, hit.1);
         }
     }
-    let has = |kw: &str| entries.iter().any(|(n, _)| n.to_lowercase().contains(kw));
-    // 弱证据那一档与旧写法逐条一致（条目名优先，全都不沾时看包文件名，最后落 Fabric）——
-    // 本轮只把「mods 里那枚 jar 直取」加在它前面，不顺手改判这一条
+    if let Some(loader) = from_metadata {
+        return (loader, None);
+    }
+    let has = |kw: &str| mod_jars.iter().any(|name| has_loader_marker(name, kw));
+    // 多种弱标记冲突时沿用原顺序，避免这次修复同时改变冲突处理策略。
     if has("neoforge") {
         (LoaderKind::NeoForge, None)
     } else if has("forge") {
@@ -330,14 +345,108 @@ fn guess_loader(
             .file_name()
             .map(|s| s.to_string_lossy().to_lowercase())
             .unwrap_or_default();
-        if file.contains("neoforge") {
+        if has_loader_marker(&file, "neoforge") {
             (LoaderKind::NeoForge, None)
-        } else if file.contains("forge") {
+        } else if has_loader_marker(&file, "forge") {
             (LoaderKind::Forge, None)
         } else {
             // 什么线索都没有时也算 Fabric（裸包默认，旧口径原样保留）
             (LoaderKind::Fabric, None)
         }
     }
+}
+
+fn has_loader_marker(name: &str, marker: &str) -> bool {
+    name.split(|c: char| !c.is_ascii_alphanumeric())
+        .any(|part| part.eq_ignore_ascii_case(marker))
+}
+
+/// 只读取模组 JAR 与其中的公开元数据，不解包到磁盘；单个容器/元数据设上限。
+/// 多加载器 JAR 给出候选集合，以所有可识别 JAR 的交集确定唯一家族。
+fn loader_from_mod_metadata(
+    archive: &mut zip::ZipArchive<File>,
+    files: &[PackFile],
+) -> Option<LoaderKind> {
+    const MAX_JAR_BYTES: u64 = 48 * 1024 * 1024;
+    const MAX_SCAN_BYTES: u64 = 512 * 1024 * 1024;
+    const MAX_SCAN_FILES: usize = 400;
+    let mut common: Option<Vec<LoaderKind>> = None;
+    let mut scanned_bytes = 0u64;
+    for (index, file) in files.iter().filter(|f| f.in_pack).enumerate() {
+        // 超出总预算就放弃本轮元数据结论；不把只扫描了部分文件的交集当成整包一致性。
+        if index >= MAX_SCAN_FILES { return None; }
+        let Ok(mut entry) = archive.by_name(&file.path) else { return None };
+        if entry.size() > MAX_JAR_BYTES
+            || entry.size() > MAX_SCAN_BYTES.saturating_sub(scanned_bytes)
+        {
+            return None;
+        }
+        let mut bytes = Vec::new();
+        if (&mut entry).take(MAX_JAR_BYTES + 1).read_to_end(&mut bytes).is_err()
+            || bytes.len() as u64 > MAX_JAR_BYTES
+        {
+            return None;
+        }
+        scanned_bytes = scanned_bytes.saturating_add(bytes.len() as u64);
+        let hints = jar_loader_candidates(&bytes);
+        if hints.is_empty() { continue; }
+        match &mut common {
+            None => common = Some(hints),
+            Some(current) => current.retain(|kind| hints.contains(kind)),
+        }
+        // 不一致就交回原有弱规则，不用继续解剩余 JAR。
+        if common.as_ref().is_some_and(Vec::is_empty) { return None; }
+    }
+    common.filter(|kinds| kinds.len() == 1).map(|kinds| kinds[0])
+}
+
+fn jar_loader_candidates(bytes: &[u8]) -> Vec<LoaderKind> {
+    let Ok(mut jar) = zip::ZipArchive::new(std::io::Cursor::new(bytes)) else {
+        return Vec::new();
+    };
+    let mut kinds = Vec::new();
+    let has_neoforge = jar.by_name("META-INF/neoforge.mods.toml").is_ok();
+    if has_neoforge { kinds.push(LoaderKind::NeoForge); }
+    if jar.by_name("fabric.mod.json").is_ok() { kinds.push(LoaderKind::Fabric); }
+    if jar.by_name("mcmod.info").is_ok() { kinds.push(LoaderKind::Forge); }
+    if let Ok(mut meta) = jar.by_name("META-INF/mods.toml") {
+        const MAX_META_BYTES: u64 = 1024 * 1024;
+        let mut raw = String::new();
+        let table = if meta.size() <= MAX_META_BYTES
+            && (&mut meta).take(MAX_META_BYTES + 1).read_to_string(&mut raw).is_ok()
+            && raw.len() as u64 <= MAX_META_BYTES
+        {
+            toml::from_str::<toml::Value>(&raw).ok()
+        } else {
+            None
+        };
+        let mut declared = Vec::new();
+        if let Some(deps) = table.as_ref().and_then(|v| v.get("dependencies")).and_then(toml::Value::as_table) {
+            for rows in deps.values().filter_map(toml::Value::as_array) {
+                for row in rows {
+                    let kind = match row.get("modId").and_then(toml::Value::as_str) {
+                        Some("forge") => LoaderKind::Forge,
+                        Some("neoforge") => LoaderKind::NeoForge,
+                        _ => continue,
+                    };
+                    // 可选或不兼容的声明不能证明当前模组属于该加载器。
+                    if row.get("mandatory").and_then(toml::Value::as_bool) == Some(false)
+                        || row.get("type").and_then(toml::Value::as_str).is_some_and(|t| t != "required")
+                    {
+                        continue;
+                    }
+                    if !declared.contains(&kind) { declared.push(kind); }
+                }
+            }
+        }
+        // 旧 NeoForge 也使用 mods.toml；文件名本身只能证明 Forge 系，不能独自区分两家。
+        if declared.is_empty() && !has_neoforge {
+            declared.extend([LoaderKind::Forge, LoaderKind::NeoForge]);
+        }
+        for kind in declared {
+            if !kinds.contains(&kind) { kinds.push(kind); }
+        }
+    }
+    kinds
 }
 

@@ -270,7 +270,7 @@ use super::*;
         assert_eq!(
             extras,
             vec!["mods_backup/x.cfg", "options.txt", "somemods/b.jar"],
-            "根级散文件要与 mrpack 腿同一条口径（见 mrpack_jars_under_client_overrides_count_as_mods）"
+            "根级散文件要与 mrpack 腿同一条口径（见 mrpack_server_overrides_exclude_client_only_files）"
         );
     }
 
@@ -471,11 +471,9 @@ use super::*;
         assert_eq!(extras, vec!["overrides/config/x.toml"]);
     }
 
-    /// mrpack 专有那两种壳名（`client-overrides` / `server-overrides`）里的 jar 也是模组。
-    /// 真包形状：`files[]` 是空的、jar 物理躺在 `client-overrides/mods/` ——
-    /// 剥壳名单当初只写了 CF 那两种，于是整包被当成「没有模组」报空
+    /// server-overrides 进入服务端，client-overrides 的模组和资源都不能混进来。
     #[test]
-    fn mrpack_jars_under_client_overrides_count_as_mods() {
+    fn mrpack_server_overrides_exclude_client_only_files() {
         let path = std::env::temp_dir().join(format!(
             "sideshift-parser-{}.mrpack",
             uuid::Uuid::new_v4()
@@ -498,6 +496,7 @@ use super::*;
             "client-overrides/config/appleskin.json5",
             "client-overrides/options.txt",
             "server-overrides/mods/server-side.jar",
+            "server-overrides/server.properties",
         ] {
             w.start_file(name, opts).unwrap();
             w.write_all(b"PK\x03\x04").unwrap();
@@ -511,17 +510,8 @@ use super::*;
         mods.sort_unstable();
         assert_eq!(
             mods,
-            vec![
-                "client-overrides/mods/animatica.jar",
-                "client-overrides/mods/appleskin.jar",
-                "server-overrides/mods/server-side.jar",
-            ],
-            "壳内的 jar 要进模组方案；物理名留着壳，取件才抽得到字节"
-        );
-        // 交付位置问 logical_rel：壳内壳外从此是同一个目录
-        assert_eq!(
-            parsed.logical_rel("client-overrides/mods/animatica.jar"),
-            "mods/animatica.jar"
+            vec!["server-overrides/mods/server-side.jar"],
+            "客户端覆盖层不属于服务端方案；服务端物理名留着壳，取件才抽得到字节"
         );
         assert_eq!(
             parsed.logical_rel("server-overrides/mods/server-side.jar"),
@@ -531,10 +521,120 @@ use super::*;
         extras.sort_unstable();
         assert_eq!(
             extras,
-            vec!["client-overrides/config/appleskin.json5", "client-overrides/options.txt"],
-            "壳根的散文件也要进可保留内容，否则界面上只剩文件夹可选"
+            vec!["server-overrides/server.properties"],
+            "服务端覆盖层的根级配置应可保留，客户端文件不能入选"
         );
-        assert_eq!(parsed.logical_rel("client-overrides/options.txt"), "options.txt");
+        assert_eq!(parsed.logical_rel("server-overrides/server.properties"), "server.properties");
+    }
+
+    fn write_mrpack_overlay_fixture(
+        root: &str,
+        files: serde_json::Value,
+        entries: &[(&str, &[u8])],
+    ) -> std::path::PathBuf {
+        let path = std::env::temp_dir().join(format!("sideshift-overlay-{}.mrpack", uuid::Uuid::new_v4()));
+        let mut w = zip::ZipWriter::new(File::create(&path).unwrap());
+        let opts = zip::write::SimpleFileOptions::default();
+        w.start_file(format!("{root}{MRPACK_ENTRY}"), opts).unwrap();
+        let index = serde_json::json!({
+            "dependencies": { "minecraft": "1.20.1", "forge": "47.2.20" },
+            "files": files,
+        });
+        w.write_all(index.to_string().as_bytes()).unwrap();
+        for (name, bytes) in entries {
+            w.start_file(format!("{root}{name}"), opts).unwrap();
+            w.write_all(bytes).unwrap();
+        }
+        w.finish().unwrap();
+        path
+    }
+
+    #[test]
+    fn mrpack_server_overlay_replaces_index_file_and_its_old_identity() {
+        for root in ["", "MyPack/"] {
+            let path = write_mrpack_overlay_fixture(root, serde_json::json!([{
+                "path": "mods/example.jar", "hashes": {"sha1":"old-hash"},
+                "downloads": ["https://example.invalid/old.jar"], "fileSize": 999,
+                "env": {"client":"required", "server":"unsupported"},
+                "depends": [{"project_id":"old-library", "optional":false}]
+            }]), &[
+                ("mods/example.jar", b"root"),
+                ("overrides/mods/example.jar", b"common"),
+                ("server-overrides/mods/example.jar", b"server-bytes"),
+                ("client-overrides/mods/example.jar", b"client"),
+            ]);
+            let parsed = parse(&path);
+            let _ = std::fs::remove_file(&path);
+            assert!(parsed.manifest.parsed, "{:?}", parsed.manifest.error);
+            assert_eq!(parsed.mod_files.len(), 1);
+            let file = &parsed.mod_files[0];
+            assert_eq!(file.path, format!("{root}server-overrides/mods/example.jar"));
+            assert_eq!(parsed.logical_rel(&file.path), "mods/example.jar");
+            assert!(file.in_pack);
+            assert_eq!(file.size_bytes, 12);
+            assert_eq!(file.sha1, None, "覆盖文件不能沿用原下载文件哈希");
+            assert!(file.url.is_empty());
+            assert_eq!((file.env_client, file.env_server), (None, None));
+            assert!(file.depends.is_empty());
+        }
+    }
+
+    #[test]
+    fn mrpack_undeclared_overlays_have_one_mod_and_one_resource_per_logical_path() {
+        let path = write_mrpack_overlay_fixture("", serde_json::json!([]), &[
+            ("mods/example.jar", b"root"),
+            ("overrides/mods/example.jar", b"common"),
+            ("server-overrides/mods/example.jar", b"server"),
+            ("config/example.toml", b"root-config"),
+            ("overrides/config/example.toml", b"common-config"),
+            ("server-overrides/config/example.toml", b"server-config"),
+            ("client-overrides/config/example.toml", b"client-config"),
+        ]);
+        let parsed = parse(&path);
+        let _ = std::fs::remove_file(&path);
+        assert_eq!(parsed.mod_files.len(), 1);
+        assert_eq!(parsed.mod_files[0].path, "server-overrides/mods/example.jar");
+        assert_eq!(parsed.extra_files.len(), 1);
+        assert_eq!(parsed.extra_files[0].path, "server-overrides/config/example.toml");
+    }
+
+    #[test]
+    fn mrpack_client_overlay_cannot_satisfy_a_declared_download() {
+        let path = write_mrpack_overlay_fixture("", serde_json::json!([{
+            "path":"mods/example.jar", "hashes":{"sha1":"download-hash"},
+            "downloads":["https://example.invalid/server.jar"], "fileSize":42,
+            "env":{"server":"required"}
+        }]), &[("client-overrides/mods/example.jar", b"client")]);
+        let parsed = parse(&path);
+        let _ = std::fs::remove_file(&path);
+        assert_eq!(parsed.mod_files.len(), 1);
+        let file = &parsed.mod_files[0];
+        assert!(!file.in_pack);
+        assert_eq!(file.path, "mods/example.jar");
+        assert_eq!(file.sha1.as_deref(), Some("download-hash"));
+        assert_eq!(file.url, "https://example.invalid/server.jar");
+        assert_eq!(file.env_server, Some(SideFlag::Required));
+    }
+
+    #[test]
+    fn mrpack_common_overlay_replaces_root_and_declared_resources() {
+        let path = write_mrpack_overlay_fixture("", serde_json::json!([{
+            "path":"config/example.toml", "hashes":{"sha1":"old-config"},
+            "downloads":["https://example.invalid/config.toml"]
+        }]), &[
+            ("mods/example.jar", b"jar"),
+            ("config/example.toml", b"root"),
+            ("override/config/example.toml", b"alias"),
+            ("overrides/config/example.toml", b"common"),
+        ]);
+        let parsed = parse(&path);
+        let _ = std::fs::remove_file(&path);
+        assert_eq!(parsed.extra_files.len(), 1);
+        let file = &parsed.extra_files[0];
+        assert_eq!(file.path, "overrides/config/example.toml");
+        assert_eq!(file.size_bytes, 6);
+        assert_eq!(file.sha1, None);
+        assert!(file.url.is_empty());
     }
 
     /* ---------------- CF / MCBBS 清单这一腿 ---------------- */
@@ -781,6 +881,10 @@ use super::*;
         // 名字里带这些字样但不是加载器本体：fabric-api 是模组库，jei 那枚是模组的 Forge 版
         assert_eq!(loader_from_jar_name("fabric-api-0.92.2.jar"), None);
         assert_eq!(loader_from_jar_name("jei-1.20.1-forge-15.2.0.jar"), None);
+        assert_eq!(loader_from_jar_name("neoforge-helper-1.0.jar"), None);
+        assert_eq!(loader_from_jar_name("forge-api-1.0.jar"), None);
+        assert_eq!(loader_from_jar_name("fabric-loader-helper-1.0.jar"), None);
+        assert_eq!(loader_from_jar_name("neoforge-1.0-helper.jar"), None);
         assert_eq!(loader_from_jar_name("sodium.jar"), None);
     }
 
@@ -808,10 +912,9 @@ use super::*;
         assert_eq!(parsed.loader_version.as_deref(), Some("0.16.9"));
     }
 
-    /// 没有加载器 jar 时退回旧的那档弱证据，且**不给版本号**：老 Forge（1.16 及以下）的包
-    /// mods 里本来就没有那一枚，删了这档会把整批包统一误标成 Fabric
+    /// 任意配置名不再决定加载器。完全没有有效线索时仍保留原来的 Fabric 兜底。
     #[test]
-    fn substring_scan_still_decides_when_no_loader_jar_is_present() {
+    fn unrelated_neoforge_config_does_not_decide_the_loader() {
         let path = std::env::temp_dir().join(format!(
             "sideshift-parser-{}.zip",
             uuid::Uuid::new_v4()
@@ -826,6 +929,111 @@ use super::*;
 
         let parsed = parse(&path);
         let _ = std::fs::remove_file(&path);
-        assert_eq!(parsed.manifest.loader, LoaderKind::NeoForge);
+        assert_eq!(parsed.manifest.loader, LoaderKind::Fabric);
         assert_eq!(parsed.loader_version, None);
+    }
+
+    /// 所有 JAR 字节均在测试内合成，不读取本机模组或用户配置。
+    fn write_loader_probe_zip(mods: &[(&str, &[(&str, &str)])]) -> std::path::PathBuf {
+        let path = std::env::temp_dir().join(format!(
+            "sideshift-parser-{}.zip", uuid::Uuid::new_v4()
+        ));
+        let mut outer = zip::ZipWriter::new(File::create(&path).unwrap());
+        let opts = zip::write::SimpleFileOptions::default();
+        for (name, metadata) in mods {
+            let mut jar = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+            for (entry, value) in *metadata {
+                jar.start_file(*entry, opts).unwrap();
+                jar.write_all(value.as_bytes()).unwrap();
+            }
+            let bytes = jar.finish().unwrap().into_inner();
+            outer.start_file(format!("mods/{name}"), opts).unwrap();
+            outer.write_all(&bytes).unwrap();
+        }
+        // 与本次反馈一致：无关文件中包含 neoforge，不能压过模组自己的声明。
+        outer.start_file("config/neoforge.toml", opts).unwrap();
+        outer.write_all(b"unrelated = true").unwrap();
+        outer.finish().unwrap();
+        path
+    }
+
+    #[test]
+    fn forge_mod_metadata_outranks_unrelated_neoforge_names() {
+        for name in ["addon-neoforge-1.0.jar", "neoforge-helper-1.0.jar"] {
+            let path = write_loader_probe_zip(&[(
+                name,
+                &[("META-INF/mods.toml", "[[dependencies.addon]]\nmodId = \"forge\"\nmandatory = true\n")],
+            )]);
+            let parsed = parse(&path);
+            let _ = std::fs::remove_file(&path);
+            assert!(parsed.manifest.parsed, "{:?}", parsed.manifest.error);
+            assert_eq!(parsed.manifest.loader, LoaderKind::Forge, "{name}");
+            assert_eq!(parsed.loader_version, None);
+        }
+    }
+
+    #[test]
+    fn both_neoforge_metadata_formats_are_recognized() {
+        for (entry, contents) in [
+            ("META-INF/neoforge.mods.toml", "modLoader = \"javafml\""),
+            ("META-INF/mods.toml", "[[dependencies.addon]]\nmodId = \"neoforge\"\ntype = \"required\"\n"),
+        ] {
+            let path = write_loader_probe_zip(&[("addon.jar", &[(entry, contents)])]);
+            let parsed = parse(&path);
+            let _ = std::fs::remove_file(&path);
+            assert!(parsed.manifest.parsed, "{:?}", parsed.manifest.error);
+            assert_eq!(parsed.manifest.loader, LoaderKind::NeoForge, "{entry}");
+        }
+    }
+
+    #[test]
+    fn legacy_forge_metadata_does_not_fall_back_to_fabric() {
+        let path = write_loader_probe_zip(&[("addon.jar", &[("mcmod.info", "[]")])]);
+        let parsed = parse(&path);
+        let _ = std::fs::remove_file(&path);
+        assert_eq!(parsed.manifest.loader, LoaderKind::Forge);
+    }
+
+    #[test]
+    fn multi_loader_mod_uses_the_family_shared_by_the_other_mods() {
+        let path = write_loader_probe_zip(&[
+            ("common.jar", &[
+                ("fabric.mod.json", "{}"),
+                ("META-INF/mods.toml", "[[dependencies.common]]\nmodId = \"forge\"\nmandatory = true\n"),
+            ]),
+            ("addon.jar", &[("META-INF/mods.toml", "[[dependencies.addon]]\nmodId = \"forge\"\nmandatory = true\n")]),
+        ]);
+        let parsed = parse(&path);
+        let _ = std::fs::remove_file(&path);
+        assert_eq!(parsed.manifest.loader, LoaderKind::Forge);
+    }
+
+    #[test]
+    fn weak_markers_only_use_complete_mod_file_name_segments() {
+        for (name, expected) in [
+            ("jei-forge-1.0.jar", LoaderKind::Forge),
+            ("jei-neoforge-1.0.jar", LoaderKind::NeoForge),
+            ("forgeconfigapiport-1.0.jar", LoaderKind::Fabric),
+            ("neoforgehelper-1.0.jar", LoaderKind::Fabric),
+        ] {
+            let path = write_loader_probe_zip(&[(name, &[])]);
+            let parsed = parse(&path);
+            let _ = std::fs::remove_file(&path);
+            assert_eq!(parsed.manifest.loader, expected, "{name}");
+        }
+    }
+
+    #[test]
+    fn metadata_scan_budget_does_not_accept_a_partial_family_result() {
+        let names: Vec<String> = (0..401).map(|i| format!("addon-{i:03}.jar")).collect();
+        let forge = [("META-INF/mods.toml", "[[dependencies.addon]]\nmodId = \"forge\"\nmandatory = true\n")];
+        let mods: Vec<(&str, &[(&str, &str)])> = names.iter().enumerate().map(|(i, name)| {
+            (name.as_str(), if i == 0 { forge.as_slice() } else { &[] })
+        }).collect();
+        let path = write_loader_probe_zip(&mods);
+        let parsed = parse(&path);
+        let _ = std::fs::remove_file(&path);
+        assert!(parsed.manifest.parsed, "{:?}", parsed.manifest.error);
+        // 第一个 JAR 是 Forge，但总扫描未完成：必须回弱规则，不能采信部分交集。
+        assert_eq!(parsed.manifest.loader, LoaderKind::Fabric);
     }

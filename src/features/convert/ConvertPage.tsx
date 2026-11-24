@@ -59,6 +59,7 @@ export function ConvertPage() {
     const t = useT();
     const { entry, navigate, switchPrimary } = useNavigation();
     const manifest = entry.params?.manifest as PackManifest | undefined;
+    const packId = manifest ? packIdOf(manifest) : undefined;
     const { getDraft, saveDraft } = usePackStore();
     /** 这一套选包的方案草稿：只在这次挂载的最初一帧取一次（取不到就是首次进来）。
      *  本页只挂导航栈栈顶，回首页即卸载 ⇒ 没有草稿就得整套重跑一遍自动分类。 */
@@ -107,14 +108,23 @@ export function ConvertPage() {
     /** 自动分类进行中：离线层是同步返回，在线层补全后走 classified 事件再刷一次。
      *  带草稿回来时它=「离开时联网还没跑完」，下面那条挂载 effect 会据此跟后端复核一次。 */
     const [classifying, setClassifying] = useState(draft?.onlinePending ?? false);
+    /** 完整方案与缺件计数均已到达，才可构建；空清单不等于分类已成功。 */
+    const [classificationReady, setClassificationReady] = useState(!!draft && !draft.onlinePending);
     /** 清单按编号声明、这一轮没能并进方案的条数（拿不到文件名）。每一轮分类覆盖它，0 = 没有缺口 */
-    const [cfUnmerged, setCfUnmerged] = useState(0);
+    const [cfUnmerged, setCfUnmerged] = useState(draft?.cfUnmerged ?? 0);
+    const [cfUnmergedRequired, setCfUnmergedRequired] = useState(draft?.cfUnmergedRequired ?? 0);
     /** 手动重跑的那一小段：列表已被清空、离线结论还没回来（只用来挑文案） */
     const [reclassifying, setReclassifying] = useState(false);
     /** 「清空我的修改」两段式确认（弹窗纪律：不用遮罩/确认框，第二次点击才执行） */
     const [confirmClear, setConfirmClear] = useState(false);
     /** 本机 JDK 探测结论（只在开了「本机安装 Loader」时探；null = 还没探或不需要） */
     const [javaProbe, setJavaProbe] = useState<JavaProbe | null>(null);
+    const classification = useRef<{
+        id: string;
+        done: boolean;
+        responded: boolean;
+        off?: () => void;
+    } | null>(null);
 
     /** 自动分类主入口：进页默认执行，「重新自动分类」手动再跑一次。
      *  手动处置存在 overrides，方案整体替换也不会覆盖用户改动。
@@ -122,21 +132,50 @@ export function ConvertPage() {
      *  手动重跑先清空方案：不清的话第二轮只要给出同样的处置，行的 id 集合就没变过，
      *  既不出场也不入场 → 读起来是「整屏一起刷新」，逐行插入的节拍出不来（失败时回滚，别把列表清丢）。 */
     async function runClassify(manual: boolean) {
+        if (!packId) return;
+        classification.current?.off?.();
+        const round = { id: crypto.randomUUID(), done: false, responded: false, off: undefined as (() => void) | undefined };
+        classification.current = round;
         const prevPlan = plan;
+        const prevReady = classificationReady;
+        setClassificationReady(false);
         setClassifying(true);
         if (manual) {
             setReclassifying(true);
             setPlan([]);
         }
         try {
+            // 先订阅再发命令；请求标识同时隔离同路径重选和迟到的上轮事件。
+            const off = await api.onClassified((e) => {
+                if (classification.current !== round || e.packId !== packId || e.requestId !== round.id) return;
+                if (round.done) return;
+                setPlan(e.plan);
+                if (!e.done) return;
+                round.done = true;
+                // 同步响应还包含 CF 缺件计数，未到达前不可先放开构建。
+                if (round.responded) {
+                    setClassificationReady(true);
+                    setClassifying(false);
+                }
+                round.off?.();
+                if (!e.complete) notify(t("convert.online-lookup", "联网反查未全部完成，剩余行沿用离线结论；点「重新自动分类」可再试"), "warn");
+            });
+            if (classification.current !== round) { off(); return; }
+            round.off = off;
             // force = 「重新自动分类」按钮专用：不传的话后端认定这一包的端证据还在缓存里，
             // 直接现算方案返回（离线探测与联网轮都不跑），按钮就成了「重读上次结果」。
             // 自动那一趟（manual=false）保持复用——每次进页白付一遍逐 jar 扫描不值。
-            const res = await api.classifyPack(manual);
+            const res = await api.classifyPack(manual, packId, round.id);
+            if (classification.current !== round) return;
+            if (res.packId !== packId || res.requestId !== round.id) throw new Error("Classification identity mismatch");
+            round.responded = true;
             setReclassifying(false);
-            setPlan(res.plan);
-            setClassifying(res.onlinePending);
+            if (!round.done) setPlan(res.plan);
+            setClassifying(!round.done && res.onlinePending);
+            setClassificationReady(round.done || !res.onlinePending);
             setCfUnmerged(res.cfUnmerged);
+            setCfUnmergedRequired(res.cfUnmergedRequired);
+            if (!res.onlinePending || round.done) round.off?.();
             if (manual) {
                 const remove = res.plan.filter((m) => m.disposition === "remove").length;
                 // 联网还没跑完时不报数：那一批发出去会把「剔除 N 项」当成结论，可方案还没落定
@@ -151,22 +190,24 @@ export function ConvertPage() {
                 );
             }
         } catch {
+            if (classification.current !== round) return;
+            round.off?.();
             setReclassifying(false);
-            if (manual) setPlan(prevPlan);
+            setPlan(prevPlan);
+            setClassificationReady(prevReady);
             notify(t("convert.auto-classify", "自动分类失败，当前方案保持不变"), "error");
             setClassifying(false);
         }
     }
 
     // 数据装载：包正躺在后端解析缓存里，按全局默认值 + 自动分类现算一份待确认的方案。
-    // `defaultOptions`/`classifyPack`/`listPackDirs` 都只认「最近一次解析的包」，所以这条链只能服务
-    // 刚选完的包；回看某个任务真正用过的方案走任务详情「方案」签（读存档，不碰这三个命令）。
+    // 目录、加载器和分类明确携带本页包身份，历史方案查询不会切换它们的归属。
     // 自动分类只在「没有草稿」或「离开时联网还没跑完」时补一次：前者是首次进来确实没算过，
     // 后者要跟后端复核（联网结论可能在人不在这一页时才到）。草稿完整时整套清单已经在状态里，
     // 再跑一遍等于白付一次逐个开包内 jar 的离线探测 + 整屏重排（手动重跑另有「重新自动分类」按钮）。
     useEffect(() => {
         if (!manifest) return;
-        void Promise.all([api.defaultOptions(manifest), api.listPackDirs()]).then(
+        void Promise.all([api.defaultOptions(manifest), api.listPackDirs(packId)]).then(
             ([o, tree]) => {
                 setPackTree(tree);
                 // 保留条目不预勾任何一项：勾哪个保哪个是这张卡的语义（原先那批根级预勾已撤）
@@ -180,7 +221,7 @@ export function ConvertPage() {
                 loaderMcRef.current = manifest.mcVersion;
             }
         );
-        if (!draft || draft.onlinePending) void runClassify(false);
+        if (!draft || draft.onlinePending || draft.cfUnmerged > 0) void runClassify(false);
         void api
             .listMcVersions()
             .then((l) => setMcOptions(l.map(toOption)))
@@ -252,8 +293,8 @@ export function ConvertPage() {
     // 免得每次勾选都惊动 App 级 context 让整棵页面树跟着重渲染。
     const liveDraftRef = useRef<PlanDraft | null>(null);
     useEffect(() => {
-        liveDraftRef.current = { plan, extras, overrides, disabledIds, onlinePending: classifying };
-    }, [plan, extras, overrides, disabledIds, classifying]);
+        liveDraftRef.current = { plan, extras, overrides, disabledIds, cfUnmerged, cfUnmergedRequired, onlinePending: classifying || !classificationReady };
+    }, [plan, extras, overrides, disabledIds, cfUnmerged, cfUnmergedRequired, classifying, classificationReady]);
     useEffect(
         () => () => {
             const d = liveDraftRef.current;
@@ -264,32 +305,10 @@ export function ConvertPage() {
         [saveDraft]
     );
 
-    // 在线反查的补全结论：后端换包后会停推，这里再按包身份拦一道，防迟到事件串台。
-    // 比的是源路径而不是文件名——把同一个包复制到另一目录（或改过内容再选一次）时文件名相同，
-    // 按名字拦挡不住上一包那一轮迟到的收尾，界面上就是「分类好了，数据是上一个包的」
-    const packId = manifest ? packIdOf(manifest) : undefined;
-    useEffect(() => {
-        let alive = true;
-        let off: (() => void) | null = null;
-        void api
-            .onClassified((e) => {
-                if (!alive) return;
-                if (e.packId && packId && e.packId !== packId) return;
-                setPlan(e.plan);
-                // 离线那次推送只是先给结论，本轮结束（done）才停「分类中」
-                if (!e.done) return;
-                setClassifying(false);
-                if (!e.complete) notify(t("convert.online-lookup", "联网反查未全部完成，剩余行沿用离线结论；点「重新自动分类」可再试"), "warn");
-            })
-            .then((f) => {
-                if (alive) off = f;
-                else f();
-            });
-        return () => {
-            alive = false;
-            off?.();
-        };
-    }, [packId]);
+    useEffect(() => () => {
+        classification.current?.off?.();
+        classification.current = null;
+    }, [manifest]);
 
     const mcVersion = options?.mcVersion;
     /** 拉某一档 MC 版本的加载器列表。`switched` 只有换档那条腿传 true：首次装载那一档是源包
@@ -312,7 +331,7 @@ export function ConvertPage() {
             });
         };
         void api
-            .listLoaderVersions(mc)
+            .listLoaderVersions(mc, packId)
             .then((l) => settle(l.map(toOption), "idle"))
             .catch((e: unknown) => {
                 if (seq !== loaderReqRef.current) return;
@@ -325,7 +344,7 @@ export function ConvertPage() {
                     "error"
                 );
             });
-    }, []);
+    }, [packId]);
 
     // MC 版本变更 → 重新拉取该版本可用的加载器版本，并让**选中值**跟着这一档走。
     // 2026-09-28 实测两件事：Fabric 的 `versions/loader/{mc}` 对 1.13 以上各档给的是同一份全量表
@@ -845,7 +864,7 @@ export function ConvertPage() {
     };
 
     const start = async () => {
-        if (!manifest || !options || starting) return;
+        if (!manifest || !options || starting || classifying || !classificationReady || cfUnmergedRequired > 0) return;
         setStarting(true);
         try {
             // 停用行不下发：后端方案里根本没有它，无需感知停用概念
@@ -942,6 +961,7 @@ export function ConvertPage() {
                             classifying={classifying}
                             totalRows={totalRows}
                             readingLabel={readingLabel}
+                            emptyLabel={!classifying && !classificationReady ? t("convert.auto-classify", "自动分类失败，当前方案保持不变") : undefined}
                             depWarnings={depWarnings}
                             localIds={localIds}
                             removableIds={extrasIds}
@@ -1077,6 +1097,8 @@ export function ConvertPage() {
                                 !options ||
                                 starting ||
                                 classifying ||
+                                !classificationReady ||
+                                cfUnmergedRequired > 0 ||
                                 missingBlocked ||
                                 javaBlocked ||
                                 portBlocked ||
@@ -1093,11 +1115,15 @@ export function ConvertPage() {
                         </Btn>
                         <p
                             className={`w-full text-center text-[10px] leading-[14px] font-normal ${
-                                missingBlocked || javaBlocked || portBlocked ? "text-redstone" : "text-text-3"
+                                cfUnmergedRequired > 0 || missingBlocked || javaBlocked || portBlocked ? "text-redstone" : "text-text-3"
                             }`}
                         >
                             {classifying
                                 ? t("convert.auto-classifying-wait", "自动分类进行中，方案落定后方可开始构建")
+                                : !classificationReady
+                                  ? t("convert.auto-classify", "自动分类失败，当前方案保持不变")
+                                : cfUnmergedRequired > 0
+                                  ? t("convert.cf-unmerged-required", "还有 {{count}} 个必需模组未能确认文件，请重新自动分类后再构建", { count: cfUnmergedRequired })
                                 : missingBlocked
                                   ? t(
                                         "convert.fix-missing",

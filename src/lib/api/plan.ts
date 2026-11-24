@@ -31,10 +31,11 @@ export async function estimateDownload(
 /** 自动分类（Rust: classify_pack -> PlanClassification）：离线层立即返回，在线层随后走 onClassified 补全。
  *  `force=false`（默认）时后端可能直接复用这一包的端证据缓存：离线探测不重跑，零磁盘开销。
  *  `force=true` 是「重新自动分类」按钮专用——必须真重探一遍（也是联网失败后的重试出口）。 */
-export async function classifyPack(force = false): Promise<PlanClassification> {
-    if (!isTauri) return mock.mockClassify(mock.mockPlanMods);
-    return invokeOrMock("classify_pack", { force }, () =>
-        mock.mockClassify(mock.mockPlanMods)
+export async function classifyPack(force: boolean, packId: string, requestId: string): Promise<PlanClassification> {
+    const fallback = async () => ({ ...await mock.mockClassify(mock.mockPlanMods), packId, requestId });
+    if (!isTauri) return fallback();
+    return invokeOrMock("classify_pack", { force, packId, requestId }, () =>
+        fallback()
     );
 }
 

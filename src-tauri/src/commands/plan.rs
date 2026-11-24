@@ -10,6 +10,59 @@ fn online_running_of(inner: &task_engine::Inner) -> bool {
     inner.env_online_pack.is_some() && inner.env_online_pack == inner.last_pack
 }
 
+/// 普通反查与剔除复核共用一轮后台任务；只剩复核时也必须有执行者收尾。
+fn needs_online_round(source: EnvLookupSource, pending: bool, recheck: bool) -> bool {
+    !source.is_off() && (pending || recheck)
+}
+
+#[derive(Clone, Debug)]
+struct ClassificationRound {
+    pack_id: String,
+    parse_seq: u64,
+    round_seq: u64,
+    request_id: String,
+    was_running: bool,
+}
+
+impl ClassificationRound {
+    fn current(&self, inner: &task_engine::Inner) -> bool {
+        inner.last_pack.as_deref() == Some(self.pack_id.as_str())
+            && inner.parse_request_seq == self.parse_seq
+            && inner.classify_request_seq == self.round_seq
+    }
+
+    fn check(&self, inner: &task_engine::Inner) -> Result<(), String> {
+        self.current(inner).then_some(()).ok_or_else(|| app_code("stale-classification"))
+    }
+
+    /// 只由最终方案准备好的路径调用；旧轮不能结束新轮的运行状态。
+    fn finish(&self, inner: &mut task_engine::Inner) -> bool {
+        if !self.current(inner) { return false; }
+        inner.env_online_pack = None;
+        true
+    }
+}
+
+fn begin_classification(
+    inner: &mut task_engine::Inner,
+    pack_id: String,
+    request_id: String,
+) -> Result<ClassificationRound, String> {
+    if inner.last_pack.as_deref() != Some(pack_id.as_str()) {
+        return Err(app_code("stale-classification"));
+    }
+    inner.classify_request_seq = inner.classify_request_seq.wrapping_add(1);
+    let was_running = online_running_of(inner);
+    inner.env_online_pack = Some(pack_id.clone());
+    Ok(ClassificationRound {
+        pack_id,
+        parse_seq: inner.parse_request_seq,
+        round_seq: inner.classify_request_seq,
+        request_id,
+        was_running,
+    })
+}
+
 /// 把「只有编号」的那些 CF 行补成带名字/大小/sha1 的行，并就地换掉解析缓存里那一份。
 ///
 /// 补取只在自动分类入口跑一次，但它换掉的是**解析缓存那一份 Arc**，下载预估读的就是这一份
@@ -28,20 +81,20 @@ fn online_running_of(inner: &task_engine::Inner) -> bool {
 /// 模组」，后者是混合形包的实话——声明了、名字拿不到、这次没进方案的那批
 ///
 /// `reprobe` = 用户点「重新自动分类」：把索引里探过的取链许可作废再问一遍（`ensure` 那侧有理由）
-async fn cf_enrich(state: &S<'_>, reprobe: bool) -> (usize, usize) {
-    let (parsed, pack_id, cache_dir) = {
+async fn cf_enrich(state: &S<'_>, round: &ClassificationRound, reprobe: bool) -> Result<(usize, usize, usize), String> {
+    let (parsed, cache_dir) = {
         let inner = lock(&state);
+        round.check(&inner)?;
         let Some(p) = last_parsed_of(&inner) else {
-            return (0, 0);
+            return Ok((0, 0, 0));
         };
         // 两道都空才算「这包没有按编号声明的模组」：只看已成行的话，混合形包（实体 jar 在、
         // 编号行还没并进来）会被当成无关包，`ensure` 一辈子跑不到它
         if cfpack::cf_row_count(&p) == 0 && p.declared_cf.is_empty() {
-            return (0, 0);
+            return Ok((0, 0, 0));
         }
         (
             p,
-            inner.last_pack.clone().unwrap_or_default(),
             PathBuf::from(&inner.settings.cache_dir),
         )
     };
@@ -49,31 +102,25 @@ async fn cf_enrich(state: &S<'_>, reprobe: bool) -> (usize, usize) {
     let out = cfpack::ensure(&dl, &cache_dir, &parsed, reprobe).await;
     let rows = cfpack::cf_row_count(&out.parsed);
     let unmerged = out.unmerged;
+    let unmerged_required = out.unmerged_required;
+    let mut inner = lock(&state);
+    round.check(&inner)?;
     // 一轮下来行内容一点没变（索引本来就热、也没许可态/端标签可写）⇒
     // 什么都不动，尤其别把 env 取证结论清掉：那会让同一个包切页往返又重跑一整轮离线探测。
     // `merged` 也算「变了」：新行不落进缓存就等于这轮白并
     if !out.renamed && !out.links_changed && !out.env_changed && out.merged == 0 {
-        return (rows, unmerged);
+        return Ok((rows, unmerged, unmerged_required));
     }
-    {
-        let mut inner = lock(&state);
-        // 补取期间用户可能换了包：不是同一个包就不落这一份（换了包就该按新包重算）
-        if inner.last_pack.as_deref() == Some(pack_id.as_str()) {
-            // 证据表按行归属，名字一变旧结论就对不上号 ⇒ 一并作废，让下一轮按新行重取。
-            // 只改写许可态的那一轮不作废：端判定与「这枚模组拿不拿得到字节」无关
-            if out.renamed
-                && inner.env_evidence_pack.as_deref() == Some(pack_id.as_str())
-            {
-                inner.env_evidence.clear();
-                inner.env_evidence_pack = None;
-                inner.env_code.clear();
-            }
-            inner
-                .parsed_by_pack
-                .insert(pack_id.clone(), Arc::new(out.parsed));
-        }
+    // 行、身份或端标签变化均使旧分类失效；只有取链许可变化可以沿用端证据。
+    if out.renamed || out.env_changed || out.merged > 0 {
+        inner.env_evidence.clear();
+        inner.env_evidence_pack = None;
+        inner.env_code.clear();
+        inner.env_meta.clear();
+        inner.env_doubt.clear();
     }
-    (rows, unmerged)
+    inner.parsed_by_pack.insert(round.pack_id.clone(), Arc::new(out.parsed));
+    Ok((rows, unmerged, unmerged_required))
 }
 
 
@@ -85,20 +132,23 @@ async fn cf_enrich(state: &S<'_>, reprobe: bool) -> (usize, usize) {
 /// `force=false` 且这一包的端证据还在缓存里（= 同一个包第二次问）时直接复用取证结果：
 /// 离线探测整轮跳过（那是这页最贵的重复劳动），方案按当前设置现算。
 /// `force=true`（「重新自动分类」按钮）永远真重探一遍。
-/// 但**联网那一轮不叠**：这一包已经有一轮在跑就不再起第二轮，离线重探照常做，
-/// 剩下的行由在跑那一轮收尾时一起推（`online_pending=true` 让前端继续转圈）。
+/// 新请求接管未完成的分类轮，旧轮只能结束自己的本地工作，不能再发布状态或事件。
 #[tauri::command]
 pub async fn classify_pack(
     app: AppHandle,
     state: S<'_>,
     force: bool,
+    pack_id: String,
+    request_id: String,
 ) -> Result<PlanClassification, String> {
+    let round = begin_classification(&mut lock(&state), pack_id, request_id)?;
     // 编号行先补取，再谈分类：这一步换掉的正是下面要快照的那一份解析缓存，排在快照之后就会
     // 拿着一份旧的名字去建方案（第一屏一排编号），而且 reuse 那条短路会把补取整个跳过
-    let (cf_rows, cf_unmerged) = cf_enrich(&state, force).await;
+    let (cf_rows, cf_unmerged, cf_unmerged_required) = cf_enrich(&state, &round, force).await?;
     // 快照 inputs：guard 必须在这个块里结束，否则 MutexGuard 跨 await 让命令 future 不 Send
-    let (parsed, pack_id, strip, env_source, mcmod, cache_dir, concurrency, cached) = {
+    let (parsed, strip, env_source, mcmod, cache_dir, concurrency, cached) = {
         let inner = lock(&state);
+        round.check(&inner)?;
         let empty = env::EvidenceMap::new();
         match last_parsed_of(&inner) {
             Some(p) => {
@@ -108,26 +158,22 @@ pub async fn classify_pack(
                 // 立刻生效：缓存的是取证结果，不是结论。
                 // force = 用户点「重新自动分类」，那条路必须真重探（也是联网失败后的重试出口）。
                 let reuse = !force
+                    && !round.was_running
                     && !inner.env_evidence.is_empty()
                     && inner.env_evidence_pack.is_some()
                     && inner.env_evidence_pack == inner.last_pack;
                 let cached = reuse.then(|| {
-                    (
-                        detector::build_plan(
+                    detector::build_plan(
                             &p,
                             inner.settings.strip_client_only,
                             evidence_of(&inner, &empty),
                             code_of(&inner),
                             meta_of(&inner),
                             &doubt_of(&inner),
-                        ),
-                        // 在线层还在跑 ⇒ 结论仍会由 classified 事件再推一次，别提前收「分类中」
-                        online_running_of(&inner),
                     )
                 });
                 (
                     p,
-                    inner.last_pack.clone().unwrap_or_default(),
                     inner.settings.strip_client_only,
                     inner.settings.env_lookup_source,
                     inner.settings.env_lookup_mcmod,
@@ -137,21 +183,22 @@ pub async fn classify_pack(
                 )
             }
             None => {
-                return Ok(PlanClassification {
-                    plan: Vec::new(),
-                    online_pending: false,
-                    cf_rows,
-                    cf_unmerged,
-                })
+                return Err(app_code("stale-classification"));
             }
         }
     };
-    if let Some((plan, online_running)) = cached {
+    if let Some(plan) = cached {
+        let mut inner = lock(&state);
+        round.check(&inner)?;
+        round.finish(&mut inner);
         return Ok(PlanClassification {
+            pack_id: round.pack_id.clone(),
+            request_id: round.request_id.clone(),
             plan,
-            online_pending: !env_source.is_off() && online_running,
+            online_pending: false,
             cf_rows,
             cf_unmerged,
+            cf_unmerged_required,
         });
     }
 
@@ -253,74 +300,40 @@ pub async fn classify_pack(
     .await;
     // 在线轮的起跑条件扩了一项：除了没答上的行，还有「待剔除复核」的行时照样要跑——
     // 全表命中索引的二次分类里，复核腿是唯一还有事可做的一层
-    let recheck_pending =
-        !env_source.is_off() && env::strip_recheck_pending(&index, &targets, &ev);
-    let offline_final = env_source.is_off() || (pending.is_empty() && !recheck_pending);
-    // 这一包是否已经有一轮联网反查在飞。**必须在下面立标记之前读**——那个标记写的就是
-    // 「本轮还要联网」，先写后读会永远读到「有人在跑」，于是第二轮起不来、剩下的行再没人查。
-    let round_running = !offline_final && online_running_of(&lock(&state));
+    let recheck_pending = env::strip_recheck_pending(&index, &targets, &ev);
+    let online_needed = needs_online_round(env_source, !pending.is_empty(), recheck_pending);
+    let offline_final = !online_needed;
     {
         let mut inner = lock(&state);
+        round.check(&inner)?;
         inner.env_evidence = ev.clone();
         inner.env_code = code;
         inner.env_meta = meta;
         inner.env_doubt = doubt;
-        inner.env_evidence_pack = Some(pack_id.clone());
-        // 本轮确实还要联网：立个标记，让之后的缓存命中路径知道「结论还没最终化」。
-        // 已有轮在跑时不重立：标记归那一轮清，我们这一趟并不起新轮，清了会把它的收尾闸门拆掉
-        if !offline_final && !round_running {
-            inner.env_online_pack = Some(pack_id.clone());
-        }
+        inner.env_evidence_pack = Some(round.pack_id.clone());
+        if offline_final { round.finish(&mut inner); }
     }
     // 离线那次推送：还有在线层要跑就说明本轮没结束（done=false，前端继续转圈）
     emit_classified(
         &app,
-        &pack_id,
+        &round,
         plan.clone(),
         offline_final,
         offline_final,
     );
 
-    // 在线层：只查离线没答上的那些行
-    if !env_source.is_off() && !pending.is_empty() {
-        // 同一包的联网轮不叠第二个：上一轮还在跑就把这一轮的收尾交给它。
-        // 叠轮不只是多几条提示——两三轮查的是同一批行，白付一遍请求和时间，
-        // 而每一轮各推一次收尾，前端就把同一句结论报好几遍。
-        if round_running {
-            // 方案现算、标记现读：那一轮可能刚好在这一趟期间收尾并把结论并进了证据表——
-            // 拿上面那份离线 plan 回去会把它的结果吐掉，硬报 online_pending=true 则让前端一直转圈
-            let (fresh, still_running) = {
-                let g = lock(&state);
-                let p = last_parsed_of(&g).map(|parsed| {
-                    detector::build_plan(
-                        &parsed,
-                        g.settings.strip_client_only,
-                        &g.env_evidence,
-                        &g.env_code,
-                        &g.env_meta,
-                        &g.env_doubt,
-                    )
-                });
-                (p, g.env_online_pack.as_deref() == Some(pack_id.as_str()))
-            };
-            return Ok(PlanClassification {
-                plan: fresh.unwrap_or(plan),
-                online_pending: still_running,
-                cf_rows,
-                cf_unmerged,
-            });
-        }
+    // 在线层：普通反查或剔除复核任一有待办就进入，和前端 pending 状态用同一个判据。
+    if online_needed {
         let app = app.clone();
         let state = state.inner().clone();
         let targets = targets.clone();
+        let round = round.clone();
         tauri::async_runtime::spawn(async move {
+            if !round.current(&lock(&state)) { return; }
             let dl = Downloader::new(cache_dir.clone(), concurrency);
             let mut index = env::EnvIndex::load(&cache_dir);
-            let mut ev = state
-                .inner
-                .lock()
-                .map(|g| g.env_evidence.clone())
-                .unwrap_or_default();
+            // 使用本轮离线快照，不从可能已被下一包换掉的共享表重新取输入。
+            let mut ev = ev;
             // 本轮会改写哪些行：收尾时按这份清单增量并回，不整表覆盖
             let touched: Vec<String> = pending
                 .rows
@@ -346,6 +359,7 @@ pub async fn classify_pack(
             )
             .await
             .unwrap_or_default();
+            if !round.current(&lock(&state)) { return; }
             // CF slug 搜索反查：Modrinth 全落空的行用 jar 内 modId 直查 CF（收录远大于
             // Modrinth，且 CF slug 与 modId 同形率高，实测 biomesize 一击命中）。
             // 命中的行带项目级端标签（EnvSource::CfFile），下一层百科只兜仍然无结论的
@@ -354,6 +368,7 @@ pub async fn classify_pack(
                 env::resolve_via_cf_search(&dl, &mut index, &cache_dir, &targets, &mut ev),
             )
             .await;
+            if !round.current(&lock(&state)) { return; }
             // 百科补全腿**独立于平台墙钟**：它串行且慢（一行两发，96 行预算能跑 1-3 分钟），
             // 挤在平台腿的 60 秒里只会被掐腰——那正是「百科里有数据的模组大量停在需人工」
             // 的原因（2026-10 实测 FarmingTales 包：6/6 模组百科都有正确声明）。
@@ -365,6 +380,7 @@ pub async fn classify_pack(
                     env::resolve_via_mcmod(&dl, &mut index, &cache_dir, &targets, &mut ev),
                 )
                 .await;
+                if !round.current(&lock(&state)) { return; }
             }
             // A 层剔除复核腿：对「项目级/以下证据判剔除」的行追加问 CF + 百科（GeckoLib
             // 那类作者填错声明的模组在这里被纠正）。CF 命中直接覆盖证据；百科反驳进存疑
@@ -375,18 +391,10 @@ pub async fn classify_pack(
             )
             .await
             .unwrap_or_default();
-            // —— 锁一：收尾标记 + 合并 touched + 克隆工作表（补扫在锁外做）——
+            // —— 锁一：同代合并 + 克隆工作表；最终补扫完成前保留运行标记 ——
             let work = {
                 let mut g = lock(&state);
-                // 本轮收尾：只摘自己的标记。必须在下面换包那道闸门**之前**清——换包时这一趟会
-                // 直接 return，写在闸门后面就永远清不掉；而标记留着，下次回到这个包会被
-                // `round_running` 当成「还有一轮在跑」，于是那一包再也不会起联网轮（静默零请求）。
-                // 换包那一趟已把标记写成新包的名字，所以这条 `== pack_id` 的判断仍不会替它清。
-                if g.env_online_pack.as_deref() == Some(pack_id.as_str()) {
-                    g.env_online_pack = None;
-                }
-                // 反查期间用户可能换了包：不是同一个包就不落库、不推事件
-                if g.env_evidence_pack.as_deref() != Some(pack_id.as_str()) {
+                if !round.current(&g) {
                     return;
                 }
                 // 只并回本轮查到的那些行，不整表覆盖：反查期间用户可能又点了一次「重新自动分类」，
@@ -436,12 +444,12 @@ pub async fn classify_pack(
             let plan = {
                 let mut g = lock(&state);
                 // 补扫期间换了包：不是同一个包就不落库、不推事件
-                if g.env_evidence_pack.as_deref() != Some(pack_id.as_str()) {
+                if !round.current(&g) {
                     return;
                 }
                 g.env_evidence = ev_w;
                 g.env_code = code_w;
-                last_parsed_of(&g).map(|p| {
+                let plan = last_parsed_of(&g).map(|p| {
                     detector::build_plan(
                         &p,
                         g.settings.strip_client_only,
@@ -450,19 +458,23 @@ pub async fn classify_pack(
                         &g.env_meta,
                         &g.env_doubt,
                     )
-                })
+                });
+                round.finish(&mut g);
+                plan
             };
-            let file = pack_id.clone();
             if let Some(plan) = plan {
-                emit_classified(&app, &file, plan, true, complete);
+                emit_classified(&app, &round, plan, true, complete);
             }
         });
     }
     Ok(PlanClassification {
+        pack_id: round.pack_id.clone(),
+        request_id: round.request_id.clone(),
         plan,
         online_pending: !offline_final,
         cf_rows,
         cf_unmerged,
+        cf_unmerged_required,
     })
 }
 
@@ -533,7 +545,7 @@ async fn ensure_strip_facts(
 /// 推自动分类结果。分类明细不写日志行——日志量级就是前端性能预算（十五轮定案）分类明细不写日志行——日志量级就是前端性能预算（十五轮定案）
 fn emit_classified(
     app: &AppHandle,
-    pack_id: &str,
+    round: &ClassificationRound,
     plan: Vec<PlanMod>,
     done: bool,
     complete: bool,
@@ -541,12 +553,108 @@ fn emit_classified(
     let _ = app.emit(
         task_engine::EVENT_CLASSIFIED,
         PlanClassified {
-            pack_id: pack_id.to_string(),
+            pack_id: round.pack_id.clone(),
+            request_id: round.request_id.clone(),
             plan,
             done,
             complete,
         },
     );
+}
+
+#[cfg(test)]
+mod online_round_tests {
+    use super::*;
+
+    #[test]
+    fn fresh_cached_strip_still_starts_its_recheck_round() {
+        // 所有普通查询都命中新鲜索引，但项目级剔除尚未复核：这是此前只立标记、不启动任务的组合。
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        let index: env::EnvIndex = serde_json::from_value(serde_json::json!({
+            "sha1:fixture": {
+                "client": "required",
+                "server": "optional",
+                "source": "modrinthProject",
+                "ts": now
+            }
+        }))
+        .unwrap();
+        let targets = vec![env::Target {
+            path: "mods/example.jar".into(),
+            sha1: Some("fixture".into()),
+            cf_fingerprint: None,
+            project_id: None,
+            slugs: vec!["example".into()],
+            title: None,
+            in_pack: false,
+        }];
+        let mut ev = env::EvidenceMap::new();
+        let pending = env::apply_index(&index, &targets, &mut ev);
+        let recheck = env::strip_recheck_pending(&index, &targets, &ev);
+        assert!(pending.is_empty());
+        assert!(recheck);
+
+        let needed = needs_online_round(EnvLookupSource::Official, !pending.is_empty(), recheck);
+        assert!(needed, "只有复核待办也要启动负责收尾的在线轮");
+    }
+
+    #[test]
+    fn offline_or_finished_classification_does_not_claim_a_round() {
+        for (source, pending, recheck) in [
+            (EnvLookupSource::Off, true, true),
+            (EnvLookupSource::Official, false, false),
+        ] {
+            let needed = needs_online_round(source, pending, recheck);
+            assert!(!needed);
+        }
+    }
+
+    #[test]
+    fn old_round_cannot_write_after_reselection_or_a_new_round() {
+        let mut inner = task_engine::Inner::default();
+        inner.last_pack = Some("fixture.zip".into());
+        let first = begin_classification(&mut inner, "fixture.zip".into(), "a".into()).unwrap();
+        assert!(first.current(&inner));
+        assert!(online_running_of(&inner), "离线工作也属于尚未完成的分类");
+        let second = begin_classification(&mut inner, "fixture.zip".into(), "b".into()).unwrap();
+        assert!(second.was_running);
+        assert!(!first.current(&inner));
+        assert!(second.current(&inner));
+        inner.parse_request_seq += 1;
+        assert!(!second.current(&inner), "同一路径重选也要失效旧轮");
+        inner.last_pack = Some("other.zip".into());
+        assert!(!second.current(&inner));
+        assert!(begin_classification(&mut inner, "fixture.zip".into(), "c".into()).is_err());
+    }
+
+    #[test]
+    fn old_completion_does_not_clear_the_new_round() {
+        let mut inner = task_engine::Inner::default();
+        inner.last_pack = Some("fixture.zip".into());
+        let old = begin_classification(&mut inner, "fixture.zip".into(), "old".into()).unwrap();
+        let latest = begin_classification(&mut inner, "fixture.zip".into(), "latest".into()).unwrap();
+        assert!(!old.finish(&mut inner));
+        assert!(online_running_of(&inner));
+        assert!(latest.current(&inner));
+        assert!(latest.finish(&mut inner));
+        assert!(!online_running_of(&inner));
+    }
+
+    #[test]
+    fn current_round_stays_running_until_final_plan_is_published() {
+        let mut inner = task_engine::Inner::default();
+        inner.last_pack = Some("fixture.zip".into());
+        let round = begin_classification(&mut inner, "fixture.zip".into(), "round".into()).unwrap();
+        // 在线证据已合入共享表，但末尾字节码补验尚未完成。
+        inner.env_evidence_pack = Some("fixture.zip".into());
+        assert!(round.current(&inner));
+        assert!(online_running_of(&inner));
+        assert!(round.finish(&mut inner));
+        assert!(!online_running_of(&inner));
+    }
 }
 
 #[cfg(test)]

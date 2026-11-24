@@ -67,10 +67,29 @@ fn detect_loader_from_deps(deps: &BTreeMap<String, String>) -> LoaderKind {
     }
 }
 
+/// 服务端安装视角的逻辑路径及优先级（越小越先采用）。物理路径另外保留供 ZipEntry 取件。
+fn server_logical_rel(root_prefix: &str, name: &str) -> Option<(String, u8)> {
+    let normalized = name.replace('\\', "/");
+    let rel = strip_root_prefix(root_prefix, &normalized);
+    if !root_prefix.is_empty() && rel.len() == normalized.len() {
+        return None;
+    }
+    let lower = rel.to_lowercase();
+    if lower.starts_with("client-overrides/") {
+        return None;
+    }
+    for (shell, priority) in [("server-overrides/", 0), ("overrides/", 1), ("override/", 2)] {
+        if lower.starts_with(shell) {
+            return Some((rel[shell.len()..].to_string(), priority));
+        }
+    }
+    Some((rel.to_string(), 3))
+}
+
 /// mrpack 精确解析。`index_entry` 是清单在 zip 里的**物理条目名**，`root_prefix` 是它外面那层
 /// 自定义文件夹（改名成 `.zip` 的 mrpack 套了一层壳时非空）。
-/// 除此之外与老写法逐条一致：清单行仍按**声明路径**（相对实例根，不带壳）判 in_pack，
-/// 物理缺失就照旧回落 URL。
+/// 先按服务端覆盖规则合并物理文件，再按清单声明的实例相对路径补齐下载条目。
+/// 路径保留实际入选的物理名，后续取件直接抽取该条目。
 pub(super) fn parse_mrpack(
     path: &Path,
     index_entry: &str,
@@ -105,94 +124,90 @@ pub(super) fn parse_mrpack(
         .cloned()
         .unwrap_or_default();
 
-    // 物理条目表（条目名 → 解压后大小）：判 index 行 in_pack，兼作未声明文件的补收遍历
-    let mut entry_sizes: BTreeMap<String, u64> = BTreeMap::new();
+    // 先合成服务端唯一逻辑文件表，再和 index 合并。目录树、方案和取件共用同一份选择，
+    // 不能分别收录两个覆盖层，否则后续防重名会把它们变成两枚实际加载的 JAR。
+    let mut physical: BTreeMap<String, (u8, String, u64)> = BTreeMap::new();
     for i in 0..archive.len() {
         if let Ok(ent) = archive.by_index(i) {
-            if !ent.is_dir() {
-                entry_sizes.insert(ent.name().to_string(), ent.size());
+            if ent.is_dir() {
+                continue;
+            }
+            let Some((logical, priority)) = server_logical_rel(root_prefix, ent.name()) else {
+                continue;
+            };
+            let key = logical.to_lowercase();
+            if key == MRPACK_ENTRY {
+                continue;
+            }
+            if physical.get(&key).is_none_or(|(old, _, _)| priority < *old) {
+                physical.insert(key, (priority, ent.name().to_string(), ent.size()));
             }
         }
     }
 
     let mut mod_files = Vec::new();
     let mut extra_files = Vec::new();
+    let mut declared = std::collections::HashSet::new();
     for f in &index.files {
         let norm_path = f.path.replace('\\', "/");
+        let key = norm_path.to_lowercase();
+        if !declared.insert(key.clone()) {
+            continue;
+        }
         let file_name = Path::new(&norm_path)
             .file_name()
             .map(|s| s.to_string_lossy().to_string())
             .unwrap_or_else(|| norm_path.clone());
-        let env = f.env.as_ref();
-        // 声明路径相对**实例根**，包里的物理名有两副面孔：
-        // `MyPack/mods/x.jar`（外层壳 + 原路径）与 `MyPack/overrides/mods/x.jar`（再套一层格式壳）——
-        // 后者是民间 mrpack 的常态：jar 直接躺在 overrides 里，`files[]` 写的仍是实例根路径。
-        // 只认前一副就把包内明明躺着的字节判成 in_pack=false ⇒ 转头联网重下，离线场景当场瘫
-        let mut found: Option<(String, u64)> = None;
-        for shell in ["", "overrides/", "override/"] {
-            let cand = format!("{root_prefix}{shell}{norm_path}");
-            if let Some(s) = entry_sizes.get(&cand).copied() {
-                found = Some((cand, s));
-                break;
-            }
-        }
-        let physical = found
-            .clone()
-            .map(|(n, _)| n)
+        // 声明路径相对实例根。服务端产物的覆盖优先级是：
+        // `server-overrides/` > `overrides/`/`override/` > 包根；`client-overrides/` 只给客户端，
+        // 不能拿它满足服务端的同一路径。
+        let found = physical.remove(&key);
+        let replaced = found.as_ref().is_some_and(|(priority, _, _)| *priority < 3);
+        let path = found.as_ref()
+            .map(|(_, name, _)| name.clone())
             .unwrap_or_else(|| format!("{root_prefix}{norm_path}"));
         // index 声明但物理缺失（残缺包）→ in_pack=false，构建时按 URL 补下载
-        let entry_size = found.as_ref().map(|(_, s)| *s);
+        let entry_size = found.as_ref().map(|(_, _, size)| *size);
+        // 覆盖的是字节身份，不只路径：旧下载地址、哈希、端声明和依赖不能附在新 JAR 上。
+        // 覆盖文件的端与依赖由后续 JAR 取证重新读取，避免旧声明把服务端替换文件错误剔除。
+        let env = if replaced { None } else { f.env.as_ref() };
         // downloads 为空 = 包内自带（local）文件：同样计入模组与方案，
         // 构建时由流水线经 Fetch::ZipEntry 直接从源包抽取，不联网
         let pf = PackFile {
-            path: physical,
+            path,
             file_name,
-            url: f.downloads.first().cloned().unwrap_or_default(),
-            sha1: f.hashes.get("sha1").cloned(),
+            url: if replaced { String::new() } else { f.downloads.first().cloned().unwrap_or_default() },
+            sha1: if replaced { None } else { f.hashes.get("sha1").cloned() },
             size_bytes: entry_size.or(f.file_size).unwrap_or(0),
             in_pack: entry_size.is_some(),
             env_server: env_flag(env.and_then(|e| e.server.as_deref())),
             env_client: env_flag(env.and_then(|e| e.client.as_deref())),
-            depends: f
+            depends: if replaced { Vec::new() } else { f
                 .depends
                 .iter()
                 .filter(|d| !d.optional && !d.project_id.is_empty())
                 .map(|d| d.project_id.clone())
-                .collect(),
+                .collect() },
             // mrpack 的 files[] 自带 downloads，不需要 CF 那一套坐标
             cf: None,
         };
         // 判模组仍用**声明路径**（它才是实例根视角）；物理名带着外层壳，拿它判会整包漏认
-        if norm_path.starts_with("mods/") && pf.file_name.ends_with(".jar") {
+        if key.starts_with("mods/") && key.ends_with(".jar") {
             mod_files.push(pf);
         } else {
             extra_files.push(pf);
         }
     }
 
-    // 补收 mrpack 内「未在 index 声明」的物理文件：手动拖进 zip 的 kubejs/、地图等
-    // 目录不会出现在 modrinth.index.json 里，只能直接枚举 zip 条目拿到
-    let declared: std::collections::HashSet<String> = index
-        .files
-        .iter()
-        .map(|f| f.path.replace('\\', "/"))
-        .collect();
-    for (name, size) in entry_sizes {
-        // 判据一律走「剥掉外层文件夹**与**格式壳」的那份：声明路径、`mods/` 段名、重量级目录名单
-        // 都是实例根视角。只剥外层的话，躺在 `overrides/mods/` 里的未声明 jar 首段是 `overrides`，
-        // 会被当普通保留内容收走，再由 `keep_denied` 在构建层一口吃掉 ⇒ 这批模组整个从方案里消失
-        let logical = logical_rel(strip_root_prefix(root_prefix, &name));
-        let lower = logical.to_lowercase();
-        if lower == MRPACK_ENTRY || declared.contains(logical) {
-            continue;
-        }
+    // 补收 mrpack 内「未在 index 声明」的物理文件。服务端覆盖优先级为
+    // server-overrides > overrides/override > 包根；client-overrides 完全不进入服务端。
+    for (lower, (_priority, name, size)) in physical {
         let file_name = Path::new(&name)
             .file_name()
             .map(|s| s.to_string_lossy().to_string())
             .unwrap_or_else(|| name.clone());
         // 根级散文件（`options.txt`、`servers.dat` 这类）：没有目录层可判，直接按可保留内容收。
-        // 这一支是格式壳剥掉之后才露出来的（`client-overrides/options.txt` → `options.txt`）：
-        // 以前这里一句 `else { continue }` 把它们整批丢掉 ⇒ 「客户端保留内容」里只剩文件夹可选
+        // 这一支是格式壳剥掉之后才露出来的（`server-overrides/server.properties` → 包根文件）。
         let Some(j) = lower.find('/') else {
             extra_files.push(PackFile {
                 path: name,

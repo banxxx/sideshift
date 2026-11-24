@@ -58,6 +58,7 @@ export interface PlanMod {
 
 /** 自动分类结果（Rust emit("plan://classified", payload)）：在线层跑完后的增量刷新 */
 export interface PlanClassified {
+    requestId: string;
     /** 归属包身份（绝对源路径）：前端按当前包校验，换包后的迟到事件一律丢弃。
      *  口径与 Rust `PackManifest::identity()` 一致 = `sourcePath ?? fileName` */
     packId: string;
@@ -71,6 +72,8 @@ export interface PlanClassified {
 
 /** classify_pack 的同步返回：离线层结论 + 在线层还会不会再推一次事件 */
 export interface PlanClassification {
+    packId: string;
+    requestId: string;
     plan: PlanMod[];
     /** true = 联网反查已在后台起跑，最终结论走 plan://classified */
     onlinePending: boolean;
@@ -81,4 +84,5 @@ export interface PlanClassification {
      *  于是无法判断它是否已经以实体 jar 躺在包里。少并可补（重新自动分类），
      *  双份不可逆（同一个模组两份 jar 落进 mods/ 最常就是崩）⇒ 这个数必须让人看见 */
     cfUnmerged: number;
+    cfUnmergedRequired: number;
 }

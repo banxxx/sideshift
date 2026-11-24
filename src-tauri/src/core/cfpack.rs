@@ -6,7 +6,7 @@
 //!   由 `env_unchecked_refs` 补问一轮（`env_checked` 有值后永久收队）。
 //! - 补取只改写 `file_name`/`size_bytes`/`sha1`/端标签/许可态，**`path` 保持解析层的编号锚点不变**——detector 与任务存档都按它回指包内条目，名字一改锚点就飘。
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use std::time::Duration;
 
@@ -15,7 +15,7 @@ use serde::Deserialize;
 
 use super::downloader::{CfFileMeta, Downloader};
 use super::parser::{CfRef, PackFile, ParsedPack};
-use crate::models::{CfLink, SideFlag};
+use crate::models::{CfLink, PlanMod, SideFlag};
 
 /// 字面量单源在 `core::data_root`（那张表同时是卸载壳的删除清单）
 const INDEX_FILE: &str = super::data_root::CACHE_CF_INDEX;
@@ -302,6 +302,11 @@ pub struct Enriched {
     /// 少并是可补的（「重新自动分类」再跑一轮），双份是不可逆的（同一个模组两份 jar 落进
     /// `mods/`，服务端要么加载两遍要么直接崩）⇒ 拿不到名字就不并，但必须把这个数交出去说
     pub unmerged: usize,
+    /// 未并入的声明里必需项的数量；这些项尚未得到用户处置，不能开始构建。
+    pub unmerged_required: usize,
+    /// 必需声明在解析结果中的文件路径，包含由同名包内 JAR 满足的声明。
+    /// 构建用它对照用户确认的方案，防止本轮才补出的行悄悄漏装。
+    pub required_sources: Vec<String>,
 }
 
 /// 一处入口，两处调用方（自动分类、构建阶段 1）共用：读索引 → 缺的联网补 → 补端标签 →
@@ -375,7 +380,57 @@ pub async fn ensure(
     let (merged_rows, unmerged) = merge(&out, &index);
     let merged = merged_rows.len();
     out.mod_files.extend(merged_rows);
-    Enriched { parsed: out, unresolved, renamed, links_changed, env_changed, merged, unmerged }
+    let (required_sources, unmerged_required) = required_sources(&out, &index);
+    Enriched {
+        parsed: out, unresolved, renamed, links_changed, env_changed, merged, unmerged,
+        unmerged_required, required_sources,
+    }
+}
+
+fn same_coordinate(a: &CfRef, b: &CfRef) -> bool {
+    a.mod_id == b.mod_id && a.file_id == b.file_id
+}
+
+/// 必需编号声明必须能定位到一个方案对象：同编号优先，其次是已核实文件名的包内副本。
+/// 许可态与端标签会在补取时改变，不能拿整份 CfRef 的相等性作为文件身份。
+fn required_sources(parsed: &ParsedPack, index: &CfIndex) -> (Vec<String>, usize) {
+    let mut sources = Vec::new();
+    let mut unresolved = HashSet::new();
+    for reference in cf_refs(parsed).into_iter().filter(|r| r.required) {
+        let file = parsed.mod_files.iter().find(|f| {
+            f.cf.as_ref().is_some_and(|r| same_coordinate(r, reference))
+        }).or_else(|| {
+            let name = &index.get(reference)?.file_name;
+            parsed.mod_files.iter().find(|f| f.file_name.eq_ignore_ascii_case(name))
+        });
+        if let Some(file) = file {
+            if !sources.contains(&file.path) {
+                sources.push(file.path.clone());
+            }
+        } else {
+            unresolved.insert(key_of(reference));
+        }
+    }
+    (sources, unresolved.len())
+}
+
+/// 方案中出现过（含明确剔除）的必需文件才算已确认；旧存档无 src_path 时沿用构建的 ID 匹配。
+pub fn unconfirmed_required_sources(parsed: &ParsedPack, required: &[String], plan: &[PlanMod]) -> Vec<String> {
+    let mut used = HashSet::new();
+    let mut confirmed = HashSet::new();
+    for row in plan {
+        let matched = match row.src_path.as_deref() {
+            Some(path) => parsed.mod_files.iter().enumerate()
+                .find(|(i, file)| !used.contains(i) && file.path == path)
+                .map(|(i, _)| i),
+            None => super::detector::match_pack_index(&parsed.mod_files, row, &used),
+        };
+        if let Some(i) = matched {
+            used.insert(i);
+            confirmed.insert(parsed.mod_files[i].path.as_str());
+        }
+    }
+    required.iter().filter(|path| !confirmed.contains(path.as_str())).cloned().collect()
 }
 
 /// 把「只给编号」的声明并进方案。三条判据：
@@ -393,7 +448,7 @@ pub fn merge(parsed: &ParsedPack, index: &CfIndex) -> (Vec<PackFile>, usize) {
     for r in &parsed.declared_cf {
         // 已经成行的不算「没并进」：纯 CF 包离线时行照样在（只是名字还没补上），
         // 把它计进 `unmerged` 等于对着用户说「这 244 个没进来」，而它们就在方案里
-        if parsed.mod_files.iter().any(|f| f.cf.as_ref() == Some(r)) {
+        if parsed.mod_files.iter().any(|f| f.cf.as_ref().is_some_and(|row| same_coordinate(row, r))) {
             continue;
         }
         let Some(m) = index.get(r) else {
@@ -483,6 +538,83 @@ mod tests {
             root_prefix: String::new(),
             declared_cf: Vec::new(),
         }
+    }
+
+    #[test]
+    fn required_declarations_wait_for_identity_but_optional_rows_do_not_block() {
+        let mut p = pack(vec![row("1", "2")]);
+        let mut optional = cf_ref("5", "6");
+        optional.required = false;
+        p.declared_cf = vec![cf_ref("1", "2"), cf_ref("3", "4"), optional];
+        let index = CfIndex::default();
+        let (sources, missing) = required_sources(&p, &index);
+        assert_eq!(sources, vec!["mods/1-2.jar"]);
+        assert_eq!(missing, 1, "只有未成行的必需声明阻止构建");
+
+        let plan = super::super::detector::build_plan(
+            &p, true, &Default::default(), &Default::default(), &Default::default(), &Default::default(),
+        );
+        assert!(unconfirmed_required_sources(&p, &sources, &plan).is_empty(),
+            "已有编号行即便被用户剔除，也已经有明确的方案处置");
+    }
+
+    #[test]
+    fn required_declaration_uses_confirmed_in_pack_copy() {
+        let mut local = row("1", "2");
+        local.cf = None;
+        local.in_pack = true;
+        local.path = "overrides/mods/library.jar".into();
+        local.file_name = "library.jar".into();
+        let mut p = pack(vec![local]);
+        p.declared_cf = vec![cf_ref("1", "2")];
+        let mut index = CfIndex::default();
+        index.put(&cf_ref("1", "2"), meta("LIBRARY.jar", 1, None));
+        let (sources, missing) = required_sources(&p, &index);
+        assert_eq!(missing, 0);
+        assert_eq!(sources, vec!["overrides/mods/library.jar"]);
+        let plan = super::super::detector::build_plan(
+            &p, true, &Default::default(), &Default::default(), &Default::default(), &Default::default(),
+        );
+        assert!(unconfirmed_required_sources(&p, &sources, &plan).is_empty());
+        assert_eq!(merge(&p, &index).0.len(), 0, "不能重复添加已在包里的同一份文件");
+    }
+
+    #[test]
+    fn newly_resolved_required_row_is_not_silently_added_to_old_plan() {
+        let mut p = pack(vec![row("1", "2")]);
+        p.declared_cf = vec![cf_ref("1", "2"), cf_ref("3", "4")];
+        let plan = super::super::detector::build_plan(
+            &p, true, &Default::default(), &Default::default(), &Default::default(), &Default::default(),
+        );
+        let mut index = CfIndex::default();
+        index.put(&cf_ref("3", "4"), meta("new-required.jar", 1, None));
+        let (added, _) = merge(&p, &index);
+        p.mod_files.extend(added);
+        let (sources, missing) = required_sources(&p, &index);
+        assert_eq!(missing, 0, "文件信息已在构建期补齐");
+        assert_eq!(unconfirmed_required_sources(&p, &sources, &plan), vec!["mods/3-4.jar"],
+            "但用户尚未确认新增行，不能宣称已按其方案构建成功");
+        let new_plan = super::super::detector::build_plan(
+            &p, true, &Default::default(), &Default::default(), &Default::default(), &Default::default(),
+        );
+        assert!(unconfirmed_required_sources(&p, &sources, &new_plan).is_empty());
+        let mut wrong_anchor = new_plan;
+        let required_row = wrong_anchor.iter_mut().find(|row| row.src_path.as_deref() == Some("mods/3-4.jar")).unwrap();
+        required_row.src_path = Some("mods/old-unrelated.jar".into());
+        assert_eq!(unconfirmed_required_sources(&p, &sources, &wrong_anchor), vec!["mods/3-4.jar"],
+            "有精确锚点的旧方案不能靠同 ID 猜作新文件已确认");
+    }
+
+    #[test]
+    fn enriched_reference_attributes_do_not_change_file_identity() {
+        let mut f = row("1", "2");
+        f.cf.as_mut().unwrap().link = CfLink::Official;
+        f.cf.as_mut().unwrap().env = Some((Some(SideFlag::Required), Some(SideFlag::Required)));
+        let mut p = pack(vec![f]);
+        p.declared_cf = vec![cf_ref("1", "2")];
+        let index = CfIndex::default();
+        assert_eq!(merge(&p, &index).1, 0, "端标签或许可态变化不应把已有行算作未合并");
+        assert_eq!(required_sources(&p, &index), (vec!["mods/1-2.jar".to_string()], 0));
     }
 
     /// 补取只动那三件事 + 许可态：路径锚点必须原样，否则存档里的 `src_path` 与重解析的行对不上

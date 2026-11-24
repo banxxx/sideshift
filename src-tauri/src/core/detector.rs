@@ -163,10 +163,11 @@ pub fn build_plan(
             let name_hit = name_heuristic_hit(&f.file_name);
             // 名称表是这台机器上唯一会「凭空删模组」的层。jar 里确有服务端注册时不让它删：
             // 前者是解出来的结构事实，后者只是文件名像不像
-            let vetoed = chosen.is_none() && name_hit && facts.server_code;
-            // 「判不出来」= 证据阶梯全空且名称层也没给出结论。被 veto 的那行有 server_code
-            // 这条结构事实（服务端确有代码会跑），属于有依据的保留，不算进来
-            let undecidable = chosen.is_none() && !name_hit;
+            let server_fallback = chosen.is_none() && facts.server_code;
+            let vetoed = server_fallback && name_hit;
+            // 服务端结构事实既能否决名称误判，也能阻止「无端声明」被默认剔除。
+            // 后者仍标待人工确认：结构事实不冒充作者声明，但不能在默认处置时被忽略。
+            let undecidable = chosen.is_none() && !name_hit && !server_fallback;
             let (client, server, source) = match chosen {
                 Some(e) => (e.client, e.server, e.source),
                 None => {
@@ -201,7 +202,7 @@ pub fn build_plan(
             let client_only = strip && strip_client_only;
             // 提示只跟字节码走：存疑行的「为什么待人工」由百科反驳而来，不是结构事实，
             // 挂 ServerCode 提示等于编造证据
-            let bytecode_hint = if vetoed || (strip_vetoed && facts.server_code) {
+            let bytecode_hint = if server_fallback || (strip_vetoed && facts.server_code) {
                 Some(BytecodeHint::ServerCode)
             } else if chosen.is_none() && !name_hit && facts.client_only_shape {
                 Some(BytecodeHint::ClientOnlyShape)
@@ -924,6 +925,30 @@ mod tests {
         // 被按住的是「猜的」那层，所以来源仍是无证据，不能冒充有证据
         assert_eq!(plan[0].env_source, EnvSource::Unknown);
         assert_eq!(plan[0].bytecode_hint, Some(BytecodeHint::ServerCode));
+    }
+
+    #[test]
+    fn server_code_without_side_evidence_is_kept_for_review() {
+        let name = "some-obscure-forge-lib-1.0.jar";
+        let parsed = pack(vec![file(name, (None, None))]);
+        let code = facts(&format!("mods/{name}"), true, false);
+        for automatic in [true, false] {
+            let plan = build_plan(
+                &parsed,
+                automatic,
+                &EvidenceMap::new(),
+                &code,
+                &Default::default(),
+                &Default::default(),
+            );
+            assert_eq!(plan[0].disposition, ModDisposition::Keep);
+            assert!(!plan[0].client_only);
+            assert_eq!(plan[0].needs_review, automatic);
+            assert_eq!(plan[0].bytecode_hint, Some(BytecodeHint::ServerCode));
+            // 保留是字节码保护，不能伪造作者的服务端声明。
+            assert_eq!(plan[0].env_source, EnvSource::Unknown);
+            assert_eq!(plan[0].server_side, None);
+        }
     }
 
     #[test]

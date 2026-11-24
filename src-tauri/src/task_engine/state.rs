@@ -23,6 +23,10 @@ pub struct Inner {
     pub parsed_by_pack: HashMap<String, Arc<ParsedPack>>,
     /// 最近一次成功解析的包身份（get_plan / default_options 的默认对象）
     pub last_pack: Option<String>,
+    /// 选包解析请求序号；仅最后一次请求可以发布解析结果，避免后台慢请求覆盖后选的包。
+    pub parse_request_seq: u64,
+    /// 分类轮次序号；异步分类完成后只有当前轮次允许回写共享证据。
+    pub classify_request_seq: u64,
     /// 任务创建时前端确认过的最终方案（含用户勾改/本地与服务端新增）
     pub plans: HashMap<String, Vec<PlanMod>>,
     /// 回收站：本次会话删掉的任务。只活在内存（不进 tasks.json），所以关应用即清空

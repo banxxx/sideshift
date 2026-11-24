@@ -67,6 +67,7 @@ export function TaskErrorCard({
                         解析失败
                         CurseForge 取链接失败
                         backend.mods-missing=整合包里有模组拿不到文件
+                        backend.cf-plan-unconfirmed=模组方案尚未完整确认
                         依赖解析失败
                         未选择加载器版本
                         服务端加载器获取失败

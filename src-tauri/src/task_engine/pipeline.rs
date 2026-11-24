@@ -142,6 +142,25 @@ async fn run_pipeline(app: AppHandle, state: Arc<AppState>, id: String) {
         let dl = Downloader::new(cache_dir.clone(), s.concurrency as usize)
             .with_modrinth_mirror(s.modrinth_mirror);
         let out = cfpack::ensure(&dl, &cache_dir, &parsed, false).await;
+        let unconfirmed = cfpack::unconfirmed_required_sources(&out.parsed, &out.required_sources, &plan);
+        if out.unmerged_required > 0 || !unconfirmed.is_empty() {
+            let detail = msg!(
+                "CurseForge 清单中有 {{missing}} 个必需模组尚未取得文件信息，另有 {{unconfirmed}} 个必需模组未包含在已确认的方案中。请重新自动分类并确认方案后创建新任务。",
+                {"missing": out.unmerged_required, "unconfirmed": unconfirmed.len()}
+            );
+            fail(&app, &state, &id, TaskError {
+                stage: PipelineStage::Parser,
+                title: "模组方案尚未完整确认".into(),
+                detail: detail.zh.clone(),
+                detail_msg: Some(detail),
+                code: None,
+                retryable: false,
+                attempts: None,
+                log_tail: None,
+                exit_code: None,
+            });
+            return;
+        }
         if out.unresolved > 0 {
             push_log(
                 &app,
@@ -169,7 +188,7 @@ async fn run_pipeline(app: AppHandle, state: Arc<AppState>, id: String) {
             PipelineStage::Parser,
             LogLevel::Info,
             msg!(
-                "清单声明的 {{count}} 枚模组不在包内，已按编号加入方案，构建时下载",
+                "已补全 {{count}} 枚清单模组的文件信息，构建仍按已确认方案执行",
                 {"count": cf_merged}
             ),
         );

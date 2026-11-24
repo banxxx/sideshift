@@ -14,6 +14,7 @@ import type {
     PackManifest,
     PlanMod,
 } from "@/lib/types";
+import { packIdOf } from "@/lib/types";
 import { Panel, type SelectOption } from "@/components/ui";
 import { PlanListModal, type ListFocus } from "@/features/convert/modals";
 import { KeepDirsCard, LaunchArgsCard, RuntimeEnvCard, ServerSettingsCard } from "./OptionCards";
@@ -42,13 +43,13 @@ export function PlanReviewView({
         let alive = true;
         void api.getTask(taskId).then((t) => alive && t && setOptions(t.options));
         void api.getTaskPlan(taskId).then((p) => alive && setPlan(p));
-        // 目录树要重解析源包才有：先把后端指针对准这个包，源文件已不在时树留空
+        // 历史查询只填指定包缓存，不能改变首页当前选包。
         void api
             .ensureParsed(manifest)
             .then((ok) => {
                 if (!alive) return { dirs: [], files: [] };
                 setPackParsed(ok);
-                return ok ? api.listPackDirs() : { dirs: [], files: [] };
+                return ok ? api.listPackDirs(packIdOf(manifest)) : { dirs: [], files: [] };
             })
             .then((tree) => alive && setPackTree(tree));
         return () => {

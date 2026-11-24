@@ -5,64 +5,94 @@ use super::*;
 /// 取证结论作废。每次**从磁盘重解一个包**都要走这里，连「身份没变的同一枚文件」也不例外：
 /// 原地重导出的包路径一模一样，按身份比对认不出它换过血，复用旧取证就是「分类数据是上一个包的」。
 /// 代价只有离线 jar 扫描重跑（磁盘端索引照常命中、联网层不重发），切页往返不重解析所以照常复用。
-/// `env_online_pack` 不动：在跑的联网轮收尾时自己清（`commands::plan` 锁一），我们替它清会拆掉别人的标记
+/// 旧分类轮以解析序号校验归属；作废时可以清运行标记，旧轮不得再清理新轮。
 fn invalidate_env(inner: &mut task_engine::Inner) {
     inner.env_evidence.clear();
     inner.env_code.clear();
     inner.env_meta.clear();
     inner.env_doubt.clear();
     inner.env_evidence_pack = None;
+    inner.env_online_pack = None;
 }
 
-#[tauri::command]
-pub fn parse_pack(state: S<'_>, path: String) -> PackManifest {
-    let parsed = Arc::new(parser::parse(&PathBuf::from(&path)));
-    let manifest = parsed.manifest.clone();
-    {
-        let mut inner = lock(&state);
-        let id = manifest.identity();
-        inner.parsed_by_pack.insert(id.clone(), parsed);
-        inner.last_pack = Some(id);
-        invalidate_env(&mut inner);
+fn begin_parse(inner: &mut task_engine::Inner) -> u64 {
+    inner.parse_request_seq = inner.parse_request_seq.wrapping_add(1);
+    inner.last_pack = None;
+    invalidate_env(inner);
+    inner.parse_request_seq
+}
+
+fn publish_parsed(inner: &mut task_engine::Inner, request: u64, parsed: Arc<ParsedPack>) -> bool {
+    if inner.parse_request_seq != request {
+        return false;
     }
-    manifest
+    let id = parsed.manifest.identity();
+    inner.parsed_by_pack.insert(id.clone(), parsed);
+    inner.last_pack = Some(id);
+    invalidate_env(inner);
+    true
 }
 
-/// 把「最近一次解析的包」指向指定包，供任务回看/改方案时用。
-///
-/// `get_plan` / `classify_pack` / `list_pack_dirs` 全都只认内存里的 `last_pack`，而解析缓存
-/// **不落盘**（tasks.json 只存任务/方案/报告）。从任务列表进转换方案页时，那条任务可能早已
-/// 不是本轮解析的包：重启后缓存是空的（页面全空），中途选过别的包则是错的包（张冠李戴）。
-/// 命中缓存只挪指针；未命中按 `sourcePath` 重解析，口径与流水线阶段 1 一致。
-/// 缓存的 key 是**包身份**（绝对源路径，见 `PackManifest::identity`）而不是文件名：
-/// 同名不同目录的两个包在文件名口径下是同一个包，前者的解析结果与端证据会直接当成后者的用。
-///
-/// 返回 false = 缓存没有且源文件已不在（被移动/删除，或旧版本存档没记路径）。
-/// 调用方据此降级：方案本身有任务快照可读，只有「包内目录树」这类要重解析的明细拿不到。
 #[tauri::command]
-pub fn ensure_parsed(state: S<'_>, manifest: PackManifest) -> bool {
+pub async fn parse_pack(state: S<'_>, path: String) -> Result<PackManifest, String> {
+    let request = begin_parse(&mut lock(&state));
+    let source = PathBuf::from(&path);
+    let work_path = source.clone();
+    // 裸包需要读取嵌套 JAR 元数据，文件 I/O 与解压不能占住 Tauri 命令线程。
+    let parsed = match tauri::async_runtime::spawn_blocking(move || parser::parse(&work_path)).await {
+        Ok(parsed) => Arc::new(parsed),
+        Err(_) => {
+            let mut inner = lock(&state);
+            if inner.parse_request_seq == request {
+                inner.last_pack = None;
+                invalidate_env(&mut inner);
+            }
+            return Ok(PackManifest {
+                file_name: source.file_name().map(|s| s.to_string_lossy().to_string()).unwrap_or_default(),
+                loader: LoaderKind::Fabric,
+                mc_version: String::new(),
+                mod_count: 0,
+                size_bytes: 0,
+                parsed: false,
+                error: Some("整合包解析任务意外中断，请重新选择文件".into()),
+                source_path: Some(path),
+            });
+        }
+    };
+    let manifest = parsed.manifest.clone();
+    // 旧请求仍返回原来的载荷形状，由前端序号过滤，但不能改后端当前包或其证据。
+    publish_parsed(&mut lock(&state), request, parsed);
+    Ok(manifest)
+}
+
+/// 历史任务只读查询：确保指定包有解析缓存，不切换当前选包或作废当前分类。
+#[tauri::command]
+pub async fn ensure_parsed(state: S<'_>, manifest: PackManifest) -> Result<bool, String> {
     let id = manifest.identity();
     {
-        let mut inner = lock(&state);
+        let inner = lock(&state);
         if inner.parsed_by_pack.contains_key(&id) {
-            inner.last_pack = Some(id);
-            return true;
+            return Ok(true);
         }
     }
 
     let Some(src) = manifest.source_path.as_deref() else {
-        return false;
+        return Ok(false);
     };
     let path = PathBuf::from(src);
     if !path.exists() {
-        return false;
+        return Ok(false);
     }
     // 解析在锁外：几百个 jar 的包读到这里要是还握着全局锁，别的命令全跟着排队
-    let parsed = Arc::new(parser::parse(&path));
-    let mut inner = lock(&state);
-    inner.parsed_by_pack.insert(id.clone(), parsed);
-    inner.last_pack = Some(id);
-    invalidate_env(&mut inner);
+    let parsed = Arc::new(tauri::async_runtime::spawn_blocking(move || parser::parse(&path))
+        .await.map_err(|_| app_code("panic"))?);
+    Ok(cache_history_parsed(&mut lock(&state), id, parsed))
+}
+
+fn cache_history_parsed(inner: &mut task_engine::Inner, id: String, parsed: Arc<ParsedPack>) -> bool {
+    if !parsed.manifest.parsed { return false; }
+    // 此期间用户可能重新选中同一路径；只补空缺，不覆盖刚发布的新内容。
+    inner.parsed_by_pack.entry(id).or_insert(parsed);
     true
 }
 
@@ -78,8 +108,9 @@ pub async fn list_mc_versions(state: S<'_>) -> Result<Vec<VersionOption>, String
 pub async fn list_loader_versions(
     state: S<'_>,
     mc_version: String,
+    pack_id: Option<String>,
 ) -> Result<Vec<VersionOption>, String> {
-    let loader = last_parsed(&state)
+    let loader = parsed_for_query(&lock(&state), pack_id.as_deref())
         .map(|p| p.manifest.loader)
         .unwrap_or(LoaderKind::Fabric);
     downloader_of(&state)
@@ -169,8 +200,8 @@ pub fn default_options(state: S<'_>, manifest: PackManifest) -> ConversionOption
 /// 最近一次解析包内可保留的内容：目录树 + 根级散文件
 /// （mods 之外；文件数与体积递归统计、直属文件另存一层，同层按名升序）
 #[tauri::command]
-pub fn list_pack_dirs(state: S<'_>) -> PackDirTree {
-    let Some(p) = last_parsed(&state) else {
+pub fn list_pack_dirs(state: S<'_>, pack_id: Option<String>) -> PackDirTree {
+    let Some(p) = parsed_for_query(&lock(&state), pack_id.as_deref()) else {
         return PackDirTree::default();
     };
 
@@ -245,6 +276,82 @@ pub fn list_pack_dirs(state: S<'_>) -> PackDirTree {
             .map(|(n, c)| build(n, c))
             .collect(),
         files: root_files,
+    }
+}
+
+fn parsed_for_query(inner: &task_engine::Inner, pack_id: Option<&str>) -> Option<Arc<ParsedPack>> {
+    let id = pack_id.or(inner.last_pack.as_deref())?;
+    inner.parsed_by_pack.get(id).cloned()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn synthetic_pack(path: &str, loader: LoaderKind) -> Arc<ParsedPack> {
+        Arc::new(ParsedPack {
+            manifest: PackManifest {
+                file_name: "fixture.zip".into(),
+                loader,
+                mc_version: "1.20.1".into(),
+                mod_count: 0,
+                size_bytes: 0,
+                parsed: true,
+                error: None,
+                source_path: Some(path.into()),
+            },
+            mod_files: Vec::new(),
+            extra_files: Vec::new(),
+            loader_version: None,
+            root_prefix: String::new(),
+            declared_cf: Vec::new(),
+        })
+    }
+
+    #[test]
+    fn late_parse_result_cannot_replace_the_last_selected_pack() {
+        let mut inner = task_engine::Inner::default();
+        let old = begin_parse(&mut inner);
+        let latest = begin_parse(&mut inner);
+        assert!(publish_parsed(&mut inner, latest, synthetic_pack("fixture-b.zip", LoaderKind::Forge)));
+        inner.env_evidence_pack = Some("fixture-b.zip".into());
+        assert!(!publish_parsed(&mut inner, old, synthetic_pack("fixture-a.zip", LoaderKind::NeoForge)));
+        assert_eq!(inner.last_pack.as_deref(), Some("fixture-b.zip"));
+        assert_eq!(inner.env_evidence_pack.as_deref(), Some("fixture-b.zip"));
+        assert!(!inner.parsed_by_pack.contains_key("fixture-a.zip"));
+    }
+
+    #[test]
+    fn repeated_path_still_requires_the_latest_parse_generation() {
+        let mut inner = task_engine::Inner::default();
+        let old = begin_parse(&mut inner);
+        let latest = begin_parse(&mut inner);
+        assert!(publish_parsed(&mut inner, latest, synthetic_pack("fixture.zip", LoaderKind::Forge)));
+        assert!(!publish_parsed(&mut inner, old, synthetic_pack("fixture.zip", LoaderKind::NeoForge)));
+        assert_eq!(inner.parsed_by_pack["fixture.zip"].manifest.loader, LoaderKind::Forge);
+    }
+
+    #[test]
+    fn historical_cache_and_explicit_queries_leave_the_current_pack_untouched() {
+        let mut inner = task_engine::Inner::default();
+        let request = begin_parse(&mut inner);
+        assert!(publish_parsed(&mut inner, request, synthetic_pack("current.zip", LoaderKind::Forge)));
+        inner.env_evidence_pack = Some("current.zip".into());
+        inner.env_online_pack = Some("current.zip".into());
+        inner.classify_request_seq = 7;
+        let parsed_history = synthetic_pack("history.zip", LoaderKind::NeoForge);
+        assert!(cache_history_parsed(&mut inner, "history.zip".into(), parsed_history));
+        assert_eq!(parsed_for_query(&inner, Some("history.zip")).unwrap().manifest.loader, LoaderKind::NeoForge);
+        assert_eq!(parsed_for_query(&inner, None).unwrap().manifest.loader, LoaderKind::Forge);
+        assert!(parsed_for_query(&inner, Some("missing.zip")).is_none());
+        // 回看同一路径的旧结果不能盖掉首页后来发布的新内容。
+        assert!(cache_history_parsed(&mut inner, "current.zip".into(), synthetic_pack("current.zip", LoaderKind::NeoForge)));
+        assert_eq!(parsed_for_query(&inner, Some("current.zip")).unwrap().manifest.loader, LoaderKind::Forge);
+        assert_eq!(inner.last_pack.as_deref(), Some("current.zip"));
+        assert_eq!(inner.env_evidence_pack.as_deref(), Some("current.zip"));
+        assert_eq!(inner.env_online_pack.as_deref(), Some("current.zip"));
+        assert_eq!(inner.parse_request_seq, request);
+        assert_eq!(inner.classify_request_seq, 7);
     }
 }
 

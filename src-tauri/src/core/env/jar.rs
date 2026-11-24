@@ -42,7 +42,7 @@ pub struct JarProbe {
     /// 模组显示名（作者写的英文名），按名搜索兜底用
     pub title: Option<String>,
     /// jar 自报的**硬依赖** modId 清单（fabric/quilt 的 `depends` 键集 + mods.toml
-    /// `[[dependencies.x]]` 里 `mandatory` 的 `modId`；缺省 mandatory 按 true 算）。
+    /// `[[dependencies.x]]` 里服务端适用的 `mandatory` / `type="required"` 的 `modId`）。
     /// 只含声明，不过滤平台自身条目（minecraft/fabricloader 这类在映射时自然落空）。
     /// 附属模组服务端必装而前置被判客户端时，靠这张表把前置按住（detector 的依赖保护）
     pub hard_deps: Vec<String>,
@@ -324,13 +324,18 @@ fn read_meta(jar: &[u8], probe: &mut JarProbe) {
             set_if_empty(&mut probe.mod_id, &json_str(&v, "id"));
             set_if_empty(&mut probe.title, &json_str(&v, "name"));
             json_hard_deps(&v, &mut probe.hard_deps);
-            // fabric: 顶层 environment = "*" | "client" | "server"；quilt 同名字段一并读
+            // Fabric 未写 environment 时规范默认 "*"。入口不是完整运行端声明：
+            // server 可独立于 main 存在，mixin/嵌套 jar 也可能有服务端逻辑，不能因只见 client 就剔除。
             let env = json_str(&v, "environment");
             let sides = match env.trim().to_lowercase().as_str() {
                 "client" => Some((SideFlag::Required, SideFlag::Unsupported)),
                 "server" => Some((SideFlag::Unsupported, SideFlag::Required)),
                 "*" => Some((SideFlag::Optional, SideFlag::Optional)),
-                // 作者压根没写 environment：退到结构证据（entrypoints 段）
+                _ if *name == "fabric.mod.json" && v.get("environment").is_none() => {
+                    Some((SideFlag::Optional, SideFlag::Optional))
+                }
+                // 不把无效的显式值当成默认值，也不将 Quilt 的元数据布局当成 Fabric 规范。
+                _ if *name == "fabric.mod.json" => None,
                 _ => entrypoint_sides(&v),
             };
             if let Some((client, server)) = sides {
@@ -344,9 +349,12 @@ fn read_meta(jar: &[u8], probe: &mut JarProbe) {
             }
         } else {
             // Forge / NeoForge 的 mods.toml：无端字段，只有身份可取
-            set_if_empty(&mut probe.mod_id, &toml_field(&text, "modId"));
-            set_if_empty(&mut probe.title, &toml_field(&text, "displayName"));
-            for dep in toml_hard_deps(&text) {
+            let Ok(v) = toml::from_str::<toml::Value>(&text) else {
+                continue;
+            };
+            set_if_empty(&mut probe.mod_id, toml_field(&v, "modId"));
+            set_if_empty(&mut probe.title, toml_field(&v, "displayName"));
+            for dep in toml_hard_deps(&v) {
                 if !probe.hard_deps.contains(&dep) {
                     probe.hard_deps.push(dep);
                 }
@@ -355,7 +363,7 @@ fn read_meta(jar: &[u8], probe: &mut JarProbe) {
     }
 }
 
-/// Fabric/Quilt 的 `entrypoints` 段 → 端证据，只在作者没写 `environment` 时进场。
+/// 保留 Quilt 旧格式的入口回落；Fabric 缺省环境直接采用规范的 "*"。
 /// 有 `main`（common 入口）就说明服务端装了确实有代码在跑，这种行绝不剔；
 /// 只有 `client` 入口、没有 common 入口，才是「代码只在客户端物理端」的结构事实。
 /// 两条路都拿不到时返回 None（交回上层，宁可留不剔）。
@@ -366,7 +374,7 @@ fn entrypoint_sides(v: &serde_json::Value) -> Option<(SideFlag, SideFlag)> {
             e.as_array().map(|a| !a.is_empty()).unwrap_or(true)
         })
     };
-    if registered("main") {
+    if registered("main") || registered("server") {
         return Some((SideFlag::Optional, SideFlag::Optional));
     }
     registered("client").then_some((SideFlag::Required, SideFlag::Unsupported))
@@ -414,63 +422,43 @@ fn json_hard_deps(v: &serde_json::Value, out: &mut Vec<String>) {
     }
 }
 
-/// mods.toml 的 `[[dependencies.<owner>]]` 段里 `mandatory` 的依赖 modId。
-/// 无 TOML 依赖，按行扫段头 + 段内键值。`mandatory` 缺省按 true 算（各版本口径不一，
-/// 依赖保护宁可多留），显式 `false` 才排除；`side="CLIENT"` 的依赖第一版不做细分，照收
-fn toml_hard_deps(text: &str) -> Vec<String> {
-    let mut out: Vec<String> = Vec::new();
-    // 当前段：(modId, mandatory)；段外（含顶层）的键值一概不理
-    let mut cur: Option<(String, bool)> = None;
-    for line in text.lines() {
-        let line = line.trim();
-        if line.starts_with("[[") {
-            if let Some((id, mandatory)) = cur.take() {
-                if mandatory && !id.is_empty() && !out.contains(&id) {
-                    out.push(id);
-                }
-            }
-            let head = line.trim_start_matches("[[").trim_end_matches("]]").trim();
-            let in_dep = head.starts_with("dependencies.") && head.len() > "dependencies.".len();
-            cur = in_dep.then(|| (String::new(), true));
+/// 只收服务端适用的硬依赖。Forge 看 mandatory，NeoForge 的 type 存在时以 type 为准：
+/// optional / incompatible / discouraged 都不是要强制留下的前置。两类都排除 CLIENT 依赖。
+/// 旧清单两种必需字段均省略时保留原来的 true 回落，避免漏掉此前已受保护的库。
+fn toml_hard_deps(v: &toml::Value) -> Vec<String> {
+    let mut out = Vec::new();
+    let Some(dependencies) = v.get("dependencies").and_then(toml::Value::as_table) else {
+        return out;
+    };
+    for dep in dependencies.values().filter_map(toml::Value::as_array).flatten() {
+        let required = match dep.get("type") {
+            Some(kind) => kind.as_str() == Some("required"),
+            None => dep.get("mandatory").and_then(toml::Value::as_bool).unwrap_or(true),
+        };
+        let client_only = dep.get("side").and_then(toml::Value::as_str)
+            .is_some_and(|side| side.eq_ignore_ascii_case("CLIENT"));
+        if !required || client_only {
             continue;
         }
-        let Some((id, mandatory)) = cur.as_mut() else {
+        let Some(id) = dep.get("modId").and_then(toml::Value::as_str)
+            .map(str::trim).filter(|id| !id.is_empty()) else {
             continue;
         };
-        if let Some(rest) = line.strip_prefix("modId").filter(|r| r.starts_with('=')) {
-            if id.is_empty() {
-                let v = rest[1..].trim().trim_matches(['"', '\'']);
-                *id = v.to_string();
-            }
-        } else if let Some(rest) = line.strip_prefix("mandatory").filter(|r| r.starts_with('=')) {
-            *mandatory = rest[1..].trim() != "false";
-        }
-    }
-    if let Some((id, mandatory)) = cur {
-        if mandatory && !id.is_empty() && !out.contains(&id) {
-            out.push(id);
+        if !out.iter().any(|known| known == id) {
+            out.push(id.to_string());
         }
     }
     out
 }
 
-/// mods.toml 里取第一个 `key = "value"`（无 TOML 依赖：只取一个字符串字段，够用）
-fn toml_field(text: &str, key: &str) -> String {
-    for line in text.lines() {
-        let line = line.trim_start();
-        let Some(rest) = line.strip_prefix(key) else {
-            continue;
-        };
-        let Some((_, value)) = rest.split_once('=') else {
-            continue;
-        };
-        let value = value.trim().trim_start_matches(['"', '\'']);
-        let value = value.split(['"', '\'']).next().unwrap_or_default();
-        if !value.is_empty() {
-            return value.to_string();
-        }
-    }
-    String::new()
+/// 身份只从 mods 表中取，不能把依赖 modId 或 description 里的示例当成自身身份。
+/// 老的简化清单没有 mods 表时仍可读取顶层字段。
+fn toml_field<'a>(v: &'a toml::Value, key: &str) -> &'a str {
+    v.get("mods").and_then(toml::Value::as_array)
+        .and_then(|mods| mods.first())
+        .unwrap_or(v)
+        .get(key).and_then(toml::Value::as_str)
+        .unwrap_or_default()
 }
 
 #[cfg(test)]
@@ -479,16 +467,24 @@ mod tests {
     use crate::core::env::fixtures::{class_bytes, zip_bytes};
 
     #[test]
-    fn toml_field_reads_first_key_value() {
+    fn toml_field_reads_mod_identity_without_dependency_or_description_text() {
         let toml = r#"
-modId = "create"
+[[dependencies.someaddon]]
+modId = "library"
 [[mods]]
 modId="geckolib3"
-displayName = 'GeckoLib'
+displayName = 'GeckoLib #3' # a comment after a quoted hash
+description = '''
+modId = "not_a_mod"
+[[dependencies.someaddon]]
+modId = "not_a_dependency"
+'''
 "#;
-        assert_eq!(toml_field(toml, "modId"), "create");
-        assert_eq!(toml_field(toml, "displayName"), "GeckoLib");
-        assert_eq!(toml_field(toml, "logoFile"), "");
+        let v = toml::from_str::<toml::Value>(toml).unwrap();
+        assert_eq!(toml_field(&v, "modId"), "geckolib3");
+        assert_eq!(toml_field(&v, "displayName"), "GeckoLib #3");
+        assert_eq!(toml_field(&v, "logoFile"), "");
+        assert_eq!(toml_hard_deps(&v), vec!["library"]);
     }
 
     /// B 层：mods.toml 的 `[[dependencies.x]]` 段里 `mandatory` 的 modId 进硬依赖表。
@@ -515,11 +511,73 @@ mandatory=false
 modId="unknown_lib"
 "#;
         assert_eq!(
-            toml_hard_deps(toml),
+            toml_hard_deps(&toml::from_str(toml).unwrap()),
             vec!["minecraft".to_string(), "ftb_quests".to_string(), "unknown_lib".to_string()]
         );
         // 没有 dependencies 段的清单：空表，绝不把顶层 modId 当依赖
-        assert!(toml_hard_deps("modId = \"solo\"\n").is_empty());
+        assert!(toml_hard_deps(&toml::from_str("modId = \"solo\"\n").unwrap()).is_empty());
+    }
+
+    #[test]
+    fn toml_hard_deps_handles_forge_spacing_comments_and_dependency_side() {
+        let v = toml::from_str::<toml::Value>(r#"
+[[dependencies.addon]] # mandatory common dependency
+modId = "common_lib" # the comment is not part of the id
+mandatory = true
+side = "BOTH"
+
+[[dependencies.addon]]
+modId = 'server_lib'
+mandatory = true
+side = 'SERVER'
+
+[[dependencies.addon]]
+modId = "optional_lib"
+mandatory = false # not a hard dependency
+
+[[dependencies.addon]]
+modId = "client_lib"
+mandatory = true
+side = "CLIENT"
+
+[[dependencies.addon]]
+modId = "common_lib"
+mandatory = true
+"#).unwrap();
+        assert_eq!(toml_hard_deps(&v), vec!["common_lib", "server_lib"]);
+    }
+
+    #[test]
+    fn toml_hard_deps_respects_neoforge_dependency_types() {
+        let v = toml::from_str::<toml::Value>(r#"
+[[dependencies.addon]]
+modId = "required_lib"
+type = "required"
+side = "BOTH"
+
+[[dependencies.addon]]
+modId = "optional_lib"
+type = "optional"
+
+[[dependencies.addon]]
+modId = "incompatible_lib"
+type = "incompatible"
+
+[[dependencies.addon]]
+modId = "discouraged_lib"
+type = "discouraged"
+
+[[dependencies.addon]]
+modId = "client_lib"
+type = "required"
+side = "CLIENT"
+
+[[dependencies.addon]]
+modId = "server_lib"
+type = "required"
+side = "SERVER"
+"#).unwrap();
+        assert_eq!(toml_hard_deps(&v), vec!["required_lib", "server_lib"]);
     }
 
     /// B 层：探测结果的 hard_deps 两路来源——fabric 的 `depends` 键集与
@@ -554,16 +612,41 @@ modId="unknown_lib"
         read_meta(
             &zip_bytes(&[(
                 "META-INF/mods.toml",
-                br#"modId="fadd"
+                br#"[[mods]]
+modId = "fadd"
 [[dependencies.fadd]]
-modId="ftb_quests"
-mandatory=true
+modId = "ftb_quests" # retain the required server dependency
+mandatory = true
 "#,
             )]),
             &mut f,
         );
         assert_eq!(f.hard_deps, vec!["ftb_quests".to_string()]);
         assert_eq!(f.mod_id.as_deref(), Some("fadd"));
+        // NeoForge：同一份 TOML 只解析一次；type 与 side 共同决定服务端依赖
+        let mut neo = JarProbe::default();
+        read_meta(
+            &zip_bytes(&[(
+                "META-INF/neoforge.mods.toml",
+                br#"[[mods]]
+modId = "nadd"
+[[dependencies.nadd]]
+modId = "required_lib"
+type = "required"
+side = "BOTH"
+[[dependencies.nadd]]
+modId = "optional_lib"
+type = "optional"
+[[dependencies.nadd]]
+modId = "client_lib"
+type = "required"
+side = "CLIENT"
+"#,
+            )]),
+            &mut neo,
+        );
+        assert_eq!(neo.mod_id.as_deref(), Some("nadd"));
+        assert_eq!(neo.hard_deps, vec!["required_lib"]);
     }
 
     /// 小向量锁 seed、尾块与空白剔除三处边角；真文件校准（官方 fileFingerprint 逐位一致）
@@ -614,6 +697,48 @@ mandatory=true
         // 注册段存在但空数组不算注册；两段都没有 → 无证据（宁可留不剔）
         assert_eq!(entrypoint_sides(&parse(r#"{"entrypoints":{"client":[]}}"#)), None);
         assert_eq!(entrypoint_sides(&parse(r#"{"id":"x"}"#)), None);
+    }
+
+    #[test]
+    fn fabric_default_environment_never_infers_client_only_from_entrypoints() {
+        // 覆盖独立 server、双端独立入口、仅 client、无入口（mixin/库）和空入口。
+        for entrypoints in [
+            serde_json::json!({"server": ["example.Server"]}),
+            serde_json::json!({"client": ["example.Client"], "server": ["example.Server"]}),
+            serde_json::json!({"client": ["example.Client"]}),
+            serde_json::json!({}),
+            serde_json::json!({"client": [], "server": []}),
+        ] {
+            let json = serde_json::to_vec(&serde_json::json!({
+                "schemaVersion": 1, "id": "example", "version": "1.0", "entrypoints": entrypoints
+            })).unwrap();
+            let mut probe = JarProbe::default();
+            read_meta(&zip_bytes(&[("fabric.mod.json", &json)]), &mut probe);
+            let ev = probe.env.expect("缺省环境必须按 Fabric 规范处理");
+            assert_eq!(ev.source, EnvSource::JarMetadata);
+            assert_eq!(ev.client, Some(SideFlag::Optional));
+            assert_eq!(ev.server, Some(SideFlag::Optional));
+            assert_eq!(crate::core::detector::verdict(ev.client, ev.server), crate::core::detector::Verdict::Keep);
+        }
+    }
+
+    #[test]
+    fn fabric_explicit_environment_overrides_entrypoint_shapes() {
+        for (environment, expected) in [
+            (serde_json::json!("client"), Some((SideFlag::Required, SideFlag::Unsupported))),
+            (serde_json::json!("server"), Some((SideFlag::Unsupported, SideFlag::Required))),
+            (serde_json::json!("*"), Some((SideFlag::Optional, SideFlag::Optional))),
+            (serde_json::json!("invalid"), None),
+            (serde_json::Value::Null, None),
+        ] {
+            let json = serde_json::to_vec(&serde_json::json!({
+                "id": "example", "environment": environment,
+                "entrypoints": {"client": ["example.Client"], "server": ["example.Server"]}
+            })).unwrap();
+            let mut probe = JarProbe::default();
+            read_meta(&zip_bytes(&[("fabric.mod.json", &json)]), &mut probe);
+            assert_eq!(probe.env.map(|ev| (ev.client.unwrap(), ev.server.unwrap())), expected);
+        }
     }
 
     #[test]

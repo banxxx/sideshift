@@ -35,6 +35,8 @@ deploy/ack/contributors.prev.json
 
 # Editor directories and files
 .vscode/*
+# 推荐扩展这一份是有意入库的（团队共用），其余 .vscode 内容保持忽略
+!.vscode/extensions.json
 .zcode
 .idea
 .DS_Store

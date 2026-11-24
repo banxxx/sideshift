@@ -43,8 +43,7 @@ export async function parsePack(path: string): Promise<PackManifest> {
     return invokeOrMock("parse_pack", { path }, () => mock.mockParsePack(path));
 }
 
-/** 让后端「最近一次解析的包」指向这个包（Rust: ensure_parsed(manifest) -> bool）。
- *  方案与目录树三个命令都只认那一个包，从任务里回看时必须先对准它。
+/** 确保指定包存在解析缓存，不改变当前选包（Rust: ensure_parsed(manifest) -> bool）。
  *  false = 内存没缓存且源文件已不在，只有需要重解析的明细（包内目录树）拿不到 */
 export async function ensureParsed(manifest: PackManifest): Promise<boolean> {
     if (!isTauri) return true;
@@ -59,12 +58,13 @@ export async function listMcVersions(): Promise<VersionOption[]> {
 
 /** 指定 MC 版本的加载器版本列表（Rust: list_loader_versions） */
 export async function listLoaderVersions(
-    mcVersion: string
+    mcVersion: string,
+    packId?: string
 ): Promise<VersionOption[]> {
     if (!isTauri) return mock.mockLoaderVersions(mcVersion);
     return invokeOrMock(
         "list_loader_versions",
-        { mcVersion },
+        { mcVersion, packId },
         () => mock.mockLoaderVersions(mcVersion)
     );
 }
@@ -116,7 +116,7 @@ export async function defaultOptions(
 }
 
 /** 包内可保留内容树：目录 + 根级散文件（Rust: list_pack_dirs） */
-export async function listPackDirs(): Promise<PackDirTree> {
+export async function listPackDirs(packId?: string): Promise<PackDirTree> {
     if (!isTauri) return mock.mockPackTree;
-    return invokeOrMock("list_pack_dirs", undefined, () => mock.mockPackTree);
+    return invokeOrMock("list_pack_dirs", { packId }, () => mock.mockPackTree);
 }

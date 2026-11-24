@@ -152,6 +152,8 @@ pub struct PlanMod {
 #[derive(Serialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct PlanClassified {
+    /// 发起页面的分类请求标识，同路径重选、重分类和迟到事件按此隔离。
+    pub request_id: String,
     /// 归属包身份（绝对源路径，见 `PackManifest::identity`）：前端按当前包校验，
     /// 换包后的迟到事件丢弃。曾经是文件名——同名不同目录的两个包因此互相串台
     pub pack_id: String,
@@ -168,6 +170,8 @@ pub struct PlanClassified {
 #[derive(Serialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct PlanClassification {
+    pub pack_id: String,
+    pub request_id: String,
     pub plan: Vec<PlanMod>,
     pub online_pending: bool,
     /// 这一包里**按编号声明**的 CF 行数（官方导出的 CF 包才有；带 jar 字节的民间包恒为 0）。
@@ -179,6 +183,7 @@ pub struct PlanClassification {
     /// 少并是可补的（点「重新自动分类」再问一轮），双份是不可逆的（同一个模组两份 jar 落进 `mods/`
     /// 最常就是崩）⇒ 宁可少并，但这个数必须让用户看见
     pub cf_unmerged: usize,
+    pub cf_unmerged_required: usize,
 }
 
 /// 取件构成（阶段 3 计划确定后写入）：网络 / 包内 / 本地 / 缓存命中四类来源的诚实汇总。

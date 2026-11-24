@@ -13,7 +13,10 @@ export interface PlanDraft {
     extras: PlanMod[];
     overrides: Record<string, ModDisposition>;
     disabledIds: Set<string>;
-    /** 离开时联网反查还在跑（= 页面那侧的 classifying）：回来要跟后端复核一次，别把「分类中」挂住 */
+    /** 未并入方案的 CF 声明数量；保留警告与必需项构建闸门，切页不能清零。 */
+    cfUnmerged: number;
+    cfUnmergedRequired: number;
+    /** 分类仍在进行或本次尚未成功：回到页面要重试，失败留下的部分清单不能视为完整方案。 */
     onlinePending: boolean;
 }
 
@@ -50,6 +53,8 @@ export function PackStoreProvider({ children }: { children: ReactNode }) {
     const [errorName, setErrorName] = useState<string | null>(null);
     // 初值取挂载时刻：应用重启后磁盘上恢复的历史任务一律算「上次构建」，不该出现在首页
     const [selectedAt, setSelectedAt] = useState(() => Date.now());
+    // 解析在后台并发执行：后选的包（或 reset）使旧请求失效，成功/失败/收尾都要核对。
+    const parseRequest = useRef(0);
 
     // 草稿用 ref 不用 state：它只在「离开转换页」那一刻写、在「进入转换页」那一帧读，
     // 中间没有任何视图该为它重渲染（换页时也就少一次 App 级 context 刷新）。
@@ -77,6 +82,7 @@ export function PackStoreProvider({ children }: { children: ReactNode }) {
     }, []);
 
     const parse = useCallback(async (path: string) => {
+        const request = ++parseRequest.current;
         setParsing(true);
         setError(null);
         setErrorName(null);
@@ -85,12 +91,14 @@ export function PackStoreProvider({ children }: { children: ReactNode }) {
         // 换包 = 旧草稿作废（key 本来也对不上，这里只是别把上一个包的清单留在内存里）
         draftRef.current = null;
         const fail = (msg: string) => {
+            if (request !== parseRequest.current) return;
             setManifest(null);
             setError(msg);
             setErrorName(path.split(/[\\/]/).pop() ?? path);
         };
         try {
             const m = await api.parsePack(path);
+            if (request !== parseRequest.current) return;
             if (m.parsed) {
                 setManifest(m);
             } else {
@@ -99,7 +107,7 @@ export function PackStoreProvider({ children }: { children: ReactNode }) {
         } catch (e) {
             fail(e instanceof Error ? e.message : String(e));
         } finally {
-            setParsing(false);
+            if (request === parseRequest.current) setParsing(false);
         }
     }, []);
 
@@ -113,6 +121,7 @@ export function PackStoreProvider({ children }: { children: ReactNode }) {
     }, [parse]);
 
     const reset = useCallback(() => {
+        ++parseRequest.current;
         setManifest(null);
         setError(null);
         setErrorName(null);
